@@ -2165,7 +2165,7 @@ select.fish-select option:checked {
       const 识图块 = h('div', { style: S.card },
         h('div', { style: S.h2 }, '识图'),
         行('本地识图', 勾(配置.localDescribe !== false, (值) => 改('localDescribe', 值)),
-          '需要识图时优先用本机视觉模型；会占用一些显存，第一次调用要等模型加载。'))
+          '看图时优先在本机识别，图片不用上传；会占用一些显存，第一次使用要等模型加载。'))
 
       const 音色选项 = [{ value: 配置.ttsVoice || 'dafeiyu', label: 配置.ttsVoice || 'dafeiyu' }]
       for (const 名 of 音色们) {
