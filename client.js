@@ -23,7 +23,7 @@ window.__ModuleLoader__.load({
     const module = { exports: {} }
     const exports = module.exports
     const React = require('react')
-    const inject = ['slots']
+    const inject = ['slots', 'uiConversation']
     const h = React.createElement
     const B = '/dsh-fish-service'
 
@@ -546,6 +546,32 @@ select.fish-select option:checked {
 }
 .fish-service-settings input[type="checkbox"] { accent-color: var(--dsw-alias-state-business-primary, #2f6fed); }
 .fish-service-settings input::placeholder { color: var(--dsw-alias-label-secondary, #888); opacity: 1; }
+/* 框选文字工具条：紧凑一行，翻译结果在下方展开，不抢选区的复制操作 */
+.fish-selbar {
+  display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  max-width: min(540px, 92vw); padding: 4px 6px; border-radius: 10px;
+  border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.12));
+  background: var(--dsw-alias-bg-layer-1, rgba(255,255,255,.98));
+  color: var(--dsw-alias-label-primary, inherit);
+  box-shadow: 0 6px 20px rgba(0,0,0,.14);
+  font-size: 12px; line-height: 1.5;
+}
+.fish-selbar button {
+  border: 0; border-radius: 6px; background: transparent; color: inherit;
+  font: inherit; font-size: 12px; padding: 4px 8px; cursor: pointer;
+}
+.fish-selbar button:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.06)); }
+.fish-selbar button[disabled] { opacity: .45; cursor: default; }
+.fish-selnote { opacity: .62; font-size: 11.5px; padding: 0 4px; }
+.fish-selpanel {
+  flex-basis: 100%; margin-top: 2px; padding-top: 8px;
+  border-top: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.1));
+}
+.fish-seltext {
+  white-space: pre-wrap; word-break: break-word; max-height: 180px; overflow: auto;
+  user-select: text; -webkit-user-select: text;
+}
+.fish-selrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
 `
 
     // 样式只注入一次：每个消息都渲染一份 <style> 会把 DOM 撑爆。
@@ -672,6 +698,114 @@ select.fish-select option:checked {
           播放中 && 播放态.total > 1 ? h('span', { style: { fontSize: 11 } }, `${播放态.index}/${播放态.total}`) : null),
         错误 ? h('span', { className: 'fish-err', role: 'status', style: { marginLeft: 6 } }, 错误) : null,
         提示 ? h('span', { className: 'fish-panel-dim', role: 'status', style: { marginLeft: 6 } }, 提示) : null)
+    }
+
+    // ---------------- 框选文字：朗读 / 翻译 ----------------
+
+    const 选中交互ID = 'fish-selection'
+    const 选中播放标识 = 'fish-selection'
+
+    function 选中工具条({ readText, dismiss, clearSelection }) {
+      const 偏好态 = useStore(偏好)
+      const 在线 = 偏好态.在线 !== false
+      const [面板, 设面板] = React.useState(null)
+      const 容器 = React.useRef(null)
+
+      const 取文本 = () => {
+        const 文本 = typeof readText === 'function' ? readText() : ''
+        return String(文本 == null ? '' : 文本).trim()
+      }
+      const 收起 = () => {
+        try { clearSelection?.() } catch { /* 选区已经没了 */ }
+        try { dismiss?.() } catch { /* 工具条已经关了 */ }
+      }
+
+      // 点外面 / Esc 关闭；点工具条内部不触发，避免选区和复制被打断。
+      React.useEffect(() => {
+        const 点外面 = (事件) => {
+          if (容器.current && 事件.target instanceof Node && 容器.current.contains(事件.target)) return
+          try { dismiss?.() } catch { /* 忽略 */ }
+        }
+        const 按Esc = (事件) => {
+          if (事件.key !== 'Escape') return
+          try { dismiss?.() } catch { /* 忽略 */ }
+        }
+        document.addEventListener('pointerdown', 点外面, true)
+        document.addEventListener('keydown', 按Esc, true)
+        return () => {
+          document.removeEventListener('pointerdown', 点外面, true)
+          document.removeEventListener('keydown', 按Esc, true)
+        }
+      }, [dismiss])
+
+      const 朗读 = () => {
+        const 文本 = 取文本()
+        if (!文本) return
+        void 播放.合成并播放(选中播放标识, 文本, 偏好.get().config || {})
+        收起()
+      }
+
+      const 翻译 = async (原文) => {
+        const 文本 = String(原文 || 取文本()).trim()
+        if (!文本) return
+        设面板({ 原文: 文本, 载入中: true, 错误: '', 译文: '', 已复制: false })
+        const 结果 = await post('/translate', { text: 文本 })
+        if (!结果 || !结果.ok) {
+          设面板({
+            原文: 文本,
+            载入中: false,
+            错误: (结果 && 结果.hint) || '翻译失败，请稍后重试。',
+            译文: '',
+            已复制: false,
+          })
+          return
+        }
+        设面板({ 原文: 文本, 载入中: false, 错误: '', 译文: String(结果.text || ''), 已复制: false })
+      }
+
+      const 复制 = async () => {
+        if (!面板?.译文) return
+        try {
+          await navigator.clipboard.writeText(面板.译文)
+          设面板((旧) => (旧 ? { ...旧, 已复制: true, 错误: '' } : 旧))
+        } catch {
+          设面板((旧) => (旧 ? { ...旧, 错误: '复制失败，请手动选中译文复制。' } : 旧))
+        }
+      }
+
+      return h('div', {
+        ref: 容器,
+        className: 'fish-selbar',
+        role: 'toolbar',
+        'aria-label': '选中文字操作',
+        // 保住当前选区：点按钮时不把选区换成按钮上的文字。
+        onPointerDown: (事件) => 事件.preventDefault(),
+      },
+        h('button', {
+          type: 'button',
+          disabled: !在线,
+          title: 在线 ? '朗读选中的文字' : '本地 AI 未启动',
+          onClick: 朗读,
+        }, '朗读'),
+        h('button', {
+          type: 'button',
+          disabled: !在线 || Boolean(面板?.载入中),
+          title: 在线 ? '翻译选中的文字' : '本地 AI 未启动',
+          onClick: () => void 翻译(),
+        }, '翻译'),
+        !在线 ? h('span', { className: 'fish-selnote' }, '本地 AI 未启动') : null,
+        面板
+          ? h('div', { className: 'fish-selpanel' },
+              面板.载入中 ? h('div', { className: 'fish-panel-dim', role: 'status' }, '翻译中…') : null,
+              面板.错误 ? h('div', { className: 'fish-err', role: 'status' }, 面板.错误) : null,
+              面板.译文 ? h('div', { className: 'fish-seltext', role: 'status' }, 面板.译文) : null,
+              h('div', { className: 'fish-selrow' },
+                !面板.载入中 && 面板.错误
+                  ? h('button', { type: 'button', onClick: () => void 翻译(面板.原文) }, '重试')
+                  : null,
+                面板.译文 ? h('button', { type: 'button', onClick: 复制 }, 面板.已复制 ? '已复制' : '复制') : null,
+                h('button', { type: 'button', onClick: () => 设面板(null) }, '关闭')))
+          : null)
     }
 
     // ---------------- 输入设备（纯函数，便于单测） ----------------
@@ -1677,6 +1811,14 @@ select.fish-select option:checked {
       download: '下载',
       jobs: '任务队列',
     }
+    const 翻译语言下拉 = [
+      { value: 'zh', label: '中文' },
+      { value: 'en', label: '英文' },
+      { value: 'ja', label: '日文' },
+      { value: 'ko', label: '韩文' },
+      { value: 'yue', label: '粤语' },
+    ]
+
     const 原因中文 = {
       service_down: '本地 AI 未启动',
       model_missing: '模型未下载',
@@ -1893,9 +2035,19 @@ select.fish-select option:checked {
 
       React.useEffect(() => { void 拉缓存统计() }, [])
 
+      const 音色目录 = (态 && typeof 态.voicesDirectory === 'string') ? 态.voicesDirectory : ''
+
       const 打开缓存目录 = async () => {
         const r = await post('/open-folder', { path: String(配置.cacheDir || 缓存.dir || '').trim() })
         if (r && r.ok) 设说('已在文件管理器中打开缓存目录。')
+        else 设说(`打开文件夹失败：${(r && r.hint) || '请手动打开。'}`)
+      }
+
+      // 音色目录只从服务实时取；服务离线时按钮禁用，不缓存路径。
+      const 打开音色目录 = async () => {
+        if (!音色目录 || !在线) return
+        const r = await post('/open-folder', { path: 音色目录 })
+        if (r && r.ok) 设说('已在文件管理器中打开音色目录。')
         else 设说(`打开文件夹失败：${(r && r.hint) || '请手动打开。'}`)
       }
 
@@ -1969,7 +2121,17 @@ select.fish-select option:checked {
 
       const 朗读块 = h('div', { style: S.card },
         h('div', { style: S.h2 }, '朗读'),
-        行('默认音色', 下拉(配置.ttsVoice || 'dafeiyu', 音色选项, (v) => 改('ttsVoice', v))),
+        行('默认音色',
+          h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+            下拉(配置.ttsVoice || 'dafeiyu', 音色选项, (v) => 改('ttsVoice', v)),
+            h('button', {
+              type: 'button',
+              style: S.btn,
+              disabled: !在线 || !音色目录 || 忙,
+              title: !在线 ? '本地 AI 未启动' : (!音色目录 ? '还没读到音色目录' : '在文件管理器中打开音色文件夹'),
+              onClick: 打开音色目录,
+            }, '打开文件夹')),
+         在线 ? '把音色文件放进去，列表会自动更新。' : '本地 AI 未启动，启动后可打开音色文件夹。'),
         行('语速', h('input', {
           style: S.small, type: 'number', min: 0.5, max: 2, step: 0.05,
           value: 配置.ttsSpeed ?? 1,
@@ -2078,6 +2240,17 @@ select.fish-select option:checked {
         h('div', { style: { ...S.dim, marginTop: 4 } },
           '清空后下次朗读会重新生成。'))
 
+      const 翻译块 = h('div', { style: S.card },
+        h('div', { style: S.h2 }, '翻译'),
+        行('第一语言',
+          下拉(配置.primaryLanguage || 'zh', 翻译语言下拉, (v) => 改('primaryLanguage', v)),
+          '原文不是第一语言时，译成第一语言。'),
+        行('第二语言',
+          下拉(配置.secondaryLanguage || 'en', 翻译语言下拉, (v) => 改('secondaryLanguage', v)),
+          '原文已经是第一语言时，译成第二语言。'),
+        h('div', { style: { ...S.dim, marginTop: 4 } },
+          '没指定目标语言时按上面的规则自动选择。'))
+
       const 动作块 = h('div', { style: S.card },
         h('div', { style: { display: 'flex', gap: 8, marginTop: 2, flexWrap: 'wrap' } },
           h('button', { type: 'button', style: S.btnOn, onClick: 存, disabled: 忙 }, 忙 ? '处理中…' : '保存设置'),
@@ -2132,6 +2305,7 @@ select.fish-select option:checked {
         状态块,
         能力块,
         朗读块,
+        翻译块,
         语音块,
         服务块,
         缓存块,
@@ -2174,6 +2348,49 @@ select.fish-select option:checked {
       slots.inject(槽位, () => slots.register({ name: 槽位, ...配置项 }, 组件))
     }
 
+    /**
+     * 框选文字：先注册「选中后打开工具条」的交互，再注册 keyed 槽位。
+     * 两个都成功，DSH 才会在选中文字时渲染工具条。
+     */
+    function 注册选中交互(ctx) {
+      const 摘 = []
+      try {
+        const ui = ctx.get('uiConversation')
+        const 交互 = ui && ui.interactions
+        if (交互 && typeof 交互.register === 'function') {
+          const disposer = 交互.register({
+            id: 选中交互ID,
+            onInteraction(请求) {
+              if (!请求 || 请求.trigger !== 'selection') return
+              const 文本 = typeof 请求.readText === 'function' ? 请求.readText() : null
+              if (文本 === null || !String(文本).trim()) return
+              if (typeof 请求.open === 'function') 请求.open()
+            },
+          }, '选中文字的朗读与翻译')
+          if (typeof disposer === 'function') 摘.push(disposer)
+        }
+      } catch (error) {
+        try { console.warn('[dsh-fish-service] 注册选中交互失败', error) } catch { /* 忽略 */ }
+      }
+      try {
+        const slots = ctx.get('slots')
+        if (slots && typeof slots.register === 'function' && typeof slots.inject === 'function') {
+          const disposer = slots.inject('conversation.chat.text-interaction', () => slots.register({
+            name: 'conversation.chat.text-interaction',
+            key: 选中交互ID,
+          }, 选中工具条))
+          if (typeof disposer === 'function') 摘.push(disposer)
+        }
+      } catch (error) {
+        try { console.warn('[dsh-fish-service] 注册选中文字槽位失败', error) } catch { /* 忽略 */ }
+      }
+      return () => {
+        for (const 函数 of 摘.splice(0)) {
+          try { 函数() } catch { /* 已卸载 */ }
+        }
+      }
+    }
+
     function apply(ctx) {
       注入样式()
       // 设置页：P1 的「本地 AI」tab（P2 在同一个页面里加分区的）。
@@ -2186,6 +2403,8 @@ select.fish-select option:checked {
       注册(ctx, 'conversation.input.overlay', { id: 'fish-voice', order: 40, label: () => '语音输入面板' }, 语音面板)
       // 输入框左侧：自动朗读开关。
       注册(ctx, 'conversation.input.left', { id: 'fish-auto-read', order: 45, label: () => '自动朗读' }, 自动朗读开关)
+      // 框选文字：朗读 / 翻译（需要同时注册 interaction 与 keyed 槽位）。
+      注册选中交互(ctx)
 
       // 预热一次偏好（不阻塞）；失败也无所谓，组件挂载时会再拉。
       void 载入偏好()
@@ -2206,6 +2425,8 @@ select.fish-select option:checked {
       设备不可用错误,
       是虚拟设备名称,
       虚拟设备提示,
+      注册选中交互,
+      选中交互ID,
     }
     return module.exports
   },

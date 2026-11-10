@@ -85,6 +85,7 @@ export function basicHandler(overrides = {}) {
     if (url.pathname === '/voices') {
       return sendJson(res, 200, {
         ok: true,
+        directory: 'E:\\LocalAIService\\voices',
         voices: [
           { name: 'dafeiyu', filename: 'dafeiyu.wav', format: 'wav', duration: 9.4 },
           { name: 'default', filename: 'default.mp3', format: 'mp3', duration: 3.157 },

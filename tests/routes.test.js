@@ -135,7 +135,7 @@ function 搭环境({ apiOverrides = {}, 初始快照 = 快照(), refreshImpl = n
   return { routes, api, 配置, configStore, capabilities, 调用, dispose, call }
 }
 
-test('注册 17 条约定路由；全部 kind=exact', () => {
+test('注册 18 条约定路由；全部 kind=exact', () => {
   const env = 搭环境()
   assert.deepEqual([...env.routes.keys()].sort(), [
     '/dsh-fish-service/audio',
@@ -153,6 +153,7 @@ test('注册 17 条约定路由；全部 kind=exact', () => {
     '/dsh-fish-service/state',
     '/dsh-fish-service/test',
     '/dsh-fish-service/transcribe-upload',
+    '/dsh-fish-service/translate',
     '/dsh-fish-service/voice-upload',
     '/dsh-fish-service/voices',
   ])
@@ -190,6 +191,7 @@ test('GET /state：配置 / health / 能力 / 音色 / 缓存 / 错误 / env 覆
   assert.equal(json.health.serviceVersion, '2.5.0')
   assert.equal(json.capabilities.tts.available, true)
   assert.deepEqual(json.voices, ['dafeiyu', 'default'])
+  assert.equal(json.voicesDirectory, '')
   assert.equal(json.cache.files, 2)
   assert.equal(json.errors[0].code, 'service_down')
   assert.deepEqual(json.envOverrides, ['ttsVoice'])
@@ -311,6 +313,51 @@ test('GET /voices：成功返回列表；失败仍 200 但 ok=false', async () =
   assert.equal(down.json.code, 'service_down')
   assert.deepEqual(down.json.voices, [])
 })
+
+test('GET /state：音色目录从服务透出；服务离线时为空', async () => {
+  const 有目录 = Object.assign([{ name: 'dafeiyu' }], { directory: 'E:\\LocalAIService\\voices' })
+  const env = 搭环境({ apiOverrides: { voices: async () => 有目录 } })
+  const { json } = await env.call('/dsh-fish-service/state')
+  assert.equal(json.voicesDirectory, 'E:\\LocalAIService\\voices')
+  assert.deepEqual(json.voices, ['dafeiyu'])
+
+  const down = 搭环境({ apiOverrides: { voices: async () => { throw makeError('service_down', { hint: '服务没在运行' }) } } })
+  const r = await down.call('/dsh-fish-service/state')
+  assert.equal(r.json.voicesDirectory, '')
+  assert.deepEqual(r.json.voices, [])
+})
+
+test('POST /translate：选中文字翻译；空文本 400；服务错 502', async () => {
+  const env = 搭环境({
+    apiOverrides: {
+      translate: async (文本, opts) => ({
+        ok: true, texts: [`译:${文本}`], source: opts.source || 'auto', target: opts.target || 'en', engine: 'nllb', ms: 3,
+      }),
+    },
+  })
+  const ok = await env.call('/dsh-fish-service/translate', {
+    method: 'POST', body: { text: '你好' },
+    headers: { host: '127.0.0.1:10154', origin: 'http://127.0.0.1:10154' },
+  })
+  assert.equal(ok.res.statusCode, 200)
+  assert.equal(ok.json.text, '译:你好')
+  assert.equal(ok.json.ms, 3)
+
+  const 空 = await env.call('/dsh-fish-service/translate', {
+    method: 'POST', body: { text: '  ' },
+    headers: { host: '127.0.0.1:10154' },
+  })
+  assert.equal(空.res.statusCode, 400)
+
+  const 坏 = 搭环境({ apiOverrides: { translate: async () => { throw makeError('service_down', { hint: '服务没在运行' }) } } })
+  const r = await 坏.call('/dsh-fish-service/translate', {
+    method: 'POST', body: { text: 'hi' },
+    headers: { host: '127.0.0.1:10154' },
+  })
+  assert.equal(r.res.statusCode, 502)
+  assert.equal(r.json.code, 'service_down')
+})
+
 
 test('路由异常兜底：handler 抛错 → 500 结构化 JSON', async () => {
   const env = 搭环境({
@@ -550,6 +597,66 @@ test('POST /open-folder：只打开 cacheDir 内的目录，spawn 用替身，�
     assert.equal(env.调用.spawn.length, 2)
   } finally {
     temp.cleanup()
+    外面.cleanup()
+  }
+})
+
+test('POST /open-folder：服务音色目录在允许范围，越界仍 403；服务离线时不放行', async () => {
+  const 缓存 = makeTempDir()
+  const 音色 = makeTempDir()
+  const 外面 = makeTempDir()
+  try {
+    mkdirSync(join(音色.dir, '自定义'), { recursive: true })
+    const 带目录 = (目录) => Object.assign([{ name: 'dafeiyu' }], { directory: 目录 })
+    const env = 搭环境({
+      配置补丁: { cacheDir: 缓存.dir },
+      apiOverrides: { voices: async () => 带目录(音色.dir) },
+    })
+
+    const 音色根 = await env.call('/dsh-fish-service/open-folder', {
+      method: 'POST',
+      body: { path: 音色.dir },
+      headers: { host: '127.0.0.1:10154' },
+    })
+    assert.equal(音色根.res.statusCode, 200)
+    assert.deepEqual(env.调用.spawn.at(-1).参数, [realpathSync(音色.dir)])
+
+    const 子 = await env.call('/dsh-fish-service/open-folder', {
+      method: 'POST',
+      body: { path: join(音色.dir, '自定义') },
+      headers: { host: '127.0.0.1:10154' },
+    })
+    assert.equal(子.res.statusCode, 200)
+
+    const 越界 = await env.call('/dsh-fish-service/open-folder', {
+      method: 'POST',
+      body: { path: 外面.dir },
+      headers: { host: '127.0.0.1:10154' },
+    })
+    assert.equal(越界.res.statusCode, 403)
+    assert.match(越界.json.hint, /音色目录/)
+
+    // 服务离线：音色目录取不到 → 不放行；缓存目录照常。
+    const 离线 = 搭环境({
+      配置补丁: { cacheDir: 缓存.dir },
+      apiOverrides: { voices: async () => { throw makeError('service_down', { hint: '服务没在运行' }) } },
+    })
+    const 离线音色 = await 离线.call('/dsh-fish-service/open-folder', {
+      method: 'POST',
+      body: { path: 音色.dir },
+      headers: { host: '127.0.0.1:10154' },
+    })
+    assert.equal(离线音色.res.statusCode, 403)
+
+    const 离线缓存 = await 离线.call('/dsh-fish-service/open-folder', {
+      method: 'POST',
+      body: { path: 缓存.dir },
+      headers: { host: '127.0.0.1:10154' },
+    })
+    assert.equal(离线缓存.res.statusCode, 200)
+  } finally {
+    缓存.cleanup()
+    音色.cleanup()
     外面.cleanup()
   }
 })

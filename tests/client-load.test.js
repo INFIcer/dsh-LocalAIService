@@ -49,9 +49,10 @@ test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 面板 / �
     throw new Error(`未预期的 require：${名字}`)
   })
   assert.equal(typeof 导出.apply, 'function')
-  assert.deepEqual([...导出.inject], ['slots'])
+  assert.deepEqual([...导出.inject], ['slots', 'uiConversation'])
 
   const 注册们 = []
+  const 交互们 = []
   const 服务 = {
     inject: (_槽位, 回调) => 回调(),
     register: (配置, 组件) => {
@@ -59,7 +60,15 @@ test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 面板 / �
       return () => {}
     },
   }
-  const ctx = { get: (名字) => (名字 === 'slots' ? 服务 : undefined) }
+  const ui = {
+    interactions: {
+      register: (定义, 标签) => {
+        交互们.push({ 定义, 标签 })
+        return () => {}
+      },
+    },
+  }
+  const ctx = { get: (名字) => (名字 === 'slots' ? 服务 : 名字 === 'uiConversation' ? ui : undefined) }
   导出.apply(ctx)
 
   assert.deepEqual(注册们.map((x) => x.配置.name), [
@@ -68,6 +77,7 @@ test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 面板 / �
     'conversation.input.right',
     'conversation.input.overlay',
     'conversation.input.left',
+    'conversation.chat.text-interaction',
   ])
   assert.deepEqual(注册们.map((x) => x.配置.id), [
     'fish-service',
@@ -75,7 +85,22 @@ test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 面板 / �
     'fish-mic',
     'fish-voice',
     'fish-auto-read',
+    undefined,
   ])
+  assert.equal(注册们.at(-1).配置.key, 'fish-selection')
+
+  // 框选交互：只对 selection + 有文本的请求 open；其它情况不抢。
+  assert.equal(交互们.length, 1)
+  assert.equal(交互们[0].定义.id, 'fish-selection')
+  let 打开 = 0
+  const 请求 = (over = {}) => ({ trigger: 'selection', readText: () => '选中文字', open: () => { 打开 += 1 }, ...over })
+  交互们[0].定义.onInteraction(请求())
+  assert.equal(打开, 1)
+  交互们[0].定义.onInteraction(请求({ trigger: 'context-menu' }))
+  交互们[0].定义.onInteraction(请求({ readText: () => null }))
+  交互们[0].定义.onInteraction(请求({ readText: () => '   ' }))
+  assert.equal(打开, 1)
+
   for (const 项 of 注册们) assert.equal(typeof 项.组件, 'function')
 
   // 再拿最小 props 各渲染一次：能抓出「引用了不存在的变量 / 拼错字段」这类运行时错误。

@@ -1,4 +1,4 @@
-// 8 个工具：参数校验、批量上限、默认值、结构化错误、结果不含 base64。
+// 9 个工具：参数校验、批量上限、默认值、结构化错误、结果不含 base64。
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildToolDefinitions, TOOL_NAMES } from '../lib/tools/index.js'
@@ -18,6 +18,7 @@ function 造假服务() {
     if (名 === 'translate') return { ok: true, texts: args[0], source: 'auto', target: args[1].target, engine: 'nllb', ms: 1 }
     if (名 === 'separate') return { ok: true, stems: { vocals: { path: 'C:\\cache\\vocals.wav' } }, dir: 'C:\\cache\\sep', ms: 1 }
     if (名 === 'visionFrames') return { ok: true, frames: [{ time: 1, path: 'C:\\cache\\f.jpg' }], ms: 1 }
+    if (名 === 'visionDescribe') return { ok: true, items: args[0].map((路径) => ({ path: 路径, text: '一只猫趴在窗台上', ms: 12 })) }
     if (名 === 'mediaProbe') return { ok: true, items: args[0].map((file) => ({ file, duration: 1 })), ms: 1 }
     if (名 === 'voices') return [{ name: 'dafeiyu' }, { name: 'default' }]
     return { ok: true }
@@ -29,6 +30,7 @@ function 造假服务() {
     translate: 记('translate'),
     separate: 记('separate'),
     visionFrames: 记('visionFrames'),
+    visionDescribe: 记('visionDescribe'),
     mediaProbe: 记('mediaProbe'),
     health: async () => ({
       ok: true,
@@ -62,11 +64,11 @@ function 工具表(api) {
   return new Map(defs.map((d) => [d.name, d]))
 }
 
-test('8 个工具名固定、schema 是 object + additionalProperties:false', () => {
+test('9 个工具名固定、schema 是 object + additionalProperties:false', () => {
   const { api } = 造假服务()
   const defs = buildToolDefinitions({ api, logger: null })
   assert.deepEqual(defs.map((d) => d.name), TOOL_NAMES)
-  assert.equal(new Set(TOOL_NAMES).size, 8)
+  assert.equal(new Set(TOOL_NAMES).size, 9)
   for (const def of defs) {
     assert.equal(def.parameters.type, 'object', def.name)
     assert.equal(def.parameters.additionalProperties, false, def.name)
@@ -137,10 +139,12 @@ test('fish_asr：11 个文件 → bad_request；合法参数默认 speaker=true/
   assert.equal(opts.engine, 'auto')
 })
 
-test('fish_translate：target 必填且不能 auto；201 条 / 20 万字上限', async () => {
-  const { api } = 造假服务()
+test('fish_translate：target 可不传（自动规则）；target 不能 auto；201 条 / 20 万字上限', async () => {
+  const { api, calls } = 造假服务()
   const translate = 工具表(api).get('fish_translate')
-  assert.equal((await translate.execute({ texts: ['hi'] }, {})).code, 'bad_request')
+  const auto = await translate.execute({ texts: ['hi'] }, {})
+  assert.equal(auto.ok, true)
+  assert.equal(calls.at(-1)[1][1].target, undefined)
   assert.equal((await translate.execute({ texts: ['hi'], target: 'auto' }, {})).code, 'bad_request')
   assert.equal((await translate.execute({ texts: Array.from({ length: 201 }, () => 'x'), target: 'zh' }, {})).code, 'bad_request')
   assert.equal((await translate.execute({ texts: Array.from({ length: 41 }, () => 'x'.repeat(5000)), target: 'zh' }, {})).code, 'bad_request')
@@ -148,6 +152,25 @@ test('fish_translate：target 必填且不能 auto；201 条 / 20 万字上限',
   const ok = await translate.execute({ texts: ['hello'], target: 'zh' }, {})
   assert.equal(ok.ok, true)
   assert.deepEqual(ok.texts, ['hello'])
+})
+
+test('fish_describe_image：1~10 张、默认 caption、返回文字与耗时、不含图片本体', async () => {
+  const { api, calls } = 造假服务()
+  const describe = 工具表(api).get('fish_describe_image')
+  assert.equal((await describe.execute({ paths: Array.from({ length: 11 }, (_, i) => `C:\\${i}.png`) }, {})).code, 'bad_request')
+  assert.equal((await describe.execute({ paths: [] }, {})).code, 'bad_request')
+
+  const ok = await describe.execute({ paths: ['C:\\a.png'] }, {})
+  assert.equal(ok.ok, true)
+  assert.equal(ok.items[0].text, '一只猫趴在窗台上')
+  assert.equal(calls.at(-1)[0], 'visionDescribe')
+  assert.equal(calls.at(-1)[1][1].mode, 'caption')
+
+  const 评分 = await describe.execute({ paths: ['C:\\a.png'], mode: 'score', prompt: '这帧清楚吗' }, {})
+  assert.equal(评分.ok, true)
+  assert.equal(calls.at(-1)[1][1].mode, 'score')
+  assert.equal(calls.at(-1)[1][1].prompt, '这帧清楚吗')
+  assert.equal(JSON.stringify(ok).includes('base64'), false)
 })
 
 test('fish_separate：未知 stem / 空 stems 拒绝', async () => {

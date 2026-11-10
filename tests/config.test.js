@@ -50,6 +50,9 @@ test('默认配置符合 P1 契约', () => {
     assert.equal(c.recordDeviceId, '')
     assert.equal(c.rememberVoiceChoice, true)
     assert.equal(c.asrLanguage, 'auto')
+    // 翻译目标语言规则
+    assert.equal(c.primaryLanguage, 'zh')
+    assert.equal(c.secondaryLanguage, 'en')
   } finally {
     temp.cleanup()
   }
@@ -242,6 +245,27 @@ test('normalizeConfig：P2 朗读/语音字段钳范围、非法枚举回退', (
     assert.equal(正常.readConcurrency, 1)
     assert.equal(正常.recordMime, 'wav')
     assert.equal(正常.asrLanguage, 'zh')
+  } finally {
+    temp.cleanup()
+  }
+})
+
+test('primaryLanguage / secondaryLanguage：默认 zh/en，五语言白名单，非法回退', () => {
+  const temp = makeTempDir()
+  try {
+    const 默认 = normalizeConfig({}, { homeDir: temp.dir })
+    assert.equal(默认.primaryLanguage, 'zh')
+    assert.equal(默认.secondaryLanguage, 'en')
+
+    for (const 代码 of ['zh', 'en', 'ja', 'ko', 'yue']) {
+      const c = normalizeConfig({ primaryLanguage: 代码, secondaryLanguage: 代码 }, { homeDir: temp.dir })
+      assert.equal(c.primaryLanguage, 代码)
+      assert.equal(c.secondaryLanguage, 代码)
+    }
+
+    const 乱写 = normalizeConfig({ primaryLanguage: 'fr', secondaryLanguage: 42 }, { homeDir: temp.dir })
+    assert.equal(乱写.primaryLanguage, 'zh')
+    assert.equal(乱写.secondaryLanguage, 'en')
   } finally {
     temp.cleanup()
   }

@@ -286,6 +286,101 @@ test('translate：单条 / 批量、顺序一致、上限校验', async (t) => {
   await assert.rejects(stack.api.translate(Array.from({ length: 41 }, () => 'x'.repeat(5000)), { target: 'zh' }), (e) => e.code === 'bad_request')
 })
 
+test('translate：不传 target 时按第一/第二语言自动选，检测结果作为 source', async (t) => {
+  const 收 = []
+  const stack = await makeStack({
+    config: { primaryLanguage: 'zh', secondaryLanguage: 'en' },
+    handler: basicHandler({
+      '/translate': (req, res, rec) => {
+        const body = 解析体(rec)
+        收.push(body)
+        sendJson(res, 200, { ok: true, text: `译:${body.text}`, source: body.source, target: body.target })
+      },
+    }),
+  })
+  t.after(() => stack.close())
+
+  // 中文原文 = 第一语言 → 译成第二语言；source 检测为 zh。
+  const 中 = await stack.api.translate('你好，世界', {})
+  assert.equal(中.target, 'en')
+  assert.equal(中.source, 'zh')
+  assert.equal(收.at(-1).target, 'en')
+  assert.equal(收.at(-1).source, 'zh')
+
+  // 英文原文 ≠ 第一语言 → 译成第一语言。
+  const 英 = await stack.api.translate('hello world', {})
+  assert.equal(英.target, 'zh')
+  assert.equal(英.source, 'en')
+
+  // 日文 → 第一语言。
+  const 日 = await stack.api.translate('こんにちは', {})
+  assert.equal(日.target, 'zh')
+  assert.equal(日.source, 'ja')
+
+  // 显式 target 优先：中文原文也可以显式译成日文。
+  const 显式 = await stack.api.translate('你好', { target: 'ja' })
+  assert.equal(显式.target, 'ja')
+  assert.equal(收.at(-1).target, 'ja')
+
+  // 显式 source 优先于检测。
+  const 显式源 = await stack.api.translate('hello', { source: 'ja', target: 'zh' })
+  assert.equal(显式源.source, 'ja')
+
+  // 检测不出 → 第一语言；source 传 auto。
+  const 空 = await stack.api.translate('12345', {})
+  assert.equal(空.target, 'zh')
+  assert.equal(空.source, 'auto')
+})
+
+test('visionDescribe：逐张调 /vision/describe，caption 传描述提示，score 不传', async (t) => {
+  const 请求 = []
+  const 图 = (名) => writeTempFile(temp.dir, 名, 'png-bytes')
+  const stack = await makeStack({
+    handler: basicHandler({
+      '/vision/describe': (req, res, rec) => {
+        请求.push(rec)
+        sendJson(res, 200, { ok: true, text: '{"caption":"窗台上的猫"}', parsed: { caption: '窗台上的猫' }, elapsed_ms: 37 })
+      },
+    }),
+  })
+  const temp = stack.temp
+  t.after(() => stack.close())
+
+  const a = 图('a.png')
+  const b = 图('b.jpg')
+  const r = await stack.api.visionDescribe([a, b])
+  assert.equal(r.ok, true)
+  assert.equal(r.items.length, 2)
+  assert.deepEqual(r.items.map((x) => x.path), [a, b])
+  assert.equal(r.items[0].text, '{"caption":"窗台上的猫"}')
+  assert.deepEqual(r.items[0].parsed, { caption: '窗台上的猫' })
+  assert.equal(r.items[0].ms, 37)
+  assert.equal(请求.length, 2)
+  assert.match(请求[0].headers['content-type'], /multipart\/form-data/)
+  assert.match(请求[0].body.toString('utf8'), /name="file"; filename="a\.png"/)
+  // caption 必须有提示词覆盖服务端评分提示；score 保持服务端默认。
+  assert.match(请求[0].body.toString('utf8'), /name="prompt"/)
+  await stack.api.visionDescribe(a, { mode: 'score' })
+  assert.equal(请求.at(-1).body.toString('utf8').includes('name="prompt"'), false)
+  // 自定义 prompt 覆盖默认。
+  await stack.api.visionDescribe(a, { mode: 'caption', prompt: '这是什么？' })
+  assert.match(请求.at(-1).body.toString('utf8'), /这是什么？/)
+})
+
+test('visionDescribe：最多 10 张、缺文件、非图片扩展名都拒绝', async (t) => {
+  const stack = await makeStack()
+  t.after(() => stack.close())
+  const 图 = writeTempFile(stack.temp.dir, 'a.png', 'x')
+  await assert.rejects(
+    stack.api.visionDescribe(Array.from({ length: 11 }, (_, i) => `${stack.temp.dir}\\${i}.png`)),
+    (e) => e.code === 'bad_request',
+  )
+  await assert.rejects(stack.api.visionDescribe(join(stack.temp.dir, '不存在.png')), (e) => e.code === 'bad_request')
+  const 文本 = writeTempFile(stack.temp.dir, 'a.txt', 'x')
+  await assert.rejects(stack.api.visionDescribe(文本), (e) => e.code === 'bad_request')
+  assert.ok(existsSync(图))
+})
+
 test('separate：复制 stems 到缓存、返回 dir；未知 stem 拒绝', async (t) => {
   let 源目录 = ''
   const stack = await makeStack({
@@ -453,11 +548,20 @@ test('voices：直接映射 /voices，30 秒内不重复请求', async (t) => {
   const first = await stack.api.voices()
   assert.deepEqual(first.map((x) => x.name), ['dafeiyu', 'default'])
   assert.equal(first[0].duration, 9.4)
+  // 契约兼容：仍是数组，目录挂在非枚举属性上。
+  assert.ok(Array.isArray(first))
+  assert.equal(first.directory, 'E:\\LocalAIService\\voices')
+  assert.equal(Object.keys(first).includes('directory'), false)
 
   const 前 = stack.mock.requests.filter((r) => r.path === '/voices').length
   const second = await stack.api.voices()
   assert.deepEqual(second, first)
   assert.equal(stack.mock.requests.filter((r) => r.path === '/voices').length, 前)
+
+  // force 跳过缓存，拿最新目录。
+  const 强制 = await stack.api.voices({ force: true })
+  assert.equal(强制.directory, 'E:\\LocalAIService\\voices')
+  assert.equal(stack.mock.requests.filter((r) => r.path === '/voices').length, 前 + 1)
 })
 
 test('config：get 脱敏；set 白名单、保存、警告、token 原样打码保留', async (t) => {
@@ -684,7 +788,7 @@ test('错误映射：507 → vram_exhausted；503(ready=false) → model_missing
   assert.equal(stack2.mock.requests.some((r) => r.path === '/tts'), false)
 })
 
-test('宿主装配：provide fish.service、注册 8 个工具与 5 条路由，stop 可卸载', async (t) => {
+test('宿主装配：provide fish.service、注册 9 个工具与 >5 条路由，stop 可卸载', async (t) => {
   const mock = await startMock(basicHandler())
   const temp = (await import('./helpers.js')).makeTempDir()
   const 旧Home = process.env.DSH_HOME
@@ -712,9 +816,9 @@ test('宿主装配：provide fish.service、注册 8 个工具与 5 条路由，
 
   assert.equal(provided['fish.service'], app.api)
   assert.equal(app.api.apiVersion, '1.0')
-  assert.equal(tools.length, 8)
+  assert.equal(tools.length, 9)
   assert.deepEqual(tools.map((x) => x.name).sort(), [
-    'fish_asr', 'fish_job', 'fish_media_probe', 'fish_separate',
+    'fish_asr', 'fish_describe_image', 'fish_job', 'fish_media_probe', 'fish_separate',
     'fish_service_status', 'fish_translate', 'fish_tts', 'fish_vision_frames',
   ])
   const paths = routes.map((r) => r.path)
