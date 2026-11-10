@@ -1,6 +1,7 @@
 # 接口契约（CONTRACT）
 
-> 版本：`v0.1`（P0 冻结稿）
+> 版本：`v0.3`（2026-11-10）：新增 `visionDescribe` 与 `fish_describe_image`、翻译目标语言自动规则、`voices()` 透出音色目录、`/translate` 与 `/open-folder` 音色目录白名单。向后兼容，旧调用方无需改动。
+> 前版：`v0.1`（P0 冻结稿）
 > 适用：`dsh-fish-service` / `dsh-fish-ops` / `localai-service 2.5.x`
 > 原则：**先改本文，再改代码**。P1 只实现本文已写明的字段；新增字段必须向后兼容。
 
@@ -66,12 +67,13 @@ interface FishServiceApi {
   ensureReady(cap: CapabilityName, opts?: { preload?: boolean; timeoutMs?: number }): Promise<ReadyResult>
   tts(input: string | string[], opts?: TtsOptions): Promise<TtsResult>
   asr(input: string | string[], opts?: AsrOptions): Promise<AsrResult>
-  translate(input: string | string[], opts: TranslateOptions): Promise<TranslateResult>
+  translate(input: string | string[], opts?: TranslateOptions): Promise<TranslateResult>
   separate(file: string, opts?: SeparateOptions): Promise<SeparateResult>
   visionFrames(input: VisionInput, opts?: VisionOptions): Promise<VisionResult>
+  visionDescribe(input: string | string[], opts?: DescribeOptions): Promise<DescribeResult>
   mediaProbe(input: string | string[], opts?: { timeoutMs?: number }): Promise<ProbeResult>
   jobs: JobsApi
-  voices(opts?: { timeoutMs?: number }): Promise<VoiceInfo[]>
+  voices(opts?: { timeoutMs?: number; force?: boolean }): Promise<VoiceInfo[] & { directory?: string }>
   config: {
     get(): PublicConfig
     set(patch: Partial<PublicConfig>): Promise<{ ok: boolean; applied: string[]; requiresRestart: boolean; warnings: string[] }>
@@ -260,8 +262,8 @@ interface AsrResult {
 
 ```ts
 interface TranslateOptions {
-  source: string         // 'auto' | 'zh' | 'en' | NLLB 码
-  target: string         // 必填，不能 'auto'
+  source?: string        // 'auto' | 'zh' | 'en' | 'ja' | 'ko' | 'yue' | NLLB 码；默认自动检测
+  target?: string        // 省略时按第一/第二语言规则自动选；不能 'auto'
   timeoutMs?: number     // 默认 60000
   batchSize?: number     // 默认 8；1~16
 }
@@ -269,7 +271,7 @@ interface TranslateOptions {
 interface TranslateResult {
   ok: boolean
   texts: string[]
-  source: string         // 实际使用的 NLLB 码
+  source: string         // 实际使用的语言代码；检测不出为 'auto'
   target: string
   engine: 'nllb'
   ms: number
@@ -277,6 +279,18 @@ interface TranslateResult {
 }
 ```
 
+目标语言自动规则（未显式传 `target` 时，优先级从高到低）：
+
+| 条件 | 结果 |
+| --- | --- |
+| 显式传了 `target`（非 `'auto'`） | 用显式值 |
+| 检测出原文 = `primaryLanguage`（默认 `zh`） | `secondaryLanguage`（默认 `en`） |
+| 检测出原文 ≠ `primaryLanguage` | `primaryLanguage` |
+| 检测不出原文语言 | `primaryLanguage` |
+
+- 检测是字符启发式：假名→`ja`，谚文→`ko`，汉字→`zh`，拉丁字母→`en`，其余检测不出；
+- 未显式传 `source` 时，把检测结果作为 `source` 发给服务；检测不出传 `auto`；
+- 显式 `source` 优先于检测，也参与上面的目标语言判断（原文语言以显式 `source` 为准）；
 - 1 条走 `/translate`；2~500 条走 `/translate/batch`；超过 500 条或 200k 字 → `bad_request`，提示用 `fish_job` 或拆批；
 - 返回顺序与输入严格一致；
 - 空字符串原样返回；
@@ -407,7 +421,8 @@ interface JobRecord {
 ]
 ```
 
-- 直接映射 `/voices`；不缓存超过 30 秒（音色目录可能新增文件）；
+- 直接映射 `/voices`；不缓存超过 30 秒（音色目录可能新增文件）；`{ force: true }` 跳过缓存；
+- 返回仍是**数组**（旧调用方 `voices().map(...)` 不变）；服务端返回的 `directory` 挂在数组的非枚举属性 `directory` 上，`Object.keys`/JSON 序列化都看不到它；
 - 名称不含扩展名；上传音色不在本契约内（服务端 `/api/v1/upload` 可选）。
 
 ### 1.13 `config`
@@ -468,13 +483,46 @@ interface InstallApi {
 
 详细字段与状态机见 [`DEPLOY.md`](DEPLOY.md) 第 3 节。
 
+### 1.16 `visionDescribe(input, opts)`（v0.3）
+
+单张 / 多张**本机图片**理解，包装本地服务 `POST /vision/describe`（multipart：`file` + 可选 `prompt`）。
+
+```ts
+interface DescribeOptions {
+  prompt?: string                    // 覆盖服务端默认提示词；最长 4000 字
+  mode?: 'caption' | 'score' | 'ocr' // 默认 'caption'
+  timeoutMs?: number                 // 默认 config.visionTimeoutMs
+}
+
+interface DescribeItem {
+  path: string
+  text: string
+  parsed?: unknown                   // 服务端能解析出 JSON 时原样返回
+  ms: number                         // 服务端 elapsed_ms，缺失时用本机耗时
+}
+
+interface DescribeResult {
+  ok: true
+  items: DescribeItem[]
+  ms: number
+}
+```
+
+- `input` 是单个路径或路径数组，**最多 10 张**；路径必须是本机绝对路径、存在、是文件（复用 `检查本机文件`）；
+- 扩展名只接受 `.jpg/.jpeg/.png/.webp/.gif/.bmp`，否则 `bad_request`；
+- 能力名 `vision`：先走 `要能力('vision')`，服务离线/模型没装按现有错误分类返回；
+- `mode` 只决定默认提示词：`caption` 传「用一两句话描述图片里有什么」的中文提示，`ocr` 传「只提取图片中的文字」，`score` **不传** `prompt`（沿用服务端 `vlm_frame_score.md` 评分提示）；
+- 显式 `prompt` 优先于 `mode` 的默认提示；提示通过 multipart 的 `prompt` 字段覆盖服务端用户消息；
+- 逐张串行调用（服务端一次只处理一张），任一张失败整体失败，不返回半成品；
+- 只返回文字 / `parsed` / 耗时，**不返回 base64、不返回图片本体**。
+
 ---
 
 ## 2. DSH 工具契约
 
 ### 2.1 通用规则
 
-- 工具名全局唯一；本插件固定 8 个（第 2.2 节）；
+- 工具名全局唯一；本插件固定 9 个（第 2.2 节）；
 - `parameters` 是标准 JSON Schema（object 根，`additionalProperties:false`）；
 - `output` 用 JSON Schema 描述成功包；失败包统一 `{ok:false, code, hint, detail?, retryable}`；
 - 所有路径必须绝对路径；工具不做 `~` 展开（由调用方/LLM 给绝对路径）；
@@ -486,9 +534,10 @@ interface InstallApi {
 | --- | --- | --- | --- |
 | `fish_tts` | `texts*` (1~20)、`voice`、`speed` 0.5~2、`language`、`seed` | `items[{wavPath,ms,voice,seed,bytes}]` | `service_down`、`model_missing`、`vram_exhausted`、`timeout`、`bad_request` |
 | `fish_asr` | `files*` (1~10)、`language`、`engine`、`speaker`、`timestamps` | `items[{file,text,segments?,speaker?,engine,ms}]` | 同上 + `bad_request`（文件不存在/超限） |
-| `fish_translate` | `texts*` (1~200)、`source`、`target*` | `{texts,source,target,ms}` | `bad_request`（语言/长度）、`service_down`、`vram_exhausted` |
+| `fish_translate` | `texts*` (1~200)、`source`、`target`（省略时自动） | `{texts,source,target,ms}` | `bad_request`（语言/长度）、`service_down`、`vram_exhausted` |
 | `fish_separate` | `file*`、`model`、`stems[]` | `{stems,dir,ms,released?}` | `model_missing`（htdemucs_ft）、`vram_exhausted`、`timeout` |
 | `fish_vision_frames` | `videoPath*`、`targetFrames` 1~10、`effort`、`planner`、`subtitles` | `{frames[],duration,subtitlesFrom,stats,ms}` | `model_missing`、`vram_exhausted`、`timeout`、`bad_request` |
+| `fish_describe_image` | `paths*` (1~10)、`mode` (`caption/score/ocr`)、`prompt` | `{ok,items:[{path,text,parsed?,ms}],ms}` | `bad_request`（非图片/不存在/超 10 张）、`service_down`、`model_missing`、`vram_exhausted`、`timeout` |
 | `fish_media_probe` | `files*` (1~10) | `{items[],ms}` | `bad_request`、`service_down` |
 | `fish_job` | `action*` (`status/cancel/list/wait`)、`jobId`、`kind`、`state`、`limit` | 任务记录/列表 | `bad_request`（缺 jobId）、`canceled`、`timeout` |
 | `fish_service_status` | 无 | `{ok,baseUrl,version,apiVersion,capabilities,vram,voices,install,autostart,lastError}` | 永远 `ok:true`（服务不可达时 `ok:false` 但仍有诊断） |
@@ -777,8 +826,10 @@ interface InstallApi {
 | --- | --- | --- | --- |
 | GET | `/health` | — | `{ok, serviceDown, lastCheckAt, latencyMs}`（宿主自身健康，不是 localai 的） |
 | GET | `/status` | — | 脱敏配置 + `fish.service.health()` + capabilities + install 状态 |
+| GET | `/state` | — | 设置页聚合状态：`plugin/config/health/capabilities/voices(名字数组)/voicesDirectory/cache/errors/envOverrides`（v0.3 新增 `voicesDirectory`，服务离线时为空字符串） |
 | POST | `/config` | `{patch: {...}}` | 同 `fish.service.config.set` |
 | GET | `/voices` | — | `{ok, voices:[...]}` |
+| POST | `/translate` | `{text, source?, target?}` | `{ok, text, source, target, ms}`；框选翻译用，走与 `fish.service.translate` 相同的自动语言规则（P2.2） |
 | POST | `/tts` | `{text, voice?, speed?, language?, seed?}` | `audio/wav`（默认）或 `{ok, wavPath, id}`（`?mode=json`） |
 | POST | `/read` | `{text, voice?, speed?, maxChars?, skipCodeBlocks?}` | `{ok, wavPath, ms, items[{wavPath,url,ms,voice,bytes,chars,cached}], chunks, chars, codeBlocks, truncated, concurrency, cachedChunks, cacheHits, degraded?}`（P2，一次全合成） |
 | POST | `/read/plan` | `{text, maxChars?, voice?, speed?, skipCodeBlocks?}` | `{ok, segments:[{index,text,chars}], chars, codeBlocks, codeLines, truncated, voice, speed, maxChars}`（P2.1，不合成） |
@@ -786,7 +837,7 @@ interface InstallApi {
 | GET | `/cache/stats` | — | `{ok, kind:"tts", files, bytes, hits, misses, hitRate}`（P2.1，服务层内存计数） |
 | POST | `/cache/clear` | `{kind?}` | `{ok, kind, files, bytes, kinds}`；省略 kind 清产物但保留 `voice`（P2.1） |
 | POST | `/cache/cleanup` | — | `{ok, expired, lru, bytesFreed, scanned}`（P2.1，调 `CacheStore.cleanup()`） |
-| POST | `/open-folder` | `{path}` | `{ok, path}`；在文件管理器里打开目录，只接受 `cacheDir` 内已存在的目录（realpath 校验，非 Windows 返回「暂不支持」） |
+| POST | `/open-folder` | `{path}` | `{ok, path}`；在文件管理器里打开目录，只接受 `cacheDir` 或**服务当前音色目录**本身/子目录（realpath 校验，非 Windows 返回「暂不支持」） |
 | GET | `/audio?path=` | — | `audio/*`；只允许 `cacheDir` 内的 `.wav/.webm/.ogg/.opus/.mp3/.m4a`（P2） |
 | POST | `/transcribe-upload` | multipart `file` + `durationMs?` + `language?` + `speaker?` | `{ok, text, ms, elapsedMs?, language?, speaker?}`（P2，临时文件请求结束即删） |
 | POST | `/voice-upload` | multipart `file` + `durationMs?` | `{ok, path, bytes, mime}`（P2，存 `cacheDir/voice`） |
@@ -811,7 +862,7 @@ interface InstallApi {
 安全：
 
 - 所有 POST 要求同源（检查 `Origin`/`Referer` 为 DSH 页面）；
-- `/open-folder` 只打开 `cacheDir` 本身或其子目录：路径须为绝对路径、已存在、是目录，两边 realpath 后再判包含关系，防符号链接穿越；
+- `/open-folder` 只打开 `cacheDir` 或服务音色目录本身/子目录：缓存根每次从配置取，音色目录每次实时 `GET /voices` 取（不落配置、不缓存成任意路径）；路径须为绝对路径、已存在、是目录，两边 realpath 后再判包含关系，防符号链接穿越；服务离线时只允许 `cacheDir`；
 - `/audio/:id` 只接受 `[a-f0-9-]+`，映射表里查不到就 404；
 - `/logs` 不接受任意 `file` 路径，只接受 `service`/`err` 枚举；
 - 不返回 token、不返回 localai 的绝对 `outputs/` 路径。
@@ -871,6 +922,8 @@ interface InstallApi {
 | `recordMime` | enum | auto | auto/webm/wav | 语音输入录音格式（P2） |
 | `rememberVoiceChoice` | bool | true | — | 记住三选一上次选择（P2，只做高亮） |
 | `asrLanguage` | enum | auto | auto/zh/en/ja | 语音输入 ASR 语言（P2） |
+| `primaryLanguage` | enum | `zh` | `zh/en/ja/ko/yue` | 翻译第一语言：原文不是它时译成它（v0.3） |
+| `secondaryLanguage` | enum | `en` | `zh/en/ja/ko/yue` | 翻译第二语言：原文就是第一语言时译成它（v0.3） |
 | `requestTimeoutMs` | int | 180000 | 1000~1800000 | TTS/一般 |
 | `asrTimeoutMs` | int | 300000 | 1000~1800000 | ASR/分离 |
 | `visionTimeoutMs` | int | 600000 | 1000~1800000 | 视觉 |

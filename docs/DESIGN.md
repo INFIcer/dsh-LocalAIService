@@ -229,7 +229,7 @@
 │ dsh-fish-service（DSH 宿主插件）                                      │
 │  ├─ fish.service（Cordis）：capabilities/health/ensureReady/tts/asr/  │
 │  │   translate/separate/visionFrames/mediaProbe/jobs/config/events    │
-│  ├─ 8 个 Agent 工具（fish_tts / fish_asr / … / fish_service_status）  │
+│  ├─ 9 个 Agent 工具（fish_tts / fish_asr / … / fish_service_status）  │
 │  ├─ LocalAIClient：HTTP、超时、重试、错误翻译、能力缓存               │
 │  ├─ InstallManager：预检/安装/接管/升级/卸载/模型/自启/日志           │
 │  └─ CacheStore：~/.dsh/fish-service-cache（TTS/分离/关键帧产物）      │
@@ -406,7 +406,7 @@ export function apply(ctx, pluginConfig) {
 - 请求返回 507/503 时，**立刻失效**缓存并重拉一次，避免 UI 长时间显示旧的 `ready`。
 - 冷却：同一能力连续失败 3 次，30 秒内不再自动重拉，防止打爆服务。
 
-### 8.3 Agent 工具（8 个）
+### 8.3 Agent 工具（9 个）
 
 工具是给 LLM 用的，**不是**给 UI 用的；UI 走宿主路由。所有工具：
 
@@ -420,14 +420,15 @@ export function apply(ctx, pluginConfig) {
 | --- | --- | --- | --- |
 | `fish_tts` | 文本→语音（批量） | `texts[1..20]`, `voice`, `speed`, `language`, `seed` | `items[{wavPath,ms,voice,seed,language,bytes}]` |
 | `fish_asr` | 音频/视频→文字（批量） | `files[1..10]`, `language`, `engine`, `speaker`, `timestamps` | `items[{text,segments?,speaker?,language,engine,ms}]` |
-| `fish_translate` | 批量翻译 | `texts[1..200]`, `source`, `target` | `texts[]`, `source`, `target`, `ms` |
+| `fish_translate` | 批量翻译（目标语言可自动选） | `texts[1..200]`, `source`, `target`（可选，`auto` 不允许） | `texts[]`, `source`, `target`, `ms` |
+| `fish_describe_image` | 单图/多图理解（描述/评分/OCR） | `paths[1..10]`, `mode(caption/score/ocr)`, `prompt` | `items[{path,text,parsed?,ms}]` |
 | `fish_separate` | 人声分离 | `file`, `model`, `stems[]` | `stems{name:path}`, `dir`, `ms` |
 | `fish_vision_frames` | 视频关键帧 + 摘要 | `videoPath`, `targetFrames`, `effort`, `planner`, `subtitles` | `frames[{time,path,summary,score,kind,ocrText}]` |
 | `fish_media_probe` | 媒体探测（批量） | `files[1..10]` | `items[{duration,format,audio,video}]` |
 | `fish_job` | 任务查询/取消/等待 | `action(status/cancel/list/wait)`, `jobId`, `kind`, `state` | 任务记录/结果摘要 |
 | `fish_service_status` | 服务状态（只读） | 无 | 版本/能力/显存/音色/安装状态/最近错误 |
 
-工具注册时机：**8 个工具始终注册**（即使服务没装）。理由：Agent 需要能诊断「为什么不能用」；`fish_service_status` 必须永远可调。服务缺失时，除 `fish_service_status` 外的工具返回 `service_not_installed`/`service_down` + hint。
+工具注册时机：**9 个工具始终注册**（即使服务没装）。理由：Agent 需要能诊断「为什么不能用」；`fish_service_status` 必须永远可调。服务缺失时，除 `fish_service_status` 外的工具返回 `service_not_installed`/`service_down` + hint。
 
 **返回精简的硬规则**
 
@@ -548,7 +549,7 @@ apply
  ├─ 载入 config（env 覆盖）→ 若 enabled=false，只挂 status/设置路由
  ├─ 创建 LocalAIClient / CacheStore / HealthMonitor
  ├─ ctx.provide('fish.service', api)
- ├─ 注册 8 个工具（始终）
+ ├─ 注册 9 个工具（始终）
  ├─ 注册 /dsh-fish-service/* 路由
  ├─ health.start()：立即探一次，之后每 15s
  └─ ctx.effect(() => cleanup: health.stop / cache.flush / 摘路由)
@@ -822,6 +823,14 @@ apply
 - 服务未装/未启动的引导与 toast；
 - 补 `fish_separate`、`fish_vision_frames`、`fish_media_probe`、`fish_job`；
 - 验收：见 15.2。
+
+### P2.2 框选朗读/翻译 + 音色目录 + 翻译语言
+
+> 状态：**已完成**（2026-11-10）。
+
+- 选中文字后浮出紧凑工具条（`conversation.chat.text-interaction`，`key: fish-selection`）：朗读只读选区，翻译弹出译文面板（复制/关闭/失败重试）；
+- 设置页「朗读」的默认音色旁「打开文件夹」，只允许打开 `cacheDir` 或服务实时返回的音色目录；
+- 设置页「翻译」第一/第二语言；未显式指定目标语言时按「原文不是第一语言→第一语言，否则→第二语言」自动选，桥接/框选/工具共用一条规则。
 
 ### P3 WebUI 内嵌 + 安装管理
 
