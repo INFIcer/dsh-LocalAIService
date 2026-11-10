@@ -1401,6 +1401,52 @@ select.fish-select option:checked {
       return false
     }
 
+    /** 语音文件附件名：语音-YYYYMMDD-HHMMSS.webm（给人看的、可读的）。 */
+    function 语音附件名(时间, mime) {
+      const 两 = (数) => String(数).padStart(2, '0')
+      const 时刻 = new Date(时间 || Date.now())
+      const 日期 = `${时刻.getFullYear()}${两(时刻.getMonth() + 1)}${两(时刻.getDate())}`
+      const 时钟 = `${两(时刻.getHours())}${两(时刻.getMinutes())}${两(时刻.getSeconds())}`
+      return `语音-${日期}-${时钟}${语音扩展(mime)}`
+    }
+
+    // 浏览器侧的内核会话服务；apply 时拿到上下文后才能解析。
+    let 插件上下文 = null
+
+    /** 取会话作用域里的 conversation 服务（内核的草稿附件都挂在这里）。 */
+    function 取会话对话(sessionId, 上下文 = 插件上下文) {
+      try {
+        const 会话 = 上下文?.get?.('sessions')
+        if (会话 && typeof 会话.scope === 'function' && sessionId) {
+          const 作用域 = 会话.scope(String(sessionId))
+          const 对话 = 作用域?.get?.('conversation')
+          if (对话) return 对话
+        }
+      } catch { /* 不同版本的内核可能没有 sessions */ }
+      try { return 上下文?.get?.('conversation') ?? null } catch { return null }
+    }
+
+    /**
+     * 把录音作为「文件」挂到输入框草稿里（内核 ComposerAttachments 支持 file 卡片）。
+     * 成功返回 true；任何一步不成立都返回 false，调用方退回「插入路径文字」。
+     */
+    function 挂语音附件(inputActions, sessionId, blob, mime, 文件名, 上下文 = 插件上下文) {
+      try {
+        if (!blob || typeof File !== 'function') return false
+        if (!inputActions || typeof inputActions.addAttachments !== 'function') return false
+        const 对话 = 取会话对话(sessionId, 上下文)
+        if (!对话 || typeof 对话.createDrafts !== 'function') return false
+        const 文件 = new File([blob], 文件名 || 语音附件名(Date.now(), mime), { type: mime || 'audio/webm' })
+        const 草稿们 = 对话.createDrafts(String(sessionId), [文件], true)
+        const 标识们 = Array.isArray(草稿们) ? 草稿们.map((项) => 项 && 项.id).filter(Boolean) : []
+        if (标识们.length === 0) return false
+        return inputActions.addAttachments(标识们) === true
+      } catch (错误) {
+        try { console.warn('[dsh-fish-service] 语音附件失败', 错误) } catch { /* 忽略 */ }
+        return false
+      }
+    }
+
     function 语音扩展(mime) {
       const 类型 = String(mime || '').toLowerCase()
       if (类型.includes('wav')) return '.wav'
@@ -1459,9 +1505,10 @@ select.fish-select option:checked {
       安排关闭(插入成功 ? 4500 : 12000)
     }
 
-    async function 保留语音(inputActions) {
+    async function 保留语音(inputActions, sessionId) {
       if (!语音.片段) return
       const 代 = 语音.代
+      const 目标会话 = String(sessionId || 语音.态.get().sessionId || '')
       语音.态.set((旧) => ({ ...旧, phase: 'uploading', error: '', hint: '' }))
       const 表单 = new FormData()
       表单.append('file', 语音.片段.blob, `voice${语音扩展(语音.片段.mime)}`)
@@ -1473,7 +1520,9 @@ select.fish-select option:checked {
         return
       }
       const 路径 = String(r.path || '')
-      const 插入成功 = 插入文本(inputActions, `（语音附件：${路径}）\n`)
+      const 文件名 = 语音附件名(Date.now(), 语音.片段.mime)
+      const 附件成功 = 挂语音附件(inputActions, 目标会话, 语音.片段.blob, 语音.片段.mime, 文件名)
+      const 插入成功 = 附件成功 ? false : 插入文本(inputActions, `（语音附件：${路径}）\n`)
       记住选择('audio')
       语音.插入位 = null
       语音.态.set((旧) => ({
@@ -1484,12 +1533,14 @@ select.fish-select option:checked {
         pendingText: '',
         choice: 'audio',
         error: '',
-        hint: 插入成功
-          ? `录音已保存在本机：${路径}\n暂不支持把录音作为附件发送，已把保存位置插入输入框（可删除，也可继续补充文字）。`
-          : `录音已保存在本机：${路径}\n保存位置未能插入输入框，已复制到剪贴板。`,
+        hint: 附件成功
+          ? `录音已作为文件添加到输入框：${文件名}（可继续补充文字后发送）。`
+          : 插入成功
+            ? `录音已保存在本机：${路径}\n未能加到输入框附件，已把保存位置插入输入框（可删除，也可继续补充文字）。`
+            : `录音已保存在本机：${路径}\n保存位置未能插入输入框，已复制到剪贴板。`,
       }))
       // 片段先留着：面板里还有「补上文字」按钮。
-      安排关闭(12000)
+      安排关闭(附件成功 ? 4500 : 12000)
     }
 
     // ---------------- 语音输入：麦克风按钮 ----------------
@@ -1869,15 +1920,15 @@ select.fish-select option:checked {
             type: 'button',
             className: 'fish-btn',
             'data-primary': 高亮('audio') ? '1' : undefined,
-            onClick: () => void 保留语音(inputActions),
-          }, '保留语音'),
+            onClick: () => void 保留语音(inputActions, sessionId),
+          }, '作为附件'),
           h('button', {
             type: 'button',
             className: 'fish-btn',
             'data-primary': 高亮('cancel') ? '1' : undefined,
             onClick: () => { 记住选择('cancel'); 取消录音() },
           }, '取消')))
-        行.push(h('div', { key: 'sub', className: 'fish-panel-dim' }, '上次的选择会高亮，但不会自动执行；转成的文字会插入光标处，可以继续修改。'))
+        行.push(h('div', { key: 'sub', className: 'fish-panel-dim' }, '上次的选择会高亮，但不会自动执行；转成的文字会插入光标处，「作为附件」会把录音作为文件加到输入框。'))
       }
 
       if (忙碌) {
@@ -2972,6 +3023,7 @@ select.fish-select option:checked {
     }
 
     function apply(ctx) {
+      插件上下文 = ctx
       注入样式()
       // 设置页：P1 的「本地 AI」tab（P2 在同一个页面里加分区的）。
       注册(ctx, 'settings.section', { id: 'fish-service', order: 57, label: () => '本地 AI' }, Section)
@@ -3033,6 +3085,9 @@ select.fish-select option:checked {
       显存色,
       格式化视觉,
       指标离线,
+      语音附件名,
+      取会话对话,
+      挂语音附件,
     }
     return module.exports
   },

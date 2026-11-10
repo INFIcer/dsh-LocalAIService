@@ -1,4 +1,4 @@
-﻿# DSH 0.2.2-rc.1 插件能力
+# DSH 0.2.2-rc.1 插件能力
 
 本文回答三件事：能不能把东西放进会话（附件/图片槽位）、工具结果能不能变成可播放的文件、能不能给模型加一句提示。
 结论按 `0.2.2-rc.1` 实测；依据是 asar 里的客户端 bundle 与 README（行号即 `D:\Program Files\DeepSeek Harness\resources\app.asar` 内文件的行号）。
@@ -7,7 +7,7 @@
 
 | | 能力 | 结论 | 能做什么 |
 | --- | --- | --- | --- |
-| A | 图片/附件槽位 | **有** | 用户消息的图片旁可以加按钮；输入框右侧可加独立图标按钮（本插件「本地识图」就是这么接的）；草稿附件栏也能整条顶替，但本插件不再使用 |
+| A | 图片/附件槽位 | **有** | 用户消息的图片旁可以加按钮；输入框右侧可加独立图标按钮（本插件「本地识图」就是这么接的）；还能把本机文件造成草稿附件（`createDrafts` + `addAttachments`，插件「语音 → 作为附件」用这条） |
 | B | 工具结果带附件 | **不能** | 没有 audio / file 类型的内容块，会话里没有音频播放器；唯一出口是官方 `present` 交付卡 |
 | C | 给模型注入提示 | **有** | `ctx.systemPrompt.section()` 可加一段静态或动态文本 |
 
@@ -31,10 +31,12 @@
   `onAddFiles`（`composer.bar` 的 `intakeFiles`）、`onRemoveAttachment`、`uploads`、`onRetryFile`、
   `uploadFailureText`、`dropLimits`（`dsh-client-ui-conversation/lib/client.js:22065-22081`）。
   附件栏、拖放、文件选择器和编辑器粘贴（`client.js:21260-21282` → `intakeFiles`）最终都走同一个 `onAddFiles`。
-  限制是：`addFiles` 本体仍只在 `conversation.composer.bar` 的 inject 里，子槽位只能把文件原样转交，
-  **不能自己造附件**；对非图片文件官方只生成 `@路径` 文本，不会上传（`client.js:22996-23096`）。
-  ⇒ 录音仍没法直接变成草稿附件；但「在草稿图片下加按钮，识别后 `onRemoveAttachment` 移除该图、
-  描述用 `insertText` 写进输入框」是可行的。
+- **能自己造附件（实测可用）**：会话作用域里的 `conversation` 服务（`ctx.get('sessions').scope(sessionId).get('conversation')`）
+  有 `createDrafts(sessionId, files, uploadImages)`（`client.js:27426664`）：非图片文件会建成
+  `{kind:'file', id, file}` 放进 `draftAttachments` 并启动上传；再调 `inputActions.addAttachments(ids)`
+  （`client.js:27784324` 的公开 actions）把它挂进草稿，输入框就会出现官方 `FileCard` 文件卡片，
+  发送时按 `{type:'file', receiptId}` 序列化（`client.js:27424501`）。本插件「语音 → 作为附件」就是这么做的。
+  注意：不经过编辑器，所以只有附件栏卡片、没有正文里的 `@路径` chip。
 
 ### 不能做的
 
