@@ -242,6 +242,8 @@ interface AsrResult {
     text: string
     language?: string
     engine?: 'sensevoice' | 'whisper'
+    emotion?: string             // 上游情感标签，如 NEUTRAL / HAPPY；没有就不出现
+    events?: string[]            // 上游事件标签，如 ["Speech"]、["Laughter"]；没有就不出现
     durationMs?: number
     elapsedMs?: number
     speaker?: { name: string; score: number; known: boolean } | null
@@ -257,6 +259,7 @@ interface AsrResult {
 - 上传上限 200MB（音频 50MB）；超限 → `bad_request`，hint 提示裁剪；
 - `timestamps:true` 时用 `/asr/segments`，`segments` 最多返回 200 段；
 - `speaker` 失败不影响转写：`speaker:null` + `speakerError`，整体 `ok:true`；
+- `emotion` / `events` 来自上游 `/asr` 的富标签解析（`parse_rich_tags`），原样透传；上游没给就不出现这两个字段；
 - 临时上传文件请求结束即删。
 
 ### 1.7 `translate(input, opts)`

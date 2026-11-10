@@ -211,6 +211,8 @@ test('asr：返回文字/声纹/分段；timestamps 走 /asr/segments；文件�
         engine: 'sensevoice',
         duration: 1.5,
         elapsed_ms: 120,
+        emotion: 'HAPPY',
+        events: ['Speech', 'Laughter'],
         speaker: { name: '小明', score: 0.92, known: true },
       })
     },
@@ -239,6 +241,8 @@ test('asr：返回文字/声纹/分段；timestamps 走 /asr/segments；文件�
   assert.equal(r.items[0].durationMs, 1500)
   assert.equal(r.items[0].elapsedMs, 120)
   assert.deepEqual(r.items[0].speaker, { name: '小明', score: 0.92, known: true })
+  assert.equal(r.items[0].emotion, 'HAPPY')
+  assert.deepEqual(r.items[0].events, ['Speech', 'Laughter'])
   assert.ok(seen[0].contentType.startsWith('multipart/form-data'))
 
   const seg = await stack.api.asr([wav], { timestamps: true, speaker: false })
