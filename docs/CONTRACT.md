@@ -889,6 +889,10 @@ interface VisionPrefs {
 | GET | `/webui` | — | `{ok, url, embedUrl}`（`/ui?embed=1`） |
 | GET | `/metrics` | — | 计数器 JSON |
 
+`/describe-upload` 的客户端用途：草稿附件栏里每张图片下的「本地识图」按钮调用它（`mode=caption`）；
+成功后客户端插入「［图片：文件名］＋描述」并把这张图从草稿移除（图片不再上传），失败则保留原图、只提示一句。
+消息发出后的旧「图片下方按钮」已移除。
+
 安全：
 
 - 所有 POST 要求同源（检查 `Origin`/`Referer` 为 DSH 页面）；

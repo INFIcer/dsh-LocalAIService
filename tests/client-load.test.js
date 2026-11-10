@@ -13,6 +13,8 @@ function 装React() {
     useState: (初值) => [typeof 初值 === 'function' ? 初值() : 初值, () => {}],
     useEffect: () => {},
     useRef: (值) => ({ current: 值 }),
+    useCallback: (函数) => 函数,
+    useMemo: (工厂函数) => 工厂函数(),
     useSyncExternalStore: () => null,
     Fragment: 'Fragment',
     version: '18.2.0',
@@ -75,22 +77,22 @@ test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 面板 / �
     'settings.section',
     'conversation.chat.assistant-actions',
     'conversation.input.right',
+    'conversation.input.attachments',
     'conversation.input.overlay',
     'conversation.input.left',
-    'conversation.chat.user.images',
     'conversation.chat.text-interaction',
   ])
   assert.deepEqual(注册们.map((x) => x.配置.id), [
     'fish-service',
     'fish-read',
     'fish-mic',
+    'fish-attach',
     'fish-voice',
     'fish-auto-read',
-    'fish-vision',
     undefined,
   ])
-  // 图片槽是单占位：priority 必须小于官方 MessageImages 的 100，否则顶不掉它。
-  assert.equal(注册们.find((x) => x.配置.id === 'fish-vision').配置.priority, 60)
+  // 草稿附件栏是单占位：priority 必须小于官方 ComposerAttachments 的 100，否则顶不掉它。
+  assert.equal(注册们.find((x) => x.配置.id === 'fish-attach').配置.priority, 60)
   assert.equal(注册们.at(-1).配置.key, 'fish-selection')
 
   // 框选交互：只对 selection + 有文本的请求 open；其它情况不抢。
@@ -114,9 +116,33 @@ test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 面板 / �
   assert.doesNotThrow(() => 组件们['fish-mic']({ sessionId: 's1' }))
   assert.doesNotThrow(() => 组件们['fish-voice']({ sessionId: 's1' }))
   assert.doesNotThrow(() => 组件们['fish-auto-read']())
-  // 图片旁的识图按钮：空图组也要能渲染（官方画廊由 renderFactorySlot 提供，这里没有就少画一块）。
-  assert.doesNotThrow(() => 组件们['fish-vision']({ images: [], loadImage: async () => '' }))
-  assert.doesNotThrow(() => 组件们['fish-vision']({ images: [{ attachment: { attachmentId: 'a1' } }], loadImage: async () => 'blob:x', align: 'end', compact: true, renderFactorySlot: () => null }))
+  // 草稿附件栏：没东西时返回 null（不占位）；有附件/状态时要能画出来，图片下要有识图入口。
+  assert.equal(组件们['fish-attach']({ sessionId: 's1' }), null)
+  const 附件树 = 组件们['fish-attach']({
+    sessionId: 's1',
+    attachments: [
+      { id: 'i1', kind: 'image', file: { name: 'a.png', size: 2048 }, previewUrl: 'blob:x' },
+      { id: 'f1', kind: 'file', file: { name: 'b.pdf', size: 1024 * 1024 } },
+    ],
+    uploads: { i1: { status: 'uploading', loaded: 5, total: 10 }, f1: { status: 'error', reason: 'too_large' } },
+    canAcceptDrop: true,
+    onAddFiles: () => {},
+    onRemoveAttachment: () => {},
+    onRetryFile: () => {},
+    uploadFailureText: (原因) => `上传失败：${原因}`,
+  })
+  assert.doesNotThrow(() => 附件树)
+  assert.match(JSON.stringify(附件树), /本地识图/)
+  assert.match(JSON.stringify(附件树), /上传失败：too_large/)
+  assert.notEqual(组件们['fish-attach']({
+    sessionId: 's1',
+    attachments: [{ id: 'f1', kind: 'file', file: { name: 'b.pdf', size: 10 } }],
+    uploads: {},
+    onAddFiles: () => {},
+    onRemoveAttachment: () => {},
+    onRetryFile: () => {},
+    uploadFailureText: () => '',
+  }), null)
   // 面板空闲时不应该渲染任何东西。
   assert.equal(组件们['fish-voice']({ sessionId: 's1' }), null)
 
@@ -129,6 +155,65 @@ test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 面板 / �
   assert.equal(识图扩展('image/bmp'), '.bmp')
   assert.equal(识图扩展(''), '.jpg')
   assert.equal(识图扩展(undefined), '.jpg')
+
+  // ---- 发送前识图：纯函数（入口判断 / 描述拼装 / 待插入队列） ----
+  const 测试 = 导出.__testing
+  const 图 = (名, 类型 = '') => ({ name: 名, type: 类型, size: 10 })
+
+  // 是图片文件：MIME 优先，扩展名兜底（大小写不敏感）。
+  assert.equal(测试.是图片文件(图('a.png', 'image/png')), true)
+  assert.equal(测试.是图片文件(图('a.JPG')), true)
+  assert.equal(测试.是图片文件(图('a.webp', '')), true)
+  assert.equal(测试.是图片文件(图('a.pdf', 'application/pdf')), false)
+  assert.equal(测试.是图片文件(图('a.pdf')), false)
+  assert.equal(测试.是图片文件(null), false)
+
+  // 识图入口：开关关、服务离线给一句短提示（都不改图片）；正常返回空串。
+  assert.equal(测试.识图阻塞原因({ 载入: true, 在线: true, config: {} }), '')
+  assert.match(测试.识图阻塞原因({ 载入: true, 在线: true, config: { localDescribe: false } }), /已关闭/)
+  assert.match(测试.识图阻塞原因({ 载入: true, 在线: false, config: {} }), /未连接/)
+  // 偏好还没载入时先当作可用；真失败时页面自己会提示。
+  assert.equal(测试.识图阻塞原因({ 载入: false }), '')
+  assert.equal(测试.识图阻塞原因(null), '')
+  assert.equal(测试.本地识图开({ localDescribe: false }), false)
+  assert.equal(测试.本地识图开({}), true)
+  assert.equal(测试.本地识图开(null), true)
+
+  // 拼图片描述：文件名 + 详细描述，每张一段；空描述不插。
+  assert.equal(测试.拼图片描述('a.png', ' 一只猫\n坐在窗台 '), '［图片：a.png］\n一只猫\n坐在窗台\n')
+  assert.equal(测试.拼图片描述('', '文字'), '［图片：图片］\n文字\n')
+  assert.equal(测试.拼图片描述('a.png', '   '), '')
+  assert.equal(测试.拼图片描述('a.png', undefined), '')
+
+  // 待插入队列：按会话隔离，取出即删除，失败计入失败数。
+  assert.equal(测试.入队待插入({ sessionId: 's1', text: '甲' }), true)
+  assert.equal(测试.入队待插入({ sessionId: 's2', text: '乙' }), true)
+  assert.equal(测试.入队待插入({ sessionId: 's1', text: '' }), false)
+  assert.equal(测试.取待插入('s1').join(','), '甲')
+  assert.equal(测试.取待插入('s1').length, 0)
+  let 结果 = 测试.消费待插入('s2', (文本) => 文本 === '乙')
+  assert.equal(结果.成功, 1)
+  assert.equal(结果.失败, 0)
+  结果 = 测试.消费待插入('s2', () => false)
+  assert.equal(结果.成功, 0)
+  assert.equal(结果.失败, 0)
+  assert.equal(测试.入队待插入({ text: '无会话标记' }), true)
+  assert.equal(测试.取待插入('s3').join(','), '无会话标记')
+  assert.equal(测试.入队待插入({ sessionId: 's4', text: '插入失败' }), true)
+  结果 = 测试.消费待插入('s4', () => false)
+  assert.equal(结果.成功, 0)
+  assert.equal(结果.失败, 1)
+
+  // 拖入目录：靠 entry API 而不是 File（浏览器里 File 分不出目录）。
+  const 目录项 = { kind: 'file', webkitGetAsEntry: () => ({ isDirectory: true }) }
+  const 普通项 = { kind: 'file', webkitGetAsEntry: () => ({ isDirectory: false }) }
+  const 拖入 = 测试.拖入目录({ items: [目录项, 普通项] }, [图('dir'), 图('a.png')])
+  assert.equal(拖入.size, 1)
+  const 同一个目录 = 图('目录')
+  assert.equal(测试.拖入目录({ items: [目录项] }, [同一个目录]).has(同一个目录), true)
+  assert.equal(测试.格式大小(900), '900 B')
+  assert.equal(测试.格式大小(2048), '2 KB')
+  assert.equal(测试.格式大小(5 * 1024 * 1024), '5.0 MB')
 })
 
 test('client.js：slots 还没就绪时会重试，而不是直接抛错', async () => {

@@ -7,7 +7,7 @@
 
 | | 能力 | 结论 | 能做什么 |
 | --- | --- | --- | --- |
-| A | 图片/附件槽位 | **有** | 用户消息的图片旁可以加按钮；草稿附件栏只能顶替官方整条，不能往里塞文件 |
+| A | 图片/附件槽位 | **有** | 用户消息的图片旁可以加按钮；草稿附件栏可以整条顶替，在每张草稿图片下加控件，附件、上传、删除、拖放仍走官方接口 |
 | B | 工具结果带附件 | **不能** | 没有 audio / file 类型的内容块，会话里没有音频播放器；唯一出口是官方 `present` 交付卡 |
 | C | 给模型注入提示 | **有** | `ctx.systemPrompt.section()` 可加一段静态或动态文本 |
 
@@ -25,6 +25,16 @@
   （`dsh-client-ui-conversation/lib/client.js:19952`），`fetch` 该地址即可上传识图。
 - 画廊本体可以复用：`renderFactorySlot('conversation.images.content', { images, loadImage, align, compact })`
   （`dsh-client-ui-attachment/lib/client.js:2329-2355` 的官方 `MessageImages` 就是这么画的）。
+- **草稿附件栏可以整条顶替并加控件**：`conversation.input.attachments` 的注册体是整条 `ComposerAttachments`
+  （`dsh-client-ui-attachment/lib/client.js:2371-2375`），官方没有显式 priority，所以 `priority: 60` 即可占住。
+  顶替后会拿到 ownerProps：`attachments`（草稿附件，图片项带 `file`，可直接读字节）、`canAcceptDrop`、
+  `onAddFiles`（`composer.bar` 的 `intakeFiles`）、`onRemoveAttachment`、`uploads`、`onRetryFile`、
+  `uploadFailureText`、`dropLimits`（`dsh-client-ui-conversation/lib/client.js:22065-22081`）。
+  附件栏、拖放、文件选择器和编辑器粘贴（`client.js:21260-21282` → `intakeFiles`）最终都走同一个 `onAddFiles`。
+  限制是：`addFiles` 本体仍只在 `conversation.composer.bar` 的 inject 里，子槽位只能把文件原样转交，
+  **不能自己造附件**；对非图片文件官方只生成 `@路径` 文本，不会上传（`client.js:22996-23096`）。
+  ⇒ 录音仍没法直接变成草稿附件；但「在草稿图片下加按钮，识别后 `onRemoveAttachment` 移除该图、
+  描述用 `insertText` 写进输入框」是可行的。
 
 ### 不能做的
 
@@ -34,10 +44,8 @@
   所以想加东西必须自己把画廊画回来，再在旁边加控件。
 - **图片没有本地路径**：会话里的图片一律是上传附件（`attachment.image`），桌面端拖入的非图片文件才变 `@路径`
   chip（`dsh-client-ui-conversation` README 第 123 行）。所以识图只能走「上传字节 → 宿主存临时文件 → 视觉模型」。
-- **草稿附件栏塞不进东西**：`conversation.input.attachments` 的注册体是整条 `ComposerAttachments`
-  （`dsh-client-ui-attachment/lib/client.js:2371-2375`）；`addFiles` 只在 `conversation.composer.bar` 的 inject 里，
-  子槽位拿不到（`dsh-client-ui-conversation/lib/client.js:22996-23096`），而且它对非图片文件只生成 `@路径` 文本，
-  不会上传。⇒ 录音没法直接变成草稿附件。
+- **附件栏整条顶替后，官方附件栏的细节要自己补**：官方的点缩略图看大图、拖入高亮等没有对应的子组件可复用
+  （插件只 external `react`），只能手写或不做；上传、删除、重试、拖放、粘贴这些入口必须照官方语义接回。
 - **`conversation.chat.user.before` 不行**：它是 chain 槽，props 只有 `{ source, kind }`
   （`dsh-client-ui-chat/lib/client.js:6183-6186`），拿不到图片，做不了「每图一个按钮」。
 
@@ -101,7 +109,8 @@
 
 ## 本插件据此做的取舍
 
-1. 用户消息图片旁加「本地识图」：注册 `conversation.chat.user.images`，`priority: 60`，自己调
-   `conversation.images.content` 画画廊，再叠一个按钮；关闭本地识图时原样交还官方画廊。
+1. 草稿图片下加「本地识图」：注册 `conversation.input.attachments`，`priority: 60` 顶替官方附件栏，
+   保持官方附件条外观、上传进度、删除与拖放；点按钮后在本地识别，再用 `onRemoveAttachment` 移除这张图、
+   把描述写进输入框（图片不随消息上传）。消息发出后的旧「图片下方按钮」已去掉。
 2. 语音结果不再铺 JSON，只留一行「生成了几段、文件在哪」；文件形态交给模型调用 `present`。
 3. 两段系统提示（识图一段、文件一段），按设置实时开关，`interpolate: false`。
