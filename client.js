@@ -1486,23 +1486,25 @@ select.fish-select option:checked {
         return
       }
       const 插入成功 = 插入文本(inputActions, 文本)
-      const 录音秒数 = Math.max(0, Math.round(Number(语音.片段?.durationMs || 0) / 1000))
       记住选择('text')
+      // 文字已经在输入框里了，面板不必再弹出来。
+      if (插入成功) {
+        关闭语音面板()
+        return
+      }
       语音.片段 = null
       语音.插入位 = null
       语音.态.set((旧) => ({
         ...旧,
         phase: 'done',
         text: 文本,
-        pendingText: 插入成功 ? '' : 文本,
+        pendingText: 文本,
         elapsedMs: Number(r.ms) || 0,
         choice: 'text',
         error: '',
-        hint: 插入成功
-          ? `已转写 ${文本.length} 字（录音 ${录音秒数} 秒），文字已插入输入框，可以继续编辑。`
-          : `已转写 ${文本.length} 字，但未能插入输入框；文字已复制到剪贴板，也可点「重试插入」或「复制文字」。`,
+        hint: `已转写 ${文本.length} 字，但没能插进输入框；文字已复制到剪贴板，也可点「重试插入」。`,
       }))
-      安排关闭(插入成功 ? 4500 : 12000)
+      安排关闭(12000)
     }
 
     async function 保留语音(inputActions, sessionId) {
@@ -1524,6 +1526,11 @@ select.fish-select option:checked {
       const 附件成功 = 挂语音附件(inputActions, 目标会话, 语音.片段.blob, 语音.片段.mime, 文件名)
       const 插入成功 = 附件成功 ? false : 插入文本(inputActions, `（语音附件：${路径}）\n`)
       记住选择('audio')
+      // 附件卡片已经出现在输入框里，面板不必再弹。
+      if (附件成功) {
+        关闭语音面板()
+        return
+      }
       语音.插入位 = null
       语音.态.set((旧) => ({
         ...旧,
@@ -1533,14 +1540,11 @@ select.fish-select option:checked {
         pendingText: '',
         choice: 'audio',
         error: '',
-        hint: 附件成功
-          ? `录音已作为文件添加到输入框：${文件名}（可继续补充文字后发送）。`
-          : 插入成功
-            ? `录音已保存在本机：${路径}\n未能加到输入框附件，已把保存位置插入输入框（可删除，也可继续补充文字）。`
-            : `录音已保存在本机：${路径}\n保存位置未能插入输入框，已复制到剪贴板。`,
+        hint: 插入成功
+          ? `录音已保存在本机：${路径}\n没能加到输入框附件，已把保存位置插入输入框（可删除）。`
+          : `录音已保存在本机：${路径}\n保存位置未能插入输入框，已复制到剪贴板。`,
       }))
-      // 片段先留着：面板里还有「补上文字」按钮。
-      安排关闭(附件成功 ? 4500 : 12000)
+      安排关闭(12000)
     }
 
     // ---------------- 语音输入：麦克风按钮 ----------------
@@ -1939,7 +1943,7 @@ select.fish-select option:checked {
           h('button', { type: 'button', className: 'fish-btn', onClick: 关闭语音面板 }, '关闭面板（转写继续在后台进行）')))
       }
 
-      if (态.phase === 'done') {
+        if (态.phase === 'done') {
         行.push(h('div', { key: 'hint', className: 'fish-ok', style: { whiteSpace: 'pre-wrap', wordBreak: 'break-all' } }, 态.hint))
         if (态.pendingText) {
           行.push(h('div', { key: 'pending', className: 'fish-panel-dim', style: { marginTop: 6, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 110, overflow: 'auto' } }, 态.pendingText))
@@ -1955,10 +1959,6 @@ select.fish-select option:checked {
               type: 'button', className: 'fish-btn',
               onClick: () => { try { navigator.clipboard?.writeText?.(态.pendingText) } catch { /* 忽略 */ } },
             }, '复制文字')))
-        }
-        if (态.path && !态.text && 语音.片段) {
-          行.push(h('div', { key: 'extra', className: 'fish-panel-row' },
-            h('button', { type: 'button', className: 'fish-btn', onClick: () => void 转文字(inputActions) }, '补充文字（可选）')))
         }
         行.push(h('div', { key: 'done-acts', className: 'fish-panel-row' },
           h('button', { type: 'button', className: 'fish-btn', onClick: 关闭语音面板 }, '关闭')))
