@@ -2496,7 +2496,7 @@ select.fish-select option:checked {
         行('工具默认档位', 下拉(规范识图档位(配置.visionDefaultPreset) || 'detailed', 识图档位选项,
           (值) => 改('visionDefaultPreset', 值)),
         '工具识图没指定档位时用这一档。'),
-        折叠块({ 摘要: '工具提示词', 展开字样: '修改', 收起字样: '收起' },
+        h(折叠块, { 摘要: '工具提示词', 展开字样: '修改', 收起字样: '收起' },
           h('div', null, 识图档位们.map((档) => h('div', { key: 档.id, style: { marginBottom: 10 } },
             h('div', { style: { fontSize: 12.5, marginBottom: 2 } }, 档.名),
             多行(预设表[档.id], (值) => 改提示词(档.id, 值), '留空用内置默认'),
@@ -3088,6 +3088,7 @@ select.fish-select option:checked {
       语音附件名,
       取会话对话,
       挂语音附件,
+      Section,
     }
     return module.exports
   },
