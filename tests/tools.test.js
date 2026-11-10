@@ -181,17 +181,38 @@ test('fish_translate：target 可不传（自动规则）；target 不能 auto�
   assert.deepEqual(ok.texts, ['hello'])
 })
 
-test('fish_describe_image：1~10 张、默认 caption、返回文字与耗时、不含图片本体', async () => {
+test('fish_describe_image：1~10 张、默认 caption、detail 选档、返回文字与耗时、不含图片本体', async () => {
   const { api, calls } = 造假服务()
   const describe = 工具表(api).get('fish_describe_image')
   assert.equal((await describe.execute({ paths: Array.from({ length: 11 }, (_, i) => `C:\\${i}.png`) }, {})).code, 'bad_request')
   assert.equal((await describe.execute({ paths: [] }, {})).code, 'bad_request')
 
+  // schema 里写了四档，并说明也认中文名。
+  assert.equal(describe.parameters.properties.detail.type, 'string')
+  assert.match(describe.parameters.properties.detail.description, /brief/)
+  assert.match(describe.parameters.properties.detail.description, /详细/)
+  assert.match(describe.parameters.properties.detail.description, /默认详细/)
+
+  // 不传 detail：不指定档位，交给服务按配置默认档（详细）。
   const ok = await describe.execute({ paths: ['C:\\a.png'] }, {})
   assert.equal(ok.ok, true)
   assert.equal(ok.items[0].text, '一只猫趴在窗台上')
   assert.equal(calls.at(-1)[0], 'visionDescribe')
   assert.equal(calls.at(-1)[1][1].mode, 'caption')
+  assert.equal(calls.at(-1)[1][1].preset, undefined)
+
+  // detail 支持 id 和中文名。
+  await describe.execute({ paths: ['C:\\a.png'], detail: 'brief' }, {})
+  assert.equal(calls.at(-1)[1][1].preset, 'brief')
+  await describe.execute({ paths: ['C:\\a.png'], detail: '详细' }, {})
+  assert.equal(calls.at(-1)[1][1].preset, 'detailed')
+  await describe.execute({ paths: ['C:\\a.png'], detail: '只看文字' }, {})
+  assert.equal(calls.at(-1)[1][1].preset, 'text')
+
+  // 认不出的 detail 忽略，仍按服务默认档，不报错。
+  const 怪档 = await describe.execute({ paths: ['C:\\a.png'], detail: '特写' }, {})
+  assert.equal(怪档.ok, true)
+  assert.equal(calls.at(-1)[1][1].preset, undefined)
 
   const 评分 = await describe.execute({ paths: ['C:\\a.png'], mode: 'score', prompt: '这帧清楚吗' }, {})
   assert.equal(评分.ok, true)

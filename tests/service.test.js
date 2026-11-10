@@ -14,6 +14,7 @@ import {
   writeTempFile,
 } from './helpers.js'
 import { apply } from '../lib/host.js'
+import { 默认识图提示, 默认会话识图提示 } from '../lib/vision-presets.js'
 
 function 解析体(rec) {
   try { return JSON.parse(rec.body.toString('utf8') || '{}') } catch { return {} }
@@ -336,7 +337,7 @@ test('translate：不传 target 时按第一/第二语言自动选，检测结�
   assert.equal(空.source, 'auto')
 })
 
-test('visionDescribe：逐张调 /vision/describe，caption 传描述提示，score 不传', async (t) => {
+test('visionDescribe：逐张调 /vision/describe，caption 跟默认档提示，score 不传', async (t) => {
   const 请求 = []
   const 图 = (名) => writeTempFile(temp.dir, 名, 'png-bytes')
   const stack = await makeStack({
@@ -362,8 +363,10 @@ test('visionDescribe：逐张调 /vision/describe，caption 传描述提示，sc
   assert.equal(请求.length, 2)
   assert.match(请求[0].headers['content-type'], /multipart\/form-data/)
   assert.match(请求[0].body.toString('utf8'), /name="file"; filename="a\.png"/)
-  // caption 必须有提示词覆盖服务端评分提示；score 保持服务端默认。
+  // caption 必须有提示词覆盖服务端评分提示，默认档是「详细」。
   assert.match(请求[0].body.toString('utf8'), /name="prompt"/)
+  assert.ok(请求[0].body.toString('utf8').replace(/\r\n/g, '\n').includes(默认识图提示.detailed))
+  // score 保持服务端默认。
   await stack.api.visionDescribe(a, { mode: 'score' })
   assert.equal(请求.at(-1).body.toString('utf8').includes('name="prompt"'), false)
   // 自定义 prompt 覆盖默认。
@@ -385,26 +388,168 @@ test('visionDescribe：最多 10 张、缺文件、非图片扩展名都拒绝',
   assert.ok(existsSync(图))
 })
 
+test('visionDescribe：prompt > preset > 配置默认档，ocr 固定只看文字档', async (t) => {
+  const 请求 = []
+  const stack = await makeStack({
+    handler: basicHandler({
+      '/vision/describe': (req, res, rec) => {
+        请求.push(rec)
+        sendJson(res, 200, { ok: true, text: '描述', elapsed_ms: 2 })
+      },
+    }),
+  })
+  t.after(() => stack.close())
+  const 图 = writeTempFile(stack.temp.dir, 'a.png', 'x')
+  const 提示字段 = (rec) => {
+    const 文 = rec.body.toString('utf8')
+    const 匹配 = 文.match(/name="prompt"\r\n\r\n([\s\S]*?)\r\n--/)
+    // multipart 文本字段会把换行规范成 CRLF，比较前统一。
+    return 匹配 ? 匹配[1].replace(/\r\n/g, '\n') : ''
+  }
+
+  await stack.api.visionDescribe(图)
+  assert.equal(提示字段(请求.at(-1)), 默认识图提示.detailed)
+
+  await stack.api.visionDescribe(图, { preset: 'brief' })
+  assert.equal(提示字段(请求.at(-1)), 默认识图提示.brief)
+
+  // 中文档位名也认。
+  await stack.api.visionDescribe(图, { preset: '详细' })
+  assert.equal(提示字段(请求.at(-1)), 默认识图提示.detailed)
+
+  // 非法档位静默回配置默认档，不报错。
+  await stack.api.visionDescribe(图, { preset: '不存在的档' })
+  assert.equal(提示字段(请求.at(-1)), 默认识图提示.detailed)
+
+  // 显式 prompt 压过 preset。
+  await stack.api.visionDescribe(图, { preset: 'brief', prompt: '只看猫' })
+  assert.equal(提示字段(请求.at(-1)), '只看猫')
+
+  // 旧 mode 兼容：ocr 固定「只看文字」，即使同时给了别的档位。
+  await stack.api.visionDescribe(图, { mode: 'ocr', preset: 'brief' })
+  assert.equal(提示字段(请求.at(-1)), 默认识图提示.text)
+
+  // 配置里改过的档位提示词优先于内置默认。
+  await stack.api.config.set({ visionPresets: { brief: '我的简短提示' } })
+  await stack.api.visionDescribe(图, { preset: 'brief' })
+  assert.equal(提示字段(请求.at(-1)), '我的简短提示')
+
+  // 默认档位跟着配置走。
+  await stack.api.config.set({ visionDefaultPreset: 'standard' })
+  await stack.api.visionDescribe(图)
+  assert.equal(提示字段(请求.at(-1)), 默认识图提示.standard)
+})
+
+test('visionDescribe：scope=session 用会话识图提示词，与工具档位互不覆盖', async (t) => {
+  const 请求 = []
+  const stack = await makeStack({
+    handler: basicHandler({
+      '/vision/describe': (req, res, rec) => {
+        请求.push(rec)
+        sendJson(res, 200, { ok: true, text: '描述', elapsed_ms: 2 })
+      },
+    }),
+  })
+  t.after(() => stack.close())
+  const 图 = writeTempFile(stack.temp.dir, 'a.png', 'x')
+  const 提示字段 = (rec) => {
+    const 文 = rec.body.toString('utf8')
+    const 匹配 = 文.match(/name="prompt"\r\n\r\n([\s\S]*?)\r\n--/)
+    // multipart 文本字段会把换行规范成 CRLF，比较前统一。
+    return 匹配 ? 匹配[1].replace(/\r\n/g, '\n') : ''
+  }
+
+  // 会话识图的默认提示词与「详细」档一致。
+  await stack.api.visionDescribe(图, { scope: 'session' })
+  assert.equal(提示字段(请求.at(-1)), 默认会话识图提示)
+  assert.equal(默认会话识图提示, 默认识图提示.detailed)
+
+  // 会话识图不吃工具档位：同时给 preset 也走会话提示词。
+  await stack.api.visionDescribe(图, { scope: 'session', preset: 'brief' })
+  assert.equal(提示字段(请求.at(-1)), 默认会话识图提示)
+
+  // 单独改会话识图提示词，工具档位不受影响。
+  await stack.api.config.set({ visionSessionPrompt: '请用一句话说图。' })
+  await stack.api.visionDescribe(图, { scope: 'session' })
+  assert.equal(提示字段(请求.at(-1)), '请用一句话说图。')
+  await stack.api.visionDescribe(图, { preset: 'brief' })
+  assert.equal(提示字段(请求.at(-1)), 默认识图提示.brief)
+
+  // 显式 prompt 仍压过会话提示词；ocr 仍固定只看文字。
+  await stack.api.visionDescribe(图, { scope: 'session', prompt: '只看猫' })
+  assert.equal(提示字段(请求.at(-1)), '只看猫')
+  await stack.api.visionDescribe(图, { scope: 'session', mode: 'ocr' })
+  assert.equal(提示字段(请求.at(-1)), 默认识图提示.text)
+})
+
+test('config.set：识图档位非法回默认，提示词只认四档且超长截断', async (t) => {
+  const stack = await makeStack()
+  t.after(() => stack.close())
+
+  const 坏档 = await stack.api.config.set({ visionDefaultPreset: '特写' })
+  assert.equal(坏档.ok, true)
+  assert.ok(坏档.warnings.some((x) => x.includes('已恢复默认')))
+  assert.equal(stack.api.config.get().visionDefaultPreset, 'detailed')
+
+  const 会话 = await stack.api.config.set({ visionSessionPrompt: '  我的会话提示  ' })
+  assert.equal(会话.ok, true)
+  assert.equal(stack.api.config.get().visionSessionPrompt, '我的会话提示')
+
+  const 会话超长 = await stack.api.config.set({ visionSessionPrompt: '很'.repeat(4100) })
+  assert.equal(会话超长.ok, true)
+  assert.ok(会话超长.warnings.some((x) => x.includes('已截断')))
+  assert.equal(stack.api.config.get().visionSessionPrompt.length, 4000)
+
+  const 提示 = await stack.api.config.set({
+    visionPresets: { brief: '一句话', foo: '不该收', detailed: 42 },
+  })
+  assert.equal(提示.ok, true)
+  assert.ok(提示.warnings.some((x) => x.includes('已忽略')))
+  const 预设 = stack.api.config.get().visionPresets
+  assert.equal(预设.brief, '一句话')
+  assert.equal(预设.detailed, 默认识图提示.detailed)
+  assert.equal(预设.foo, undefined)
+
+  const 超长 = await stack.api.config.set({ visionPresets: { brief: '很'.repeat(4100) } })
+  assert.equal(超长.ok, true)
+  assert.ok(超长.warnings.some((x) => x.includes('已截断')))
+  assert.equal(stack.api.config.get().visionPresets.brief.length, 4000)
+})
+
 test('visionPrefs：默认开、随配置变、可经 config.set 写入；不探服务', async (t) => {
   const stack = await makeStack()
   t.after(() => stack.close())
 
   // 只读本地配置：服务一次都没探过，也要直接返回。
-  assert.deepEqual(stack.api.visionPrefs(), { localDescribe: true })
+  assert.deepEqual(stack.api.visionPrefs(), {
+    localDescribe: true,
+    visionSessionReady: true,
+    visionSessionPrompt: 默认会话识图提示,
+  })
   assert.equal(stack.api.config.get().localDescribe, true)
 
-  const 结果 = await stack.api.config.set({ localDescribe: false })
+  const 结果 = await stack.api.config.set({ localDescribe: false, visionSessionPrompt: '我的会话提示' })
   assert.equal(结果.ok, true)
   assert.ok(结果.applied.includes('localDescribe'))
-  assert.deepEqual(stack.api.visionPrefs(), { localDescribe: false })
+  assert.deepEqual(stack.api.visionPrefs(), {
+    localDescribe: false,
+    visionSessionReady: false,
+    visionSessionPrompt: '',
+  })
 
   // 只认明确的开：其它值一律按关（与其它布尔字段一致）。
   const 关 = await stack.api.config.set({ localDescribe: 0 })
   assert.equal(关.ok, true)
-  assert.deepEqual(stack.api.visionPrefs(), { localDescribe: false })
+  assert.deepEqual(stack.api.visionPrefs(), {
+    localDescribe: false,
+    visionSessionReady: false,
+    visionSessionPrompt: '',
+  })
 
   await stack.api.config.set({ localDescribe: 1 })
-  assert.deepEqual(stack.api.visionPrefs(), { localDescribe: true })
+  assert.equal(stack.api.visionPrefs().localDescribe, true)
+  assert.equal(stack.api.visionPrefs().visionSessionReady, true)
+  assert.equal(stack.api.visionPrefs().visionSessionPrompt, '我的会话提示')
 })
 
 test('separate：复制 stems 到缓存、返回 dir；未知 stem 拒绝', async (t) => {

@@ -1,5 +1,5 @@
 // P2 客户端插件加载冒烟（不跑浏览器，只用 vm + React 替身）：
-// 验证 client.js 能求值、apply 能注册 4 个入口（设置页 + 朗读 + 麦克风 + 面板 + 自动朗读）。
+// 验证 client.js 能求值、apply 能注册各个入口（设置页 + 朗读 + 麦克风 + 本地识图 + 面板 + 自动朗读）。
 //
 // 真正的交互（录音、播放、插入文字）仍需真机验收，见 docs/P2.md 的手动步骤。
 import test from 'node:test'
@@ -21,7 +21,7 @@ function 装React() {
   }
 }
 
-test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 面板 / 自动朗读', async () => {
+test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 本地识图 / 面板 / 自动朗读', async () => {
   const 源码 = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
   let 工厂 = null
 
@@ -77,7 +77,7 @@ test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 面板 / �
     'settings.section',
     'conversation.chat.assistant-actions',
     'conversation.input.right',
-    'conversation.input.attachments',
+    'conversation.input.right',
     'conversation.input.overlay',
     'conversation.input.left',
     'conversation.chat.text-interaction',
@@ -86,13 +86,15 @@ test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 面板 / �
     'fish-service',
     'fish-read',
     'fish-mic',
-    'fish-attach',
+    'fish-vision',
     'fish-voice',
     'fish-auto-read',
     undefined,
   ])
-  // 草稿附件栏是单占位：priority 必须小于官方 ComposerAttachments 的 100，否则顶不掉它。
-  assert.equal(注册们.find((x) => x.配置.id === 'fish-attach').配置.priority, 60)
+  // 本地识图是输入框旁的独立按钮，和麦克风同一排；官方附件栏不再被顶替。
+  assert.equal(注册们.find((x) => x.配置.id === 'fish-vision').配置.order, 31)
+  assert.equal(注册们.find((x) => x.配置.id === 'fish-mic').配置.order, 32)
+  assert.equal(注册们.some((x) => x.配置.name === 'conversation.input.attachments'), false)
   assert.equal(注册们.at(-1).配置.key, 'fish-selection')
 
   // 框选交互：只对 selection + 有文本的请求 open；其它情况不抢。
@@ -116,33 +118,9 @@ test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 面板 / �
   assert.doesNotThrow(() => 组件们['fish-mic']({ sessionId: 's1' }))
   assert.doesNotThrow(() => 组件们['fish-voice']({ sessionId: 's1' }))
   assert.doesNotThrow(() => 组件们['fish-auto-read']())
-  // 草稿附件栏：没东西时返回 null（不占位）；有附件/状态时要能画出来，图片下要有识图入口。
-  assert.equal(组件们['fish-attach']({ sessionId: 's1' }), null)
-  const 附件树 = 组件们['fish-attach']({
-    sessionId: 's1',
-    attachments: [
-      { id: 'i1', kind: 'image', file: { name: 'a.png', size: 2048 }, previewUrl: 'blob:x' },
-      { id: 'f1', kind: 'file', file: { name: 'b.pdf', size: 1024 * 1024 } },
-    ],
-    uploads: { i1: { status: 'uploading', loaded: 5, total: 10 }, f1: { status: 'error', reason: 'too_large' } },
-    canAcceptDrop: true,
-    onAddFiles: () => {},
-    onRemoveAttachment: () => {},
-    onRetryFile: () => {},
-    uploadFailureText: (原因) => `上传失败：${原因}`,
-  })
-  assert.doesNotThrow(() => 附件树)
-  assert.match(JSON.stringify(附件树), /本地识图/)
-  assert.match(JSON.stringify(附件树), /上传失败：too_large/)
-  assert.notEqual(组件们['fish-attach']({
-    sessionId: 's1',
-    attachments: [{ id: 'f1', kind: 'file', file: { name: 'b.pdf', size: 10 } }],
-    uploads: {},
-    onAddFiles: () => {},
-    onRemoveAttachment: () => {},
-    onRetryFile: () => {},
-    uploadFailureText: () => '',
-  }), null)
+  // 本地识图按钮：独立入口，不依赖草稿附件。
+  assert.doesNotThrow(() => 组件们['fish-vision']({ sessionId: 's1' }))
+  assert.doesNotThrow(() => 组件们['fish-vision']())
   // 面板空闲时不应该渲染任何东西。
   assert.equal(组件们['fish-voice']({ sessionId: 's1' }), null)
 
@@ -204,16 +182,17 @@ test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 面板 / �
   assert.equal(结果.成功, 0)
   assert.equal(结果.失败, 1)
 
-  // 拖入目录：靠 entry API 而不是 File（浏览器里 File 分不出目录）。
-  const 目录项 = { kind: 'file', webkitGetAsEntry: () => ({ isDirectory: true }) }
-  const 普通项 = { kind: 'file', webkitGetAsEntry: () => ({ isDirectory: false }) }
-  const 拖入 = 测试.拖入目录({ items: [目录项, 普通项] }, [图('dir'), 图('a.png')])
-  assert.equal(拖入.size, 1)
-  const 同一个目录 = 图('目录')
-  assert.equal(测试.拖入目录({ items: [目录项] }, [同一个目录]).has(同一个目录), true)
-  assert.equal(测试.格式大小(900), '900 B')
-  assert.equal(测试.格式大小(2048), '2 KB')
-  assert.equal(测试.格式大小(5 * 1024 * 1024), '5.0 MB')
+  // 识图档位：和服务端同一套四档；id 大小写、中文名都收，认不出返回空串交给默认档。
+  assert.deepEqual([...测试.识图档位们].map((档) => 档.id), ['brief', 'standard', 'detailed', 'text'])
+  assert.deepEqual([...测试.识图档位选项].map((项) => 项.value), ['brief', 'standard', 'detailed', 'text'])
+  assert.equal(测试.规范识图档位('brief'), 'brief')
+  assert.equal(测试.规范识图档位(' Brief '), 'brief')
+  assert.equal(测试.规范识图档位('详细'), 'detailed')
+  assert.equal(测试.规范识图档位('只看文字'), 'text')
+  assert.equal(测试.规范识图档位('特写'), '')
+  assert.equal(测试.规范识图档位(null), '')
+  // 表情包档已经挪到鱼讯插件，这里不再有。
+  assert.equal(测试.识图档位们.some((档) => 档.id === 'sticker'), false)
 })
 
 test('client.js：slots 还没就绪时会重试，而不是直接抛错', async () => {

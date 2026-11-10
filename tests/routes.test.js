@@ -909,7 +909,7 @@ test('POST /describe-upload：图片上传 → 本机视觉模型 → 文字；�
       配置补丁: { cacheDir: join(temp.dir, 'cache'), localDescribe: true },
       缓存: cache,
       apiOverrides: {
-        visionPrefs: () => ({ localDescribe: true }),
+        visionPrefs: () => ({ localDescribe: true, visionDefaultPreset: 'detailed', visionSessionReady: true }),
         visionDescribe: async (路径, opts) => {
           调用.push({ 路径, opts, 存在: existsSync(路径) })
           return { ok: true, items: [{ path: 路径, text: '一只橘猫趴在窗台上。', ms: 640 }], ms: 640 }
@@ -928,11 +928,94 @@ test('POST /describe-upload：图片上传 → 本机视觉模型 → 文字；�
     assert.equal(json.ok, true)
     assert.equal(json.text, '一只橘猫趴在窗台上。')
     assert.equal(json.mode, 'caption')
+    assert.equal(json.scope, 'tool')
+    assert.equal(json.preset, 'detailed')
     assert.equal(json.bytes, 图.length)
     assert.equal(调用.length, 1)
     assert.equal(调用[0].opts.mode, 'caption')
+    assert.equal(调用[0].opts.preset, 'detailed')
     assert.equal(调用[0].存在, true, '调视觉模型时临时文件必须还在')
     assert.equal(existsSync(调用[0].路径), false, '请求结束后临时文件要删掉')
+  } finally {
+    temp.cleanup()
+  }
+})
+
+test('POST /describe-upload：preset 四档生效，缺省/非法回配置默认档，ocr 强制只看文字', async () => {
+  const temp = makeTempDir()
+  try {
+    const cache = 真缓存(temp)
+    const 档位们 = []
+    const env = 搭环境({
+      配置补丁: { cacheDir: join(temp.dir, 'cache'), localDescribe: true },
+      缓存: cache,
+      apiOverrides: {
+        visionPrefs: () => ({ localDescribe: true, visionDefaultPreset: 'standard', visionSessionReady: true }),
+        visionDescribe: async (路径, opts) => {
+          档位们.push(opts.preset)
+          return { ok: true, items: [{ path: 路径, text: '描述', ms: 1 }], ms: 1 }
+        },
+      },
+    })
+    const 图 = Buffer.from([1, 2, 3])
+    const 发 = async (边界, 字段们) => {
+      const 体 = 造表单(边界, [{ name: 'file', filename: 'a.png', type: 'image/png', data: 图 }, ...字段们])
+      return env.call('/dsh-fish-service/describe-upload', {
+        method: 'POST', headers: { host: 'x', 'content-type': `multipart/form-data; boundary=${边界}` }, body: 体,
+      })
+    }
+
+    const 显式 = await 发('P1', [{ name: 'preset', data: 'brief' }])
+    assert.equal(显式.json.preset, 'brief')
+    assert.equal(显式.json.scope, 'tool')
+
+    const 缺省 = await 发('P2', [])
+    assert.equal(缺省.json.preset, 'standard')
+
+    const 非法 = await 发('P3', [{ name: 'preset', data: '特写' }])
+    assert.equal(非法.json.preset, 'standard')
+
+    const OCR = await 发('P4', [{ name: 'mode', data: 'ocr' }, { name: 'preset', data: 'brief' }])
+    assert.equal(OCR.json.preset, 'text')
+
+    assert.deepEqual(档位们, ['brief', 'standard', 'standard', 'text'])
+  } finally {
+    temp.cleanup()
+  }
+})
+
+test('POST /describe-upload：scope=session 走会话识图提示词，不再传工具档位', async () => {
+  const temp = makeTempDir()
+  try {
+    const cache = 真缓存(temp)
+    const 调用 = []
+    const env = 搭环境({
+      配置补丁: { cacheDir: join(temp.dir, 'cache'), localDescribe: true },
+      缓存: cache,
+      apiOverrides: {
+        visionPrefs: () => ({ localDescribe: true, visionDefaultPreset: 'standard', visionSessionReady: true }),
+        visionDescribe: async (路径, opts) => {
+          调用.push(opts)
+          return { ok: true, items: [{ path: 路径, text: '描述', ms: 1 }], ms: 1 }
+        },
+      },
+    })
+    const 图 = Buffer.from([1, 2, 3])
+    const 体 = 造表单('S1', [
+      { name: 'file', filename: 'a.png', type: 'image/png', data: 图 },
+      { name: 'mode', data: 'caption' },
+      { name: 'scope', data: 'session' },
+      { name: 'preset', data: 'brief' },
+    ])
+    const { res, json } = await env.call('/dsh-fish-service/describe-upload', {
+      method: 'POST', headers: { host: 'x', 'content-type': 'multipart/form-data; boundary=S1' }, body: 体,
+    })
+    assert.equal(res.statusCode, 200)
+    assert.equal(json.scope, 'session')
+    assert.equal(json.preset, undefined)
+    assert.equal(调用.length, 1)
+    assert.equal(调用[0].scope, 'session')
+    assert.equal(调用[0].preset, undefined)
   } finally {
     temp.cleanup()
   }

@@ -16,6 +16,7 @@ import {
   publicConfig,
   RECORD_DEVICE_ID_MAX,
 } from '../lib/config.js'
+import { 默认识图提示, 识图档位 } from '../lib/vision-presets.js'
 import { makeTempDir } from './helpers.js'
 
 test('默认配置符合 P1 契约', () => {
@@ -314,6 +315,65 @@ test('localDescribe：默认开；旧配置缺字段按开；明确关闭才关�
     assert.equal(raw.localDescribe, false)
     const again = new ConfigStore({ homeDir: temp.dir })
     assert.equal(again.load({}, {}).localDescribe, false)
+  } finally {
+    temp.cleanup()
+  }
+})
+
+test('识图档位与提示词：旧配置补默认、空串保留、非法回退默认、只认四档', () => {
+  const temp = makeTempDir()
+  try {
+    const 默认 = defaultConfig(temp.dir)
+    assert.deepEqual(默认.visionPresets, { ...默认识图提示 })
+    assert.equal(默认.visionDefaultPreset, 'detailed')
+    assert.equal(默认.visionSessionPrompt, '')
+
+    // 旧配置没有这些字段：自动补默认，不报错。
+    const 旧 = normalizeConfig({ autoRead: true }, { homeDir: temp.dir })
+    assert.deepEqual(旧.visionPresets, 默认识图提示)
+    assert.equal(旧.visionDefaultPreset, 'detailed')
+    assert.equal(旧.visionSessionPrompt, '')
+
+    // 非对象 / 非字符串：补内置默认；空串保留（运行时按默认处理）。
+    assert.deepEqual(normalizeConfig({ visionPresets: '乱写' }, { homeDir: temp.dir }).visionPresets, 默认识图提示)
+    const 混 = normalizeConfig({
+      visionPresets: { brief: '  ', standard: '我的标准版', detailed: 123, foo: '不该收' },
+    }, { homeDir: temp.dir })
+    assert.equal(混.visionPresets.brief, '')
+    assert.equal(混.visionPresets.standard, '我的标准版')
+    assert.equal(混.visionPresets.detailed, 默认识图提示.detailed)
+    assert.equal(混.visionPresets.foo, undefined)
+    assert.deepEqual(Object.keys(混.visionPresets).sort(), [...识图档位].sort())
+
+    // 配置只认档位 id；认不出回退默认（中文名由服务/工具层转换，配置层不做）。
+    assert.equal(normalizeConfig({ visionDefaultPreset: 'standard' }, { homeDir: temp.dir }).visionDefaultPreset, 'standard')
+    assert.equal(normalizeConfig({ visionDefaultPreset: '标准' }, { homeDir: temp.dir }).visionDefaultPreset, 'detailed')
+    assert.equal(normalizeConfig({ visionDefaultPreset: '特写' }, { homeDir: temp.dir }).visionDefaultPreset, 'detailed')
+
+    // 会话识图提示词单独存：留空用内置，过长截断，非字符串按留空。
+    const 会话 = normalizeConfig({ visionSessionPrompt: '  我的会话提示  ' }, { homeDir: temp.dir })
+    assert.equal(会话.visionSessionPrompt, '我的会话提示')
+    const 会话超长 = normalizeConfig({ visionSessionPrompt: 'a'.repeat(5000) }, { homeDir: temp.dir })
+    assert.equal(会话超长.visionSessionPrompt.length, 4000)
+    assert.equal(normalizeConfig({ visionSessionPrompt: 42 }, { homeDir: temp.dir }).visionSessionPrompt, '')
+
+    // 单条提示词超长截到 4000。
+    const 超长 = normalizeConfig({ visionPresets: { brief: 'a'.repeat(5000) } }, { homeDir: temp.dir })
+    assert.equal(超长.visionPresets.brief.length, 4000)
+
+    // 持久化后重读仍是改过的值。
+    const store = new ConfigStore({ homeDir: temp.dir })
+    store.load({}, {})
+    assert.deepEqual(store.current.visionPresets, 默认识图提示)
+    store.save({
+      ...store.current,
+      visionPresets: { ...store.current.visionPresets, text: '我的文字提示' },
+      visionSessionPrompt: '我的会话提示',
+    })
+    const again = new ConfigStore({ homeDir: temp.dir })
+    const 重读 = again.load({}, {})
+    assert.equal(重读.visionPresets.text, '我的文字提示')
+    assert.equal(重读.visionSessionPrompt, '我的会话提示')
   } finally {
     temp.cleanup()
   }

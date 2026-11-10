@@ -1,7 +1,7 @@
 # 接口契约（CONTRACT）
 
-> 版本：`v0.4`（2026-11-10）：新增 `visionPrefs()`、配置项 `localDescribe`、`POST /describe-upload`、`fish_tts` 结果改为一行文字。向后兼容，旧调用方无需改动。
-> 前版：`v0.3`（2026-11-10，`visionDescribe` / `fish_describe_image` / 音色目录）、`v0.1`（P0 冻结稿）
+> 版本：`v0.5`（2026-11-10）：识图提示词分四档（`visionPresets` / `visionDefaultPreset`），会话识图单独一个 `visionSessionPrompt`；`visionDescribe` 增加 `preset` / `scope`，`fish_describe_image` 增加 `detail`，`/describe-upload` 增加 `scope` / `preset`。向后兼容。
+> 前版：`v0.4`（`visionPrefs` / `localDescribe` / `/describe-upload`）、`v0.3`（`visionDescribe` / `fish_describe_image` / 音色目录）、`v0.1`（P0 冻结稿）
 > 适用：`dsh-fish-service` / `dsh-fish-ops` / `localai-service 2.5.x`
 > 原则：**先改本文，再改代码**。P1 只实现本文已写明的字段；新增字段必须向后兼容。
 
@@ -493,10 +493,14 @@ interface InstallApi {
 
 ```ts
 interface DescribeOptions {
-  prompt?: string                    // 覆盖服务端默认提示词；最长 4000 字
-  mode?: 'caption' | 'score' | 'ocr' // 默认 'caption'
+  prompt?: string                    // 覆盖所有默认提示词；最长 4000 字
+  preset?: VisionPreset              // 工具识图档位；默认用 config.visionDefaultPreset
+  scope?: 'tool' | 'session'         // 默认 'tool'；'session' 用会话识图提示词
+  mode?: 'caption' | 'score' | 'ocr' // 默认 'caption'；旧调用方兼容
   timeoutMs?: number                 // 默认 config.visionTimeoutMs
 }
+
+type VisionPreset = 'brief' | 'standard' | 'detailed' | 'text'
 
 interface DescribeItem {
   path: string
@@ -515,22 +519,27 @@ interface DescribeResult {
 - `input` 是单个路径或路径数组，**最多 10 张**；路径必须是本机绝对路径、存在、是文件（复用 `检查本机文件`）；
 - 扩展名只接受 `.jpg/.jpeg/.png/.webp/.gif/.bmp`，否则 `bad_request`；
 - 能力名 `vision`：先走 `要能力('vision')`，服务离线/模型没装按现有错误分类返回；
-- `mode` 只决定默认提示词：`caption` 传「用一两句话描述图片里有什么」的中文提示，`ocr` 传「只提取图片中的文字」，`score` **不传** `prompt`（沿用服务端 `vlm_frame_score.md` 评分提示）；
-- 显式 `prompt` 优先于 `mode` 的默认提示；提示通过 multipart 的 `prompt` 字段覆盖服务端用户消息；
+- 提示词优先级：显式 `prompt` > `scope='session'` 时的会话识图提示词 > 显式 `preset` > `config.visionDefaultPreset`；空串的档位提示词按内置默认处理；
+- `scope` 只影响提示词来源：`'tool'`（默认）用工具档位，`'session'` 用 `config.visionSessionPrompt`（留空时与「详细」档一致），此时忽略 `preset`；
+- 旧 `mode` 仍兼容：`caption` 走上面的优先级，`ocr` 固定「只看文字」档，`score` **不传** `prompt`（沿用服务端 `vlm_frame_score.md` 评分提示）；
+- 提示通过 multipart 的 `prompt` 字段覆盖服务端用户消息；
 - 逐张串行调用（服务端一次只处理一张），任一张失败整体失败，不返回半成品；
 - 只返回文字 / `parsed` / 耗时，**不返回 base64、不返回图片本体**。
 
-### 1.17 `visionPrefs()`（v0.4）
+### 1.17 `visionPrefs()`（v0.4，v0.5 扩充）
 
-识图偏好，只读。给别的插件（鱼讯）判断「要不要走本地识图」用，不探服务、不联网、不加载模型。
+识图偏好，只读。给别的插件（鱼讯）判断「要不要走本地识图、会话识图能不能用」用，不探服务、不联网、不加载模型。
 
 ```ts
 interface VisionPrefs {
-  localDescribe: boolean   // 设置页「本地识图」开关；未配置时为 true
+  localDescribe: boolean      // 设置页「本地识图」开关；未配置时为 true
+  visionSessionReady: boolean // 会话识图是否可用（当前与 localDescribe 同值）
+  visionSessionPrompt: string // 会话识图实际用的提示词；关闭时为空串
 }
 ```
 
 - 只读本地配置：`localDescribe: config.localDescribe !== false`，因此旧配置文件（没有该字段）返回 `true`；
+- `visionSessionPrompt`：配置里留空时返回内置「详细」档文本（关闭时返回空串），调用方可直接展示或转发；
 - 同步返回，不抛异常；设置页改完立即生效，无需重启；
 - 调用方做「继承 / 开 / 关」三态时：读 `visionPrefs().localDescribe` 作为「继承」时的值，
   自己的开关覆盖它即可；
@@ -557,7 +566,7 @@ interface VisionPrefs {
 | `fish_translate` | `texts*` (1~200)、`source`、`target`（省略时自动） | `{texts,source,target,ms}` | `bad_request`（语言/长度）、`service_down`、`vram_exhausted` |
 | `fish_separate` | `file*`、`model`、`stems[]` | `{stems,dir,ms,released?}` | `model_missing`（htdemucs_ft）、`vram_exhausted`、`timeout` |
 | `fish_vision_frames` | `videoPath*`、`targetFrames` 1~10、`effort`、`planner`、`subtitles` | `{frames[],duration,subtitlesFrom,stats,ms}` | `model_missing`、`vram_exhausted`、`timeout`、`bad_request` |
-| `fish_describe_image` | `paths*` (1~10)、`mode` (`caption/score/ocr`)、`prompt` | `{ok,items:[{path,text,parsed?,ms}],ms}` | `bad_request`（非图片/不存在/超 10 张）、`service_down`、`model_missing`、`vram_exhausted`、`timeout` |
+| `fish_describe_image` | `paths*` (1~10)、`detail` (`brief/standard/detailed/text`，也认中文名)、`mode` (`caption/score/ocr`)、`prompt` | `{ok,items:[{path,text,parsed?,ms}],ms}` | `bad_request`（非图片/不存在/超 10 张）、`service_down`、`model_missing`、`vram_exhausted`、`timeout` |
 | `fish_media_probe` | `files*` (1~10) | `{items[],ms}` | `bad_request`、`service_down` |
 | `fish_job` | `action*` (`status/cancel/list/wait`)、`jobId`、`kind`、`state`、`limit` | 任务记录/列表 | `bad_request`（缺 jobId）、`canceled`、`timeout` |
 | `fish_service_status` | 无 | `{ok,baseUrl,version,apiVersion,capabilities,vram,voices,install,autostart,lastError}` | 永远 `ok:true`（服务不可达时 `ok:false` 但仍有诊断） |
@@ -763,6 +772,18 @@ interface VisionPrefs {
 返回：`{ok, frames:[{time,path,score?,kind?,ocrText?,summary?,why?,confidence?}], duration?, subtitlesFrom?, stats?, ms}`。
 错误：`model_missing`、`vram_exhausted`、`timeout`、`bad_request`；视频没有视频流 → `bad_request`。
 
+**`fish_describe_image`**
+
+| 参数 | 类型 | 必填 | 约束 | 说明 |
+| --- | --- | --- | --- | --- |
+| `paths` | string[] | ✅ | 1~10 张，本机绝对路径 | 只收 `.jpg/.jpeg/.png/.webp/.gif/.bmp` |
+| `detail` | string | ❌ | `brief`/`standard`/`detailed`/`text`，也接受中文名（简短/标准/详细/只看文字） | 选择识图档位；不传或认不出时用设置里的默认档（默认「详细」） |
+| `mode` | string | ❌ | `caption`（默认）/`score`/`ocr` | 旧参数；`score` 用于画面评分，`ocr` 固定「只看文字」档 |
+| `prompt` | string | ❌ | ≤4000 字 | 完全覆盖提示词，优先级最高 |
+
+返回：`{ok, items:[{path,text,parsed?,ms}], ms}`。
+错误：`bad_request`（非图片/不存在/超 10 张）、`service_down`、`model_missing`、`vram_exhausted`、`timeout`。
+
 **`fish_media_probe`**
 
 | 参数 | 类型 | 必填 | 约束 | 说明 |
@@ -870,7 +891,7 @@ interface VisionPrefs {
 | GET | `/audio?path=` | — | `audio/*`；只允许 `cacheDir` 内的 `.wav/.webm/.ogg/.opus/.mp3/.m4a`（P2） |
 | POST | `/transcribe-upload` | multipart `file` + `durationMs?` + `language?` + `speaker?` | `{ok, text, ms, elapsedMs?, language?, speaker?}`（P2，临时文件请求结束即删） |
 | POST | `/voice-upload` | multipart `file` + `durationMs?` | `{ok, path, bytes, mime}`（P2，存 `cacheDir/voice`） |
-| POST | `/describe-upload` | multipart `file`（`image/*`）+ `mode?` | `{ok, text, mode, ms, bytes}`（v0.4，图片只存临时文件、请求结束即删） |
+| POST | `/describe-upload` | multipart `file`（`image/*`）+ `mode?` + `scope?` + `preset?` | `{ok, text, mode, scope, preset?, ms, bytes}`（v0.4；v0.5 加 `scope`/`preset`。`scope=session` 用会话识图提示词、不传 `preset`；图片只存临时文件、请求结束即删） |
 | GET | `/audio/:id` | — | `audio/wav` 流；id 映射到缓存文件，防目录穿越 |
 | POST | `/asr` | multipart `file` + `language?` + `speaker?` | `{ok, text, speaker?, segments?}` |
 | GET | `/logs` | `?lines=200&file=service` | `{ok, lines:[]}`（代理 `/admin/logs`） |
@@ -889,9 +910,10 @@ interface VisionPrefs {
 | GET | `/webui` | — | `{ok, url, embedUrl}`（`/ui?embed=1`） |
 | GET | `/metrics` | — | 计数器 JSON |
 
-`/describe-upload` 的客户端用途：草稿附件栏里每张图片下的「本地识图」按钮调用它（`mode=caption`）；
-成功后客户端插入「［图片：文件名］＋描述」并把这张图从草稿移除（图片不再上传），失败则保留原图、只提示一句。
-消息发出后的旧「图片下方按钮」已移除。
+`/describe-upload` 的客户端用途：输入框旁的「本地识图」按钮调用它（`scope=session`、`mode=caption`，不传 `preset`）；
+成功后客户端把「［图片：文件名］＋描述」按顺序插入输入框（图片不需要先加进草稿、不上传、不进模型），失败只提示一句。
+`scope` 缺省时按 `tool` 处理，传 `preset` 或 `mode=ocr` 时仍可走工具档位；非法 `preset` 回配置默认档。
+消息发出后的旧「图片下方按钮」与草稿附件栏入口均已移除。
 
 安全：
 
@@ -924,6 +946,14 @@ interface VisionPrefs {
   "asrTimeoutMs": 300000,
   "visionTimeoutMs": 600000,
   "localDescribe": true,
+  "visionPresets": {
+    "brief": "",
+    "standard": "",
+    "detailed": "",
+    "text": ""
+  },
+  "visionDefaultPreset": "detailed",
+  "visionSessionPrompt": "",
   "healthIntervalMs": 15000,
   "busyAfterMs": 30000,
   "cacheTtlHours": 72,
@@ -963,7 +993,10 @@ interface VisionPrefs {
 | `requestTimeoutMs` | int | 180000 | 1000~1800000 | TTS/一般 |
 | `asrTimeoutMs` | int | 300000 | 1000~1800000 | ASR/分离 |
 | `visionTimeoutMs` | int | 600000 | 1000~1800000 | 视觉 |
-| `localDescribe` | bool | true | — | 本地识图：需要识图时优先用本机视觉模型（v0.4）；旧配置缺字段按 true |
+| `localDescribe` | bool | true | — | 本地识图总开关（v0.4）；旧配置缺字段按 true |
+| `visionPresets` | object | 四档内置提示词 | 只认 `brief/standard/detailed/text` 四个字符串键，每个 ≤4000 字 | 工具识图四档提示词；空串表示用内置默认，缺字段自动补默认（v0.5） |
+| `visionDefaultPreset` | enum | `detailed` | `brief/standard/detailed/text` | 工具识图默认档；非法值回退 `detailed`（v0.5） |
+| `visionSessionPrompt` | string | `""` | ≤4000 字 | 会话识图（输入框旁按钮）单独用的提示词；留空时与「详细」档一致（v0.5） |
 | `healthIntervalMs` | int | 15000 | 5000~120000 | 健康轮询 |
 | `busyAfterMs` | int | 30000 | 5000~300000 | 队列等待阈值 |
 | `cacheTtlHours` | int | 72 | 1~720 | 必须 > fish-message 出站 TTL（24h） |

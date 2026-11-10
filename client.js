@@ -7,8 +7,8 @@
 //     语音输入麦克风（conversation.input.right）+ 三选一面板（conversation.input.overlay）、
 //     自动朗读开关（conversation.input.left）；
 //     设置页补「朗读」「语音输入」两个分区。
-// P3：发送前本地识图：草稿附件栏（conversation.input.attachments，priority 60 顶替官方），
-//     每张草稿图片下加「本地识图」；识别后把描述插进输入框并移除这张图（图片不随消息上传）。
+// P3：本地识图：输入框旁独立按钮（conversation.input.right，与麦克风同一排），
+//     点选或拖入图片后在本机识别成文字，按顺序插入输入框；图片不进草稿、不上传、不进模型。
 //
 // 所有请求都走宿主路由 /dsh-fish-service/*：浏览器不接触 token，也不直接访问 localai。
 //
@@ -474,6 +474,13 @@ window.__ModuleLoader__.load({
         h('path', { d: 'M8 12v2.2', stroke: 'currentColor', strokeWidth: 1.3, strokeLinecap: 'round' }))
     }
 
+    function 图标图片(大小 = 15) {
+      return h('svg', { viewBox: '0 0 16 16', width: 大小, height: 大小, 'aria-hidden': true, fill: 'none' },
+        h('rect', { x: 2, y: 3, width: 12, height: 10, rx: 2, stroke: 'currentColor', strokeWidth: 1.2 }),
+        h('circle', { cx: 5.7, cy: 6.6, r: 1.15, fill: 'currentColor' }),
+        h('path', { d: 'M2.6 12.2l3.1-3.1 2.1 2.1 1.9-1.7 3.7 3', stroke: 'currentColor', strokeWidth: 1.2, strokeLinejoin: 'round', strokeLinecap: 'round' }))
+    }
+
     function 图标停止(大小 = 14) {
       return h('svg', { viewBox: '0 0 16 16', width: 大小, height: 大小, 'aria-hidden': true, fill: 'currentColor' },
         h('rect', { x: 3.2, y: 3.2, width: 9.6, height: 9.6, rx: 2.4 }))
@@ -574,55 +581,21 @@ select.fish-select option:checked {
   user-select: text; -webkit-user-select: text;
 }
 .fish-selrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
-/* 草稿附件栏：官方附件栏被整条顶替，样式按官方 rail 的尺寸低调重画；图片下面多一个本地识图 */
-.fish-attach { min-width: 0; margin-bottom: -6px; padding: 2px 10px 0; }
-.fish-attach-rail { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
-.fish-attach-item { position: relative; display: flex; flex-direction: column; align-items: center; }
-.fish-attach-vision {
-  margin-top: 3px; padding: 0 4px; border: 0; border-radius: 6px;
-  background: transparent; color: var(--dsw-alias-label-secondary, #888);
-  font: inherit; font-size: 10.5px; line-height: 16px; cursor: pointer;
-  max-width: 64px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+/* 输入框旁的本地识图按钮：拖入时高亮；识别状态用小浮条，不挤占输入栏 */
+.fish-iconbtn[data-drop="1"] {
+  outline: 2px solid var(--dsw-alias-state-business-primary, #2f6fed);
+  outline-offset: 1px;
+  background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.05));
 }
-.fish-attach-vision:hover { color: var(--dsw-alias-state-business-primary, #2f6fed); background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.05)); }
-.fish-attach-vision:disabled { opacity: .45; cursor: default; }
-.fish-attach-thumb {
-  position: relative; width: 64px; height: 64px; padding: 0; overflow: hidden;
-  display: grid; place-items: center; cursor: default;
-  border: .5px solid var(--dsw-alias-border-l2-darkmode-thin, rgba(0,0,0,.14));
-  border-radius: var(--dsw-radius-xl, 12px);
-  background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.06));
+.fish-vision-toast {
+  position: fixed; right: 18px; bottom: 84px; z-index: 60; max-width: 260px;
+  padding: 6px 10px; border-radius: 8px; pointer-events: none;
+  border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.12));
+  background: var(--dsw-alias-bg-layer-1, #fff);
+  color: var(--dsw-alias-label-primary, #1f1f1f);
+  font-size: 12px; line-height: 1.5;
+  box-shadow: 0 4px 16px rgba(0,0,0,.16);
 }
-.fish-attach-thumb[data-failed="1"] { border-color: var(--dsw-alias-state-error-primary, #d54941); }
-.fish-attach-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
-.fish-attach-file {
-  display: flex; align-items: center; gap: 6px; max-width: 240px;
-  padding: 6px 8px 6px 10px; font-size: 12px;
-  border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.14));
-  border-radius: 10px; background: var(--dsw-alias-bg-layer-1, #fff);
-}
-.fish-attach-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fish-attach-size { flex: none; opacity: .58; font-size: 11px; }
-.fish-attach-x {
-  position: absolute; top: -5px; right: -5px; width: 16px; height: 16px;
-  display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%;
-  background: var(--dsw-alias-button-contrast-fill, rgba(0,0,0,.6));
-  color: var(--dsw-alias-label-primary-inverted, #fff);
-  font: inherit; font-size: 11px; line-height: 1; cursor: pointer; opacity: .55;
-}
-.fish-attach-x:hover { opacity: 1; }
-.fish-attach-x[data-inline="1"] { position: static; flex: none; width: 14px; height: 14px; opacity: .5; }
-.fish-attach-retry {
-  border: 0; padding: 0; background: transparent; cursor: pointer;
-  color: var(--dsw-alias-state-error-primary, #d54941); font: inherit; font-size: 11.5px;
-}
-.fish-attach-bar {
-  position: absolute; left: 8px; right: 8px; bottom: 4px; height: 2px; overflow: hidden;
-  border-radius: 1px; background: var(--dsw-alias-fill-tertiary, rgba(0,0,0,.08));
-}
-.fish-attach-bar i { display: block; height: 100%; background: var(--dsw-alias-brand-primary, #4d6bfe); }
-.fish-attach-note { padding: 3px 2px 0; font-size: 11.5px; color: var(--dsw-alias-label-secondary, #888); }
-.fish-attach-note.fish-err { padding: 2px; }
 `
 
     // 样式只注入一次：每个消息都渲染一份 <style> 会把 DOM 撑爆。
@@ -1486,7 +1459,7 @@ select.fish-select option:checked {
         return () => 保活(false)
       }, [])
 
-      // 发送前识图的最后一步：附件栏把「文件名 + 描述」入队，这里负责插进草稿。
+      // 本地识图的最后一步：按钮把「文件名 + 描述」入队，这里负责插进草稿。
       // 拦截组件不依赖 inputActions 是否透传，走模块级队列 + input.right 组件消费；
       // 插入失败沿用 插入文本 的剪贴板兜底，并回填一行提示。
       const 视觉待办 = useStore(视觉通知)
@@ -1540,12 +1513,9 @@ select.fish-select option:checked {
           录音中 ? h('span', { style: { fontSize: 11, fontVariantNumeric: 'tabular-nums' } }, 格式时间(态.seconds)) : null))
     }
 
-    // ---------------- 草稿附件栏：图片旁的「本地识图」 ----------------
-    // 发送前识图：图片照常进草稿、照常上传（官方行为不变），只是每张图片下面多一个
-    // 「本地识图」按钮。点了才在本机识别；成功后把「文件名 + 描述」插进输入框，并把这张图
-    // 从草稿里去掉（不随消息上传，省 token）；识别失败或服务不可用时图片原样不动，只提示一句。
-    // 官方这个槽位是单占位（整条 ComposerAttachments，priority 100），要加按钮只能整条顶替：
-    // 附件条、上传进度、失败重试、删除、拖放监听都按官方语义重画/重挂，保证行为不回归。
+    // ---------------- 本地识图：输入框旁的独立按钮 ----------------
+    // 点按钮选图片（或把图片拖到按钮上），在本机识别成文字后按顺序插入输入框；
+    // 图片不进草稿、不上传、不进模型。官方附件栏保持原样，不注册、不顶替。
 
     function 识图扩展(mime) {
       const 类型 = String(mime || '').toLowerCase()
@@ -1572,6 +1542,25 @@ select.fish-select option:checked {
       return !(配置 && 配置.localDescribe === false)
     }
 
+    // 识图档位：与服务端 lib/vision-presets.js 对齐；客户端只用它做下拉和参数兜底。
+    const 识图档位们 = [
+      { id: 'brief', 名: '简短' },
+      { id: 'standard', 名: '标准' },
+      { id: 'detailed', 名: '详细' },
+      { id: 'text', 名: '只看文字' },
+    ]
+    const 识图档位选项 = 识图档位们.map((档) => ({ value: 档.id, label: 档.名 }))
+
+    /** 把档位 id 或中文名收成 id；认不出来返回空串，由调用方回落默认档。 */
+    function 规范识图档位(值) {
+      const 文 = String(值 == null ? '' : 值).trim().toLowerCase()
+      if (!文) return ''
+      const 按id = 识图档位们.find((档) => 档.id === 文)
+      if (按id) return 按id.id
+      const 按名 = 识图档位们.find((档) => 档.名 === 文)
+      return 按名 ? 按名.id : ''
+    }
+
     /** 点了识图按钮却不能识别时给一句短提示；能识别返回空串。 */
     function 识图阻塞原因(状态) {
       if (!本地识图开(状态 && 状态.config ? 状态.config : {})) return '本地识图已关闭，可在本地 AI 设置里打开。'
@@ -1579,44 +1568,19 @@ select.fish-select option:checked {
       return ''
     }
 
-    /** 拼一段插进输入框的文字：文件名 + 详细描述；描述为空返回空串。 */
+    /** 拼一段插进输入框的文字：文件名 + 描述；描述为空返回空串。 */
     function 拼图片描述(文件名, 描述) {
       const 名 = String(文件名 || '').trim() || '图片'
       const 文 = String(描述 == null ? '' : 描述).trim()
       return 文 ? `［图片：${名}］\n${文}\n` : ''
     }
 
-    /** 拖放里的目录：File 分不出来，只能靠 entry API（和官方 droppedDirectories 对齐）。 */
-    function 拖入目录(数据, 文件们) {
-      const 目录 = new Set()
-      try {
-        const 项们 = 数据 && 数据.items ? [...数据.items] : []
-        let 序 = 0
-        for (const 项 of 项们) {
-          if (!项 || 项.kind !== 'file') continue
-          const 文件 = 文件们[序]
-          序 += 1
-          if (typeof 项.webkitGetAsEntry !== 'function') continue
-          if (项.webkitGetAsEntry()?.isDirectory !== true) continue
-          if (文件 !== undefined) 目录.add(文件)
-        }
-      } catch { /* entry API 不可用时当没有目录 */ }
-      return 目录
-    }
-
-    function 格式大小(字节) {
-      const 数量 = Math.max(0, Number(字节) || 0)
-      if (数量 < 1024) return `${数量} B`
-      if (数量 < 1024 * 1024) return `${Math.round(数量 / 1024)} KB`
-      return `${(数量 / (1024 * 1024)).toFixed(1)} MB`
-    }
-
-    // 待插入队列：附件栏识图后先入队（{sessionId, text, at}），由输入框右侧组件消费插入。
+    // 待插入队列：识图按钮识别后先入队（{sessionId, text, at}），由输入框右侧组件消费插入。
     const 待插入 = []
     const 待插入上限 = 8
     // 入队后通知 input.right 组件来消费（订阅计数）。
     const 视觉通知 = 造store(0)
-    // 拦截组件显示、输入框右侧组件回填的提示（例如插入失败）。
+    // 输入框右侧组件回填的提示（例如插入失败）。
     const 识图提示 = 造store({ 会话: '', 文案: '' })
     let 识图提示代 = 0
     function 写识图提示(会话, 文案, 毫秒 = 8000) {
@@ -1661,11 +1625,12 @@ select.fish-select option:checked {
       return { 成功, 失败 }
     }
 
-    /** 认一张图：把字节交给 /describe-upload（caption），拿回描述文字。 */
+    /** 认一张图：把字节交给 /describe-upload；会话识图用单独的提示词，不传档位。 */
     async function 本地识别一张(图) {
       const 表单 = new FormData()
       表单.append('file', new Blob([图.字节], { type: 图.类型 || 'application/octet-stream' }), 图.名 || `image${识图扩展(图.类型)}`)
       表单.append('mode', 'caption')
+      表单.append('scope', 'session')
       const 结果 = await postForm('/describe-upload', 表单)
       const 文字 = String((结果 && 结果.text) || '').trim()
       if (!结果 || !结果.ok || !文字) {
@@ -1674,220 +1639,115 @@ select.fish-select option:checked {
       return { ok: true, 文字 }
     }
 
-    /** 取一张草稿图片的字节：优先 File 本身，File 不在时退回预览地址。 */
-    async function 取图字节(项) {
-      const 文件 = 项 && 项.file
-      if (文件 && typeof 文件.arrayBuffer === 'function') {
-        return {
-          字节: await 文件.arrayBuffer(),
-          类型: String(文件.type || ''),
-          名: String(文件.name || '') || `image${识图扩展(文件.type)}`,
-        }
-      }
-      const 地址 = 项 && 项.previewUrl
-      if (!地址) return null
-      const 响应 = await fetch(地址)
-      if (!响应 || !响应.ok) return null
-      const 大块 = await 响应.blob()
-      return { 字节: 大块, 类型: String(大块.type || ''), 名: `image${识图扩展(大块.type)}` }
-    }
+    // ---------------- 本地识图：输入框旁的独立按钮 ----------------
+    // 点按钮选图片，或把图片拖到按钮上；图片只在本机识别，不进草稿、不上传、不进模型。
+    // 每张图的「文件名 + 描述」按顺序进待插入队列，由输入框右侧组件（麦克风）统一消费插入。
 
-    /**
-     * 草稿附件栏：顶替官方 ComposerAttachments，在图片下方加「本地识图」。
-     * 其余行为照官方：附件条、上传进度、失败重试、删除、拖放/选择/粘贴都原样交给 onAddFiles。
-     */
-    function 附件栏(props) {
-      const {
-        sessionId, attachments, canAcceptDrop, onAddFiles,
-        onRemoveAttachment, uploads, onRetryFile, uploadFailureText, readFileDrag,
-      } = props || {}
+    function 本地识图按钮(props) {
+      const { sessionId } = props || {}
       const 偏好态 = useStore(偏好)
       const 提示态 = useStore(识图提示)
-      // 正在识别/排队识别的附件 id（可以连点多张，逐张处理）。
-      const [认队, 设认队] = React.useState([])
+      const [忙, 设忙] = React.useState(false)
+      const [拖入, 设拖入] = React.useState(false)
       const [说, 设说] = React.useState('')
-      const 链 = React.useRef(Promise.resolve())
-      const 认队ref = React.useRef([])
-      const 批 = React.useRef({ 已: 0, 共: 0 })
+      const 文件框 = React.useRef(null)
       const 计时 = React.useRef(null)
-      const 最新 = React.useRef({})
-      最新.current = { sessionId, onAddFiles, onRemoveAttachment }
+
+      React.useEffect(() => {
+        载入偏好()
+        return () => { if (计时.current) clearTimeout(计时.current) }
+      }, [])
 
       const 告诉 = (文案) => {
         设说(文案)
-        if (计时.current) { clearTimeout(计时.current); 计时.current = null }
-        if (文案) 计时.current = setTimeout(() => 设说(''), 8000)
+        if (计时.current) clearTimeout(计时.current)
+        if (文案) 计时.current = setTimeout(() => 设说(''), 6000)
       }
 
-      React.useEffect(() => () => {
-        if (计时.current) clearTimeout(计时.current)
-      }, [])
+      const 选文件 = () => {
+        try { 文件框.current && 文件框.current.click() } catch { /* 忽略 */ }
+      }
 
-      /** 所有入口（拖放、选择、粘贴）都从 onAddFiles 进来，原样交给官方，不改变官方行为。 */
-      const 接文件 = React.useCallback((文件们, 目录们) => {
-        const 批 = Array.isArray(文件们) ? 文件们.filter(Boolean) : []
-        if (!批.length || typeof 最新.current.onAddFiles !== 'function') return
-        try { 最新.current.onAddFiles(批, 目录们) } catch { /* 官方自己会提示 */ }
-      }, [])
-
-      /** 点「本地识图」：识别 → 描述入队 → 移除这张图片；失败时图片原样不动。 */
-      const 识别 = (项) => {
-        if (!项 || !项.id || 认队ref.current.includes(项.id)) return
-        const 原因 = 识图阻塞原因(偏好.get())
+      const 处理 = async (文件们) => {
+        if (忙) return
+        const 原因 = 识图阻塞原因(偏好态)
         if (原因) { 告诉(原因); return }
-        认队ref.current = [...认队ref.current, 项.id]
-        设认队(认队ref.current)
-        批.current.共 += 1
-        const 会话 = 最新.current.sessionId
-        // 连点多张时排队逐张识别，避免同时打服务、同时改草稿。
-        链.current = 链.current.then(async () => {
-          let 成功 = false
-          设说(批.current.共 > 1 ? `正在本地识别…（${批.current.已} / ${批.current.共}）` : '正在本地识别…')
-          try {
-            const 图 = await 取图字节(项)
-            if (!图) { 告诉('读不到这张图，请重试。'); return }
-            const 结果 = await 本地识别一张(图)
-            const 段 = 结果.ok ? 拼图片描述(图.名 || (项.file && 项.file.name), 结果.文字) : ''
-            if (!段) { 告诉('识图失败，图片没有改动。'); return }
-            if (!入队待插入({ sessionId: 会话, text: 段 })) { 告诉('识图结果没能排队，请重试。'); return }
-            成功 = true
-            // 先去掉草稿里的图（不随消息上传），再通知输入框右侧组件把描述插进去。
-            try { 最新.current.onRemoveAttachment?.(项.id) } catch { /* 已卸载 */ }
-            视觉通知.set((值) => 值 + 1)
-          } catch {
-            告诉('识图失败，图片没有改动。')
-          } finally {
-            批.current.已 += 1
-            认队ref.current = 认队ref.current.filter((编号) => 编号 !== 项.id)
-            设认队(认队ref.current)
-            if (成功 && 批.current.已 >= 批.current.共) {
-              告诉(批.current.共 > 1 ? `已识别 ${批.current.已} 张，图片未上传` : '已识别，图片未上传')
-              批.current = { 已: 0, 共: 0 }
-            } else if (成功) {
-              设说(`正在本地识别…（${批.current.已} / ${批.current.共}）`)
-            } else if (批.current.已 >= 批.current.共) {
-              批.current = { 已: 0, 共: 0 }
+        if (!sessionId) { 告诉('当前会话还不能插入文字。'); return }
+        const 图们 = Array.from(文件们 || []).filter(是图片文件)
+        if (!图们.length) { 告诉('只支持图片文件。'); return }
+        设忙(true)
+        let 成功 = 0
+        let 失败 = 0
+        try {
+          for (let 序 = 0; 序 < 图们.length; 序 += 1) {
+            告诉(`正在本地识别…（${序 + 1} / ${图们.length}）`)
+            try {
+              const 文件 = 图们[序]
+              const 图 = {
+                字节: await 文件.arrayBuffer(),
+                类型: String(文件.type || ''),
+                名: String(文件.name || '') || `image${识图扩展(文件.type)}`,
+              }
+              const 结果 = await 本地识别一张(图)
+              if (!结果.ok) throw new Error(结果.hint || '识图失败')
+              if (!入队待插入({ sessionId, text: 拼图片描述(图.名, 结果.文字) })) throw new Error('入队失败')
+              视觉通知.set((值) => 值 + 1)
+              成功 += 1
+            } catch {
+              失败 += 1
             }
           }
-        })
+        } finally {
+          设忙(false)
+          告诉(失败
+            ? (成功 ? `识图完成：${成功} 张成功，${失败} 张失败。` : '识图失败，请稍后再试。')
+            : `已识别 ${成功} 张。`)
+        }
       }
 
-
-      // 拖放：官方附件栏的 document 级监听随组件卸载一起没了，这里按同样语义重挂。
-      React.useEffect(() => {
-        if (typeof document === 'undefined') return undefined
-        const 深 = { 值: 0 }
-        const 数据里 = (事件) => {
-          const 数据 = 事件 && 事件.dataTransfer
-          if (!数据) return null
-          const 类型们 = Array.isArray(数据.types) ? 数据.types : [...(数据.types || [])]
-          if (!类型们.includes('Files') && !类型们.includes('application/x-dsh-file')) return null
-          return 数据
-        }
-        const 清空 = () => { 深.值 = 0 }
-        const 进入 = (事件) => {
-          if (!数据里(事件)) return
-          事件.preventDefault()
-          深.值 += 1
-        }
-        const 经过 = (事件) => {
-          const 数据 = 数据里(事件)
-          if (!数据) return
-          事件.preventDefault()
-          数据.dropEffect = canAcceptDrop ? 'copy' : 'none'
-        }
-        const 离开 = (事件) => {
-          if (!数据里(事件)) return
-          深.值 = Math.max(0, 深.值 - 1)
-          const 窗外 = 事件.clientX <= 0 || 事件.clientY <= 0 || 事件.clientX >= window.innerWidth || 事件.clientY >= window.innerHeight
-          if ((事件.target === document.documentElement || 事件.target === document.body) && 窗外) 清空()
-        }
-        const 放下 = (事件) => {
-          const 数据 = 数据里(事件)
-          if (!数据) return
-          事件.preventDefault()
-          清空()
-          if (!canAcceptDrop) return
-          let 文件们 = []
-          try { 文件们 = [...(数据.files || [])] } catch { 文件们 = [] }
-          const 类型们 = Array.isArray(数据.types) ? 数据.types : [...(数据.types || [])]
-          // 从会话里拖出来的图（x-dsh-file）走宿主提供的 readFileDrag；拿不到就退回 files。
-          if (类型们.includes('application/x-dsh-file') && typeof readFileDrag === 'function') {
-            try {
-              const 图 = readFileDrag(数据)
-              if (图) 文件们 = [图]
-            } catch { /* 拿不到就走 files */ }
-          }
-          if (文件们.length) 接文件(文件们, 拖入目录(数据, 文件们))
-        }
-        document.addEventListener('dragenter', 进入)
-        document.addEventListener('dragover', 经过)
-        document.addEventListener('dragleave', 离开)
-        document.addEventListener('drop', 放下)
-        window.addEventListener('dragend', 清空)
-        return () => {
-          document.removeEventListener('dragenter', 进入)
-          document.removeEventListener('dragover', 经过)
-          document.removeEventListener('dragleave', 离开)
-          document.removeEventListener('drop', 放下)
-          window.removeEventListener('dragend', 清空)
-        }
-      }, [canAcceptDrop, 接文件, readFileDrag])
-
-      const 项们 = Array.isArray(attachments) ? attachments : []
-      const 上传们 = uploads && typeof uploads === 'object' ? uploads : {}
       const 提示文 = 提示态.文案 && (!提示态.会话 || !sessionId || 提示态.会话 === sessionId) ? 提示态.文案 : ''
-      const 可识图 = 本地识图开(偏好态 && 偏好态.config)
-      if (!项们.length && !说 && !提示文) return null
+      const 文案 = 说 || 提示文
+      const 标题 = 忙 ? '正在本地识图…' : '本地识图：选图片，或把图片拖到这里'
 
-      /** 画一个草稿附件：图片缩略图 / 文件卡，带上传进度、失败重试、删除；图片另有「本地识图」。 */
-      const 画项 = (项) => {
-        if (!项) return null
-        const 上传 = 上传们[项.id] || {}
-        const 失败 = 上传.status === 'error'
-        const 失败文 = 失败 && 上传.reason !== undefined && typeof uploadFailureText === 'function'
-          ? String(uploadFailureText(上传.reason) || '')
-          : ''
-        const 名 = String((项.file && 项.file.name) || '文件')
-        const 删 = () => { try { onRemoveAttachment?.(项.id) } catch { /* 组件已卸载 */ } }
-        const 重试 = () => { try { onRetryFile?.(项.id) } catch { /* 组件已卸载 */ } }
-        const 进度 = 上传.status === 'uploading' && 上传.total > 0 ? Math.min(1, 上传.loaded / 上传.total) : null
-        if (项.kind === 'image') {
-          return h('div', { key: 项.id, className: 'fish-attach-item', title: 失败文 || 名 },
-            h('div', { className: 'fish-attach-thumb', 'data-failed': 失败 ? '1' : undefined },
-              h('img', { src: 项.previewUrl, alt: '', draggable: false }),
-              进度 !== null ? h('span', { className: 'fish-attach-bar' }, h('i', { style: { width: `${Math.round(进度 * 100)}%` } })) : null),
-            失败 ? h('button', { type: 'button', className: 'fish-attach-retry', onClick: 重试, title: 失败文 || '上传失败，点击重试' }, '重试') : null,
-            h('button', {
-              type: 'button', className: 'fish-attach-x', title: '移除',
-              'aria-label': `移除 ${名}`, onClick: 删,
-            }, '×'),
-            可识图 ? h('button', {
-              type: 'button',
-              className: 'fish-attach-vision',
-              disabled: 认队.includes(项.id),
-              title: '用本机视觉模型识别；识别后这张图不会上传',
-              // 别抢走输入框的焦点，否则插入位置会跳。
-              onMouseDown: (事件) => { try { 事件.preventDefault() } catch { /* 忽略 */ } },
-              onClick: () => 识别(项),
-            }, 认队.includes(项.id) ? '识别中…' : '本地识图') : null)
-        }
-        return h('div', { key: 项.id, className: 'fish-attach-item', title: 失败文 || 名 },
-          h('div', { className: 'fish-attach-file' },
-            h('span', { className: 'fish-attach-name' }, 名),
-            h('span', { className: 'fish-attach-size' }, 格式大小(项.file && 项.file.size)),
-            失败
-              ? h('button', { type: 'button', className: 'fish-attach-retry', onClick: 重试, title: 失败文 || '上传失败，点击重试' }, '重试')
-              : h('button', {
-                type: 'button', className: 'fish-attach-x', 'data-inline': '1',
-                title: '移除', 'aria-label': `移除 ${名}`, onClick: 删,
-              }, '×')))
-      }
-
-      return h('div', { className: 'fish-attach' },
-        项们.length ? h('div', { className: 'fish-attach-rail' }, 项们.map(画项)) : null,
-        说 ? h('div', { className: 'fish-attach-note' }, 说) : null,
-        提示文 ? h('div', { className: 'fish-attach-note fish-err' }, 提示文) : null)
+      return h(React.Fragment, null,
+        h('input', {
+          ref: 文件框,
+          type: 'file',
+          accept: 'image/*',
+          multiple: true,
+          tabIndex: -1,
+          style: { display: 'none' },
+          onChange: (事件) => {
+            const 文件们 = 事件.target.files ? Array.from(事件.target.files) : []
+            事件.target.value = ''
+            if (文件们.length) void 处理(文件们)
+          },
+        }),
+        h('button', {
+          type: 'button',
+          className: 'fish-iconbtn',
+          'data-drop': 拖入 ? '1' : undefined,
+          disabled: 忙,
+          title: 标题,
+          'aria-label': '本地识图',
+          // 别抢走输入框的焦点，否则插入位置会跳。
+          onMouseDown: (事件) => { try { 事件.preventDefault() } catch { /* 忽略 */ } },
+          onClick: 选文件,
+          onDragOver: (事件) => {
+            事件.preventDefault()
+            try { 事件.dataTransfer.dropEffect = 'copy' } catch { /* 忽略 */ }
+            if (!忙) 设拖入(true)
+          },
+          onDragLeave: () => 设拖入(false),
+          onDrop: (事件) => {
+            事件.preventDefault()
+            设拖入(false)
+            const 文件们 = []
+            try { for (const 文件 of 事件.dataTransfer.files || []) 文件们.push(文件) } catch { /* 忽略 */ }
+            if (文件们.length) void 处理(文件们)
+          },
+        }, 忙 ? 图标转圈() : 图标图片()),
+        文案 ? h('div', { className: 'fish-vision-toast', role: 'status' }, 文案) : null)
     }
 
     function 格式时间(秒数) {
@@ -2255,6 +2115,9 @@ select.fish-select option:checked {
       asrTimeoutMs: '语音识别超时',
       visionTimeoutMs: '视觉分析超时',
       localDescribe: '本地识图',
+      visionPresets: '工具识图提示词',
+      visionDefaultPreset: '工具识图默认档',
+      visionSessionPrompt: '会话识图提示词',
       healthIntervalMs: '状态检查间隔',
       ttsVoice: '默认音色',
       ttsSpeed: '语速',
@@ -2274,6 +2137,15 @@ select.fish-select option:checked {
       installDir: '安装目录',
       logLevel: '日志级别',
       token: '访问令牌',
+    }
+
+    // 多行提示词输入框：和单行输入同一套边框，只是允许拉高。
+    S.text = {
+      ...S.input,
+      minHeight: 72,
+      resize: 'vertical',
+      lineHeight: 1.6,
+      fontFamily: 'inherit',
     }
 
     const 提示 = (文本) => h('div', { style: S.hint }, 文本)
@@ -2323,6 +2195,16 @@ select.fish-select option:checked {
       return h('input', {
         style: S.input,
         type: 类型,
+        value: 值 == null ? '' : String(值),
+        placeholder: 占位,
+        onChange: (e) => onChange(e.target.value),
+      })
+    }
+
+    function 多行(值, onChange, 占位 = '') {
+      return h('textarea', {
+        style: S.text,
+        rows: 4,
         value: 值 == null ? '' : String(值),
         placeholder: 占位,
         onChange: (e) => onChange(e.target.value),
@@ -2510,11 +2392,37 @@ select.fish-select option:checked {
             ? h('div', { style: { ...S.danger, marginTop: 8 } }, '本地 AI 未启动，请先启动。')
             : null))
 
-      // 识图：开关控制草稿图片下的「本地识图」；识别成功后图片不上传、只留描述。
+      // 识图：开关控制输入框旁的「本地识图」按钮；会话识图与工具识图各用各的提示词，互不覆盖。
+      const 预设表 = 配置.visionPresets && typeof 配置.visionPresets === 'object'
+        && !Array.isArray(配置.visionPresets) ? 配置.visionPresets : {}
+      const 改提示词 = (档, 值) => {
+        改('visionPresets', { ...预设表, [档]: 值 })
+      }
       const 识图块 = h('div', { style: S.card },
         h('div', { style: S.h2 }, '识图'),
         行('本地识图', 勾(配置.localDescribe !== false, (值) => 改('localDescribe', 值)),
-          '图片加进草稿后，点图片下面的「本地识图」在本机认出内容：描述写进输入框，图片不再上传。会占用一些显存，第一次使用要等模型加载。'))
+          '打开后，输入框旁的「本地识图」按钮可用。第一次识别要等模型加载。'),
+        行('会话识图',
+          h('div', null,
+            多行(配置.visionSessionPrompt, (值) => 改('visionSessionPrompt', 值), ''),
+            h('button', {
+              type: 'button',
+              style: { ...S.link, marginTop: 2 },
+              onClick: () => 改('visionSessionPrompt', ''),
+            }, '恢复默认')),
+          '输入框旁的按钮识图时用这段提示词；留空用内置默认。'),
+        行('工具默认档位', 下拉(规范识图档位(配置.visionDefaultPreset) || 'detailed', 识图档位选项,
+          (值) => 改('visionDefaultPreset', 值)),
+        '工具识图没指定档位时用这一档。'),
+        折叠块({ 摘要: '工具提示词', 展开字样: '修改', 收起字样: '收起' },
+          h('div', null, 识图档位们.map((档) => h('div', { key: 档.id, style: { marginBottom: 10 } },
+            h('div', { style: { fontSize: 12.5, marginBottom: 2 } }, 档.名),
+            多行(预设表[档.id], (值) => 改提示词(档.id, 值), '留空用内置默认'),
+            h('button', {
+              type: 'button',
+              style: { ...S.link, marginTop: 2 },
+              onClick: () => 改提示词(档.id, ''),
+            }, '恢复默认'))))))
 
       const 音色选项 = [{ value: 配置.ttsVoice || 'dafeiyu', label: 配置.ttsVoice || 'dafeiyu' }]
       for (const 名 of 音色们) {
@@ -2828,21 +2736,8 @@ select.fish-select option:checked {
       注册(ctx, 'conversation.chat.assistant-actions', { id: 'fish-read', order: 21, label: () => '朗读' }, 朗读按钮)
       // 输入框右侧：麦克风（开始/结束录音）。
       注册(ctx, 'conversation.input.right', { id: 'fish-mic', order: 32, label: () => '语音输入' }, 麦克风按钮)
-      // 草稿附件栏：整条顶替官方 ComposerAttachments（单占位，priority 小于官方 100 才占得住），
-      // 只为了在每张草稿图片下面加「本地识图」；附件、上传、删除、拖放仍原样交给官方。
-      // inject 是为了拿到官方「会话里拖出来的图」的读取方法，拿不到也不影响普通文件拖放。
-      注册(ctx, 'conversation.input.attachments', {
-        id: 'fish-attach',
-        priority: 60,
-        inject: () => {
-          try {
-            const 拖拽 = ctx.get('fileDrag')
-            return 拖拽 && typeof 拖拽.read === 'function' ? { readFileDrag: 拖拽.read } : {}
-          } catch {
-            return {}
-          }
-        },
-      }, 附件栏)
+      // 输入框右侧：本地识图按钮（点选图片，或把图片拖到按钮上；图片不进草稿）。
+      注册(ctx, 'conversation.input.right', { id: 'fish-vision', order: 31, label: () => '本地识图' }, 本地识图按钮)
       // 输入框上方浮层：录音状态 + 三选一面板（DSH 的 overlay 就挂在这里）。
       注册(ctx, 'conversation.input.overlay', { id: 'fish-voice', order: 40, label: () => '语音输入面板' }, 语音面板)
       // 输入框左侧：自动朗读开关。
@@ -2874,10 +2769,11 @@ select.fish-select option:checked {
       识图扩展,
       是图片文件,
       本地识图开,
+      识图档位们,
+      识图档位选项,
+      规范识图档位,
       识图阻塞原因,
       拼图片描述,
-      拖入目录,
-      格式大小,
       入队待插入,
       取待插入,
       消费待插入,
