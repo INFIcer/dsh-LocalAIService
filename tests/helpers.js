@@ -30,6 +30,9 @@ export function sendBuffer(res, status, buffer, headers = {}) {
 export async function startMock(handler) {
   const requests = []
   const server = http.createServer(async (req, res) => {
+    // 每个响应都关连接：mock 端口很快被系统复用，keep-alive 的旧连接
+    // 可能连到下一个测试的服务上，造成偶发 service_down。
+    res.shouldKeepAlive = false
     const chunks = []
     req.on('data', (c) => chunks.push(c))
     await new Promise((resolve) => req.on('end', resolve))
