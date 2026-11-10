@@ -80,6 +80,7 @@ test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 本地识�
     'conversation.input.right',
     'conversation.input.overlay',
     'conversation.input.left',
+    'conversation.input.left',
     'conversation.chat.text-interaction',
   ])
   assert.deepEqual(注册们.map((x) => x.配置.id), [
@@ -89,12 +90,18 @@ test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 本地识�
     'fish-vision',
     'fish-voice',
     'fish-auto-read',
+    'fish-metrics',
     undefined,
   ])
   // 本地识图是输入框旁的独立按钮，和麦克风同一排；官方附件栏不再被顶替。
   assert.equal(注册们.find((x) => x.配置.id === 'fish-vision').配置.order, 31)
   assert.equal(注册们.find((x) => x.配置.id === 'fish-mic').配置.order, 32)
+  // 状态胶囊是 list 槽：靠 id 区分条目，不需要 priority。
+  const 状态胶囊 = 注册们.find((x) => x.配置.id === 'fish-metrics')
+  assert.equal(状态胶囊.配置.order, 40)
+  assert.equal(状态胶囊.配置.priority, undefined)
   assert.equal(注册们.some((x) => x.配置.name === 'conversation.input.attachments'), false)
+  assert.equal(注册们.some((x) => x.配置.name === 'shell.bottom'), false)
   assert.equal(注册们.at(-1).配置.key, 'fish-selection')
 
   // 框选交互：只对 selection + 有文本的请求 open；其它情况不抢。
@@ -118,6 +125,8 @@ test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 本地识�
   assert.doesNotThrow(() => 组件们['fish-mic']({ sessionId: 's1' }))
   assert.doesNotThrow(() => 组件们['fish-voice']({ sessionId: 's1' }))
   assert.doesNotThrow(() => 组件们['fish-auto-read']())
+  // 状态胶囊：服务未加载时也能渲染「连接中」。
+  assert.doesNotThrow(() => 组件们['fish-metrics']())
   // 本地识图按钮：独立入口，不依赖草稿附件。
   assert.doesNotThrow(() => 组件们['fish-vision']({ sessionId: 's1' }))
   assert.doesNotThrow(() => 组件们['fish-vision']())

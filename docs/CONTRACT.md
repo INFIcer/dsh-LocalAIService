@@ -1,7 +1,7 @@
 # 接口契约（CONTRACT）
 
-> 版本：`v0.5`（2026-11-10）：识图提示词分四档（`visionPresets` / `visionDefaultPreset`），会话识图单独一个 `visionSessionPrompt`；`visionDescribe` 增加 `preset` / `scope`，`fish_describe_image` 增加 `detail`，`/describe-upload` 增加 `scope` / `preset`。向后兼容。
-> 前版：`v0.4`（`visionPrefs` / `localDescribe` / `/describe-upload`）、`v0.3`（`visionDescribe` / `fish_describe_image` / 音色目录）、`v0.1`（P0 冻结稿）
+> 版本：`v0.6`（2026-11-10）：新增 `GET /metrics`（显存 / 模型 / 队列 / 版本，1 秒缓存，服务离线也返回 200 + `ok:false`）；客户端输入框左下加本地 AI 状态胶囊（2 秒轮询，详情浮层）。向后兼容。
+> 前版：`v0.5`（识图提示词分四档）、`v0.4`（`visionPrefs` / `localDescribe` / `/describe-upload`）、`v0.3`（`visionDescribe` / `fish_describe_image` / 音色目录）、`v0.1`（P0 冻结稿）
 > 适用：`dsh-fish-service` / `dsh-fish-ops` / `localai-service 2.5.x`
 > 原则：**先改本文，再改代码**。P1 只实现本文已写明的字段；新增字段必须向后兼容。
 
@@ -908,7 +908,7 @@ interface VisionPrefs {
 | GET | `/models/tasks/:id` | — | 代理下载进度 |
 | POST | `/models/activate` | `{capability, name}` | `{ok}` |
 | GET | `/webui` | — | `{ok, url, embedUrl}`（`/ui?embed=1`） |
-| GET | `/metrics` | — | 计数器 JSON |
+| GET | `/metrics` | — | `{ok:true, ms, gpu:{name,usedMb,totalMb,freeMb,percent}, modelsLoaded:[], queue:{queued,running,queuedByKind,runningByKind}, scheduler:{currentKind,loadedModel}, service:{version,uptimeSeconds}, vision:{loaded,ready}}`；宿主并行抓 localai 的 `/admin/system` 与 `/jobs/stats?limit=1`（各 1500ms 超时），结果缓存 1 秒。两侧都失败时仍返回 200 + `{ok:false, code:"service_down", hint:"本地 AI 未启动"}`（服务未启动的常规分支，不是错误）；只有一侧成功时另一侧给中性默认值。`percent` 为整数，缺字段不报错 |
 
 `/describe-upload` 的客户端用途：输入框旁的「本地识图」按钮调用它（`scope=session`、`mode=caption`，不传 `preset`）；
 成功后客户端把「［图片：文件名］＋描述」按顺序插入输入框（图片不需要先加进草稿、不上传、不进模型），失败只提示一句。
@@ -917,7 +917,7 @@ interface VisionPrefs {
 
 安全：
 
-- 所有 POST 要求同源（检查 `Origin`/`Referer` 为 DSH 页面）；
+- 所有 POST 要求同源（检查 `Origin`/`Referer` 为 DSH 页面）；`GET /metrics` 也做同样检查（其它 GET 仍只做只读查询）；
 - `/open-folder` 只打开 `cacheDir` 或服务音色目录本身/子目录：缓存根每次从配置取，音色目录每次实时 `GET /voices` 取（不落配置、不缓存成任意路径）；路径须为绝对路径、已存在、是目录，两边 realpath 后再判包含关系，防符号链接穿越；服务离线时只允许 `cacheDir`；
 - `/audio/:id` 只接受 `[a-f0-9-]+`，映射表里查不到就 404；
 - `/logs` 不接受任意 `file` 路径，只接受 `service`/`err` 枚举；

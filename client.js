@@ -9,6 +9,8 @@
 //     设置页补「朗读」「语音输入」两个分区。
 // P3：本地识图：输入框旁独立按钮（conversation.input.right，与麦克风同一排），
 //     点选或拖入图片后在本机识别成文字，按顺序插入输入框；图片不进草稿、不上传、不进模型。
+// P4：输入框左下工具行的本地 AI 状态胶囊（conversation.input.left）：
+//     显存占比 + 任务数，2 秒轮询；点开看 GPU / 模型 / 队列 / 版本详情。
 //
 // 所有请求都走宿主路由 /dsh-fish-service/*：浏览器不接触 token，也不直接访问 localai。
 //
@@ -596,6 +598,55 @@ select.fish-select option:checked {
   font-size: 12px; line-height: 1.5;
   box-shadow: 0 4px 16px rgba(0,0,0,.16);
 }
+/* 输入框左下工具行：本地 AI 小胶囊；详情浮层向上弹，不挤占输入区 */
+.fish-metrics { position: relative; display: inline-flex; align-items: center; height: 26px; }
+.fish-metrics-pill {
+  display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px;
+  border: 1px solid transparent; border-radius: 999px; background: transparent;
+  color: var(--dsw-alias-label-secondary, #666); font: inherit; font-size: 12px; line-height: 1;
+  cursor: pointer; white-space: nowrap;
+}
+.fish-metrics-pill:hover {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.12));
+  color: var(--dsw-alias-label-primary, inherit);
+}
+.fish-metrics-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex: none;
+  background: var(--dsw-alias-state-business-primary, #2f6fed);
+}
+.fish-metrics-text { overflow: hidden; text-overflow: ellipsis; }
+.fish-metrics-pill[data-level="warn"] { color: #d98600; }
+.fish-metrics-pill[data-level="danger"] { color: #e0524a; }
+.fish-metrics[data-offline="1"] .fish-metrics-pill { opacity: .62; }
+.fish-metrics[data-offline="1"] .fish-metrics-dot { background: var(--dsw-alias-label-secondary, #8a8a8a); }
+.fish-metrics-pop {
+  position: absolute; left: 0; bottom: calc(100% + 8px); z-index: 75;
+  box-sizing: border-box; width: 288px; max-width: min(88vw, 320px); max-height: 60vh; overflow: auto;
+  padding: 12px 14px; border-radius: 12px; animation: fish-in .12s ease-out;
+  border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.12));
+  background: var(--dsw-alias-bg-layer-1, rgba(255,255,255,.98));
+  color: var(--dsw-alias-label-primary, inherit);
+  box-shadow: 0 10px 30px rgba(0,0,0,.24);
+  font-size: 12px; line-height: 1.6;
+}
+.fish-metrics-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.fish-metrics-title { font-weight: 650; font-size: 13px; }
+.fish-metrics-dim { opacity: .62; }
+.fish-metrics-row { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 1px 0; }
+.fish-metrics-key { opacity: .62; flex: none; }
+.fish-metrics-val { text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fish-metrics-bar {
+  height: 4px; margin: 5px 0 4px; border-radius: 999px; overflow: hidden;
+  background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.16));
+}
+.fish-metrics-bar i { display: block; height: 100%; border-radius: inherit; background: var(--dsw-alias-state-business-primary, #2f6fed); }
+.fish-metrics-bar[data-level="warn"] i { background: #d98600; }
+.fish-metrics-bar[data-level="danger"] i { background: #e0524a; }
+.fish-metrics-sep { height: 1px; margin: 8px 0; background: var(--dsw-alias-border-l2, rgba(0,0,0,.1)); }
+.fish-metrics-empty { opacity: .7; padding: 8px 0; }
+.fish-metrics-hint { color: #e0524a; margin-top: 6px; }
+.fish-metrics-actions { display: flex; gap: 8px; margin-top: 10px; }
+.fish-metrics-actions .fish-btn { flex: 1; padding: 5px 8px; }
 `
 
     // 样式只注入一次：每个消息都渲染一份 <style> 会把 DOM 撑爆。
@@ -2651,6 +2702,218 @@ select.fish-select option:checked {
         日志块)
     }
 
+    // ---------------- 本地 AI 状态胶囊（输入框左侧工具行） ----------------
+
+    const 指标轮询毫秒 = 2000
+
+    /** MB → GB，一位小数；缺失/非法按 0。 */
+    function 格式化GB(兆字节) {
+      const 数 = Number(兆字节)
+      return (Number.isFinite(数) && 数 > 0 ? 数 / 1024 : 0).toFixed(1)
+    }
+
+    function 格式化显存(已用, 总量) {
+      return `${格式化GB(已用)} / ${格式化GB(总量)} GB`
+    }
+
+    function 格式化模型(模型们) {
+      const 列表 = (Array.isArray(模型们) ? 模型们 : [])
+        .map((项) => String(项 == null ? '' : 项).trim())
+        .filter(Boolean)
+      return 列表.length ? `已加载 ${列表.join(' / ')}` : '无模型'
+    }
+
+    function 任务总数(队列) {
+      const 排队 = Math.max(0, Math.trunc(Number(队列 && 队列.queued) || 0))
+      const 运行 = Math.max(0, Math.trunc(Number(队列 && 队列.running) || 0))
+      return 排队 + 运行
+    }
+
+    /** 胶囊文案里的任务段：有任务显示总数，没有显示空闲。 */
+    function 格式化胶囊任务(队列) {
+      const 总数 = 任务总数(队列)
+      return 总数 > 0 ? `${总数} 任务` : '空闲'
+    }
+
+    /** 浮层里的队列行：「运行 1 · 排队 0」。 */
+    function 格式化任务(队列) {
+      const 排队 = Math.max(0, Math.trunc(Number(队列 && 队列.queued) || 0))
+      const 运行 = Math.max(0, Math.trunc(Number(队列 && 队列.running) || 0))
+      return 排队 + 运行 > 0 ? `运行 ${运行} · 排队 ${排队}` : '空闲'
+    }
+
+    function 格式化时长(秒) {
+      const 总 = Math.max(0, Math.floor(Number(秒) || 0))
+      const 天 = Math.floor(总 / 86400)
+      const 小时 = Math.floor((总 % 86400) / 3600)
+      const 分钟 = Math.floor((总 % 3600) / 60)
+      if (天 > 0) return `${天} 天 ${小时} 小时`
+      if (小时 > 0) return `${小时} 小时 ${分钟} 分`
+      if (分钟 > 0) return `${分钟} 分钟`
+      return `${总} 秒`
+    }
+
+    /** 按类型分桶 → 「tts 2 · asr 1」；空桶显示「无」。 */
+    function 格式化类型明细(表) {
+      const 项 = []
+      if (表 && typeof 表 === 'object' && !Array.isArray(表)) {
+        for (const [类型, 数] of Object.entries(表)) {
+          const 计数 = Math.trunc(Number(数) || 0)
+          if (计数 > 0) 项.push(`${类型} ${计数}`)
+        }
+      }
+      return 项.length ? 项.join(' · ') : '无'
+    }
+
+    /** 显存占比分档：>95 危险、>85 警告，其余正常。 */
+    function 显存色(百分比) {
+      const 数 = Math.max(0, Math.min(100, Number(百分比) || 0))
+      if (数 > 95) return 'danger'
+      if (数 > 85) return 'warn'
+      return ''
+    }
+
+    function 格式化视觉(视觉) {
+      return `${视觉 && 视觉.loaded === true ? '已加载' : '未加载'} · ${视觉 && 视觉.ready === true ? '已就绪' : '未就绪'}`
+    }
+
+    function 指标离线(态) {
+      return Boolean(态 && 态.载入 && (!态.数据 || 态.数据.ok !== true))
+    }
+
+    function 指标胶囊() {
+      const [态, 设态] = React.useState({ 载入: false, 数据: null })
+      const [展开, 设展开] = React.useState(false)
+      const [提示, 设提示] = React.useState('')
+      const [忙, 设忙] = React.useState(false)
+      const 根 = React.useRef(null)
+
+      const 拉 = React.useCallback(async () => {
+        // 页面隐藏时暂停轮询；恢复可见由 visibilitychange 立刻补一次。
+        if (typeof document !== 'undefined' && document.hidden) return
+        const 数据 = await get('/metrics')
+        设态({ 载入: true, 数据: 数据 && typeof 数据 === 'object' ? 数据 : null })
+      }, [])
+
+      React.useEffect(() => {
+        let 定时器 = 0
+        void 拉()
+        定时器 = setInterval(() => { void 拉() }, 指标轮询毫秒)
+        const 页面可见 = () => { if (!document.hidden) void 拉() }
+        if (typeof document !== 'undefined') document.addEventListener('visibilitychange', 页面可见)
+        return () => {
+          clearInterval(定时器)
+          if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', 页面可见)
+        }
+      }, [拉])
+
+      React.useEffect(() => {
+        if (!展开 || typeof document === 'undefined') return undefined
+        const 点外面 = (事件) => {
+          const 节点 = 根.current
+          if (节点 && 事件 && 事件.target && 节点.contains(事件.target)) return
+          设展开(false)
+        }
+        const 按Esc = (事件) => { if (事件 && 事件.key === 'Escape') 设展开(false) }
+        document.addEventListener('pointerdown', 点外面, true)
+        document.addEventListener('keydown', 按Esc, true)
+        return () => {
+          document.removeEventListener('pointerdown', 点外面, true)
+          document.removeEventListener('keydown', 按Esc, true)
+        }
+      }, [展开])
+
+      const 打开管理 = async (事件) => {
+        事件?.stopPropagation?.()
+        设忙(true)
+        设提示('')
+        const 结果 = await post('/open-webui', {})
+        设忙(false)
+        if (!结果 || 结果.ok !== true) 设提示((结果 && 结果.hint) || '打开管理界面失败，请稍后再试。')
+      }
+
+      const 刷新 = async (事件) => {
+        事件?.stopPropagation?.()
+        设忙(true)
+        设提示('')
+        await 拉()
+        设忙(false)
+      }
+
+      const 离线 = 指标离线(态)
+      const 在线 = Boolean(态.载入 && !离线 && 态.数据 && 态.数据.ok === true)
+      const 数据 = (在线 && 态.数据) || {}
+      const gpu = 数据.gpu || {}
+      const 占比 = Math.max(0, Math.min(100, Math.trunc(Number(gpu.percent) || 0)))
+      const 等级 = 显存色(占比)
+      const 胶囊文字 = !态.载入
+        ? '连接中'
+        : 离线
+          ? '本地 AI 未启动'
+          : `显存 ${占比}%｜${格式化胶囊任务(数据.queue)}`
+
+      const 明细 = (标签, 值) => h('div', { className: 'fish-metrics-row' },
+        h('span', { className: 'fish-metrics-key' }, 标签),
+        h('span', { className: 'fish-metrics-val' }, 值))
+
+      const 浮层 = h('div', {
+        className: 'fish-metrics-pop',
+        role: 'dialog',
+        'aria-label': '本地 AI 详情',
+        onClick: (事件) => 事件.stopPropagation(),
+      },
+        h('div', { className: 'fish-metrics-head' },
+          h('span', { className: 'fish-metrics-title' }, '本地 AI'),
+          h('span', { className: 'fish-metrics-dim' }, 在线 ? `v${数据.service?.version || '?'}` : '')),
+        !态.载入
+          ? h('div', { className: 'fish-metrics-empty' }, '正在读取…')
+          : 离线
+            ? h('div', { className: 'fish-metrics-empty' }, '启动服务后可查看。')
+            : h(React.Fragment, null,
+                h('div', { className: 'fish-metrics-gpu' },
+                  明细('显卡', gpu.name || '未知'),
+                  明细('显存', `${格式化显存(gpu.usedMb, gpu.totalMb)}（${占比}%）`),
+                  h('div', { className: 'fish-metrics-bar', 'data-level': 等级 || undefined },
+                    h('i', { style: { width: `${占比}%` } })),
+                  明细('可用', `${格式化GB(gpu.freeMb)} GB`)),
+                明细('模型', 格式化模型(数据.modelsLoaded)),
+                明细('视觉', 格式化视觉(数据.vision)),
+                h('div', { className: 'fish-metrics-sep' }),
+                明细('队列', 格式化任务(数据.queue)),
+                明细('排队明细', 格式化类型明细(数据.queue?.queuedByKind)),
+                明细('运行明细', 格式化类型明细(数据.queue?.runningByKind)),
+                明细('当前类型', 数据.scheduler?.currentKind || '无'),
+                明细('调度模型', 数据.scheduler?.loadedModel || '无'),
+                明细('运行时长', 格式化时长(数据.service?.uptimeSeconds))),
+        提示 ? h('div', { className: 'fish-metrics-hint' }, 提示) : null,
+        h('div', { className: 'fish-metrics-actions' },
+          离线 ? null : h('button', {
+            type: 'button',
+            className: 'fish-btn',
+            disabled: 忙,
+            onClick: 打开管理,
+          }, '打开管理界面'),
+          h('button', { type: 'button', className: 'fish-btn', disabled: 忙, onClick: 刷新 }, '刷新')))
+
+      return h('div', {
+        ref: 根,
+        className: 'fish-metrics',
+        'data-offline': 离线 ? '1' : undefined,
+      },
+        h('button', {
+          type: 'button',
+          className: 'fish-metrics-pill',
+          'data-level': 等级 || undefined,
+          onClick: () => 设展开((值) => !值),
+          'aria-expanded': 展开 ? 'true' : 'false',
+          'aria-label': '本地 AI 状态',
+          title: 离线 ? '本地 AI 未启动' : '查看本地 AI 详情',
+        },
+          h('span', { className: 'fish-metrics-dot', 'aria-hidden': true }),
+          h('span', { className: 'fish-metrics-text' }, 胶囊文字)),
+        展开 ? 浮层 : null)
+    }
+
     // ---------------- 注册 ----------------
 
     function 注册(ctx, 槽位, 配置项, 组件) {
@@ -2742,6 +3005,8 @@ select.fish-select option:checked {
       注册(ctx, 'conversation.input.overlay', { id: 'fish-voice', order: 40, label: () => '语音输入面板' }, 语音面板)
       // 输入框左侧：自动朗读开关。
       注册(ctx, 'conversation.input.left', { id: 'fish-auto-read', order: 45, label: () => '自动朗读' }, 自动朗读开关)
+      // 输入框左侧：本地 AI 状态胶囊（显存 / 任务，点开看详情）。
+      注册(ctx, 'conversation.input.left', { id: 'fish-metrics', order: 40, label: () => '本地 AI 状态' }, 指标胶囊)
       // 框选文字：朗读 / 翻译（需要同时注册 interaction 与 keyed 槽位）。
       注册选中交互(ctx)
 
@@ -2777,6 +3042,17 @@ select.fish-select option:checked {
       入队待插入,
       取待插入,
       消费待插入,
+      格式化GB,
+      格式化显存,
+      格式化模型,
+      格式化任务,
+      格式化胶囊任务,
+      任务总数,
+      格式化时长,
+      格式化类型明细,
+      显存色,
+      格式化视觉,
+      指标离线,
     }
     return module.exports
   },
