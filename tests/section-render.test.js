@@ -47,6 +47,15 @@ const 真实状态 = {
   },
   voices: ['Karenina', '大肥鱼'],
   voicesDirectory: 'E:\\LocalAIService\\voices',
+  visionDefaults: {
+    presets: {
+      brief: '请用一两句简洁的中文描述这张图片里有什么。',
+      standard: '请用一段话把这张图片说清楚。',
+      detailed: '请按下面的分条要求描述这张图片：主体、场景、物体、文字、构图。',
+      text: '请识别并原样输出图片中的文字。',
+    },
+    session: '请按下面的分条要求描述这张图片：主体、场景、物体、文字、构图。',
+  },
   cache: { files: 0, bytes: 0 },
   errors: [],
   envOverrides: [],

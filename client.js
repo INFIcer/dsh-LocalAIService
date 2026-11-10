@@ -2477,6 +2477,10 @@ select.fish-select option:checked {
       // 识图：开关控制输入框旁的「本地识图」按钮；会话识图与工具识图各用各的提示词，互不覆盖。
       const 预设表 = 配置.visionPresets && typeof 配置.visionPresets === 'object'
         && !Array.isArray(配置.visionPresets) ? 配置.visionPresets : {}
+      // 「留空 = 用内置默认」，所以把默认提示词直接显示成占位文字。
+      const 识图默认 = (态 && 态.visionDefaults && typeof 态.visionDefaults === 'object') ? 态.visionDefaults : {}
+      const 会话识图默认 = typeof 识图默认.session === 'string' ? 识图默认.session : ''
+      const 档位默认 = (档) => (识图默认.presets && typeof 识图默认.presets[档.id] === 'string' ? 识图默认.presets[档.id] : '')
       const 改提示词 = (档, 值) => {
         改('visionPresets', { ...预设表, [档]: 值 })
       }
@@ -2486,7 +2490,7 @@ select.fish-select option:checked {
           '打开后，输入框旁的「本地识图」按钮可用。第一次识别要等模型加载。'),
         行('会话识图',
           h('div', null,
-            多行(配置.visionSessionPrompt, (值) => 改('visionSessionPrompt', 值), ''),
+            多行(配置.visionSessionPrompt, (值) => 改('visionSessionPrompt', 值), 会话识图默认),
             h('button', {
               type: 'button',
               style: { ...S.link, marginTop: 2 },
@@ -2499,7 +2503,7 @@ select.fish-select option:checked {
         h(折叠块, { 摘要: '工具提示词', 展开字样: '修改', 收起字样: '收起' },
           h('div', null, 识图档位们.map((档) => h('div', { key: 档.id, style: { marginBottom: 10 } },
             h('div', { style: { fontSize: 12.5, marginBottom: 2 } }, 档.名),
-            多行(预设表[档.id], (值) => 改提示词(档.id, 值), '留空用内置默认'),
+            多行(预设表[档.id], (值) => 改提示词(档.id, 值), 档位默认(档)),
             h('button', {
               type: 'button',
               style: { ...S.link, marginTop: 2 },

@@ -195,6 +195,12 @@ test('GET /state：配置 / health / 能力 / 音色 / 缓存 / 错误 / env 覆
   assert.deepEqual(json.voices, ['dafeiyu', 'default'])
   assert.equal(json.voicesDirectory, '')
   assert.equal(json.cache.files, 2)
+  // 设置页把「留空=默认」的提示词显示成占位文字，所以默认值要随 state 下发。
+  assert.equal(typeof json.visionDefaults.session, 'string')
+  assert.ok(json.visionDefaults.session.length > 10)
+  assert.equal(typeof json.visionDefaults.presets.detailed, 'string')
+  assert.ok(json.visionDefaults.presets.detailed.length > 10)
+  assert.deepEqual(Object.keys(json.visionDefaults.presets).sort(), ['brief', 'detailed', 'standard', 'text'])
   assert.equal(json.errors[0].code, 'service_down')
   assert.deepEqual(json.envOverrides, ['ttsVoice'])
   assert.equal(env.调用.voices, 1)
