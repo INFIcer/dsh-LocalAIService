@@ -1,7 +1,7 @@
 # 接口契约（CONTRACT）
 
-> 版本：`v0.3`（2026-11-10）：新增 `visionDescribe` 与 `fish_describe_image`、翻译目标语言自动规则、`voices()` 透出音色目录、`/translate` 与 `/open-folder` 音色目录白名单。向后兼容，旧调用方无需改动。
-> 前版：`v0.1`（P0 冻结稿）
+> 版本：`v0.4`（2026-11-10）：新增 `visionPrefs()`、配置项 `localDescribe`、`POST /describe-upload`、`fish_tts` 结果改为一行文字。向后兼容，旧调用方无需改动。
+> 前版：`v0.3`（2026-11-10，`visionDescribe` / `fish_describe_image` / 音色目录）、`v0.1`（P0 冻结稿）
 > 适用：`dsh-fish-service` / `dsh-fish-ops` / `localai-service 2.5.x`
 > 原则：**先改本文，再改代码**。P1 只实现本文已写明的字段；新增字段必须向后兼容。
 
@@ -71,6 +71,7 @@ interface FishServiceApi {
   separate(file: string, opts?: SeparateOptions): Promise<SeparateResult>
   visionFrames(input: VisionInput, opts?: VisionOptions): Promise<VisionResult>
   visionDescribe(input: string | string[], opts?: DescribeOptions): Promise<DescribeResult>
+  visionPrefs(): VisionPrefs
   mediaProbe(input: string | string[], opts?: { timeoutMs?: number }): Promise<ProbeResult>
   jobs: JobsApi
   voices(opts?: { timeoutMs?: number; force?: boolean }): Promise<VoiceInfo[] & { directory?: string }>
@@ -516,6 +517,22 @@ interface DescribeResult {
 - 逐张串行调用（服务端一次只处理一张），任一张失败整体失败，不返回半成品；
 - 只返回文字 / `parsed` / 耗时，**不返回 base64、不返回图片本体**。
 
+### 1.17 `visionPrefs()`（v0.4）
+
+识图偏好，只读。给别的插件（鱼讯）判断「要不要走本地识图」用，不探服务、不联网、不加载模型。
+
+```ts
+interface VisionPrefs {
+  localDescribe: boolean   // 设置页「本地识图」开关；未配置时为 true
+}
+```
+
+- 只读本地配置：`localDescribe: config.localDescribe !== false`，因此旧配置文件（没有该字段）返回 `true`；
+- 同步返回，不抛异常；设置页改完立即生效，无需重启；
+- 调用方做「继承 / 开 / 关」三态时：读 `visionPrefs().localDescribe` 作为「继承」时的值，
+  自己的开关覆盖它即可；
+- 本插件内部也用它：`POST /describe-upload` 在关闭时直接 400，工具提示段在关闭时输出空串。
+
 ---
 
 ## 2. DSH 工具契约
@@ -610,6 +627,15 @@ interface DescribeResult {
 ```json
 { "ok": false, "code": "vram_exhausted", "hint": "显存不够（需要约 6.4 GB，当前空闲 2.1 GB）。关掉占显存的程序，或在服务 WebUI 里卸载其它模型。", "detail": "insufficient_vram: need 6912MB free 6000MB", "retryable": false }
 ```
+
+**界面显示（v0.4）**：返回值（`items` / `ms` / 失败包）完全不变；工具结果渲染成一行文字，不再铺 JSON：
+
+```text
+语音已生成（1 段）：C:\Users\Administrator\.dsh\fish-service-cache\tts\a1b2c3d4-1794200000.wav
+```
+
+失败时这一行就是 `hint`。原因见 `docs/DSH-CAPABILITIES.md`：会话里没有音频附件类型，文件要靠官方 `present`
+工具变成交付卡；系统提示会引导模型在用户要文件时调用它。
 
 ### 2.4 `fish_asr` 完整 schema
 
@@ -841,6 +867,7 @@ interface DescribeResult {
 | GET | `/audio?path=` | — | `audio/*`；只允许 `cacheDir` 内的 `.wav/.webm/.ogg/.opus/.mp3/.m4a`（P2） |
 | POST | `/transcribe-upload` | multipart `file` + `durationMs?` + `language?` + `speaker?` | `{ok, text, ms, elapsedMs?, language?, speaker?}`（P2，临时文件请求结束即删） |
 | POST | `/voice-upload` | multipart `file` + `durationMs?` | `{ok, path, bytes, mime}`（P2，存 `cacheDir/voice`） |
+| POST | `/describe-upload` | multipart `file`（`image/*`）+ `mode?` | `{ok, text, mode, ms, bytes}`（v0.4，图片只存临时文件、请求结束即删） |
 | GET | `/audio/:id` | — | `audio/wav` 流；id 映射到缓存文件，防目录穿越 |
 | POST | `/asr` | multipart `file` + `language?` + `speaker?` | `{ok, text, speaker?, segments?}` |
 | GET | `/logs` | `?lines=200&file=service` | `{ok, lines:[]}`（代理 `/admin/logs`） |
@@ -865,6 +892,7 @@ interface DescribeResult {
 - `/open-folder` 只打开 `cacheDir` 或服务音色目录本身/子目录：缓存根每次从配置取，音色目录每次实时 `GET /voices` 取（不落配置、不缓存成任意路径）；路径须为绝对路径、已存在、是目录，两边 realpath 后再判包含关系，防符号链接穿越；服务离线时只允许 `cacheDir`；
 - `/audio/:id` 只接受 `[a-f0-9-]+`，映射表里查不到就 404；
 - `/logs` 不接受任意 `file` 路径，只接受 `service`/`err` 枚举；
+- `/describe-upload` 只收 `image/jpeg|png|webp|gif|bmp`，单张 ≤15MB；`localDescribe` 关闭时直接 400；图片落 `cacheDir/tmp`，请求结束（含失败）立即删除；
 - 不返回 token、不返回 localai 的绝对 `outputs/` 路径。
 
 ---
@@ -888,6 +916,7 @@ interface DescribeResult {
   "requestTimeoutMs": 180000,
   "asrTimeoutMs": 300000,
   "visionTimeoutMs": 600000,
+  "localDescribe": true,
   "healthIntervalMs": 15000,
   "busyAfterMs": 30000,
   "cacheTtlHours": 72,
@@ -927,6 +956,7 @@ interface DescribeResult {
 | `requestTimeoutMs` | int | 180000 | 1000~1800000 | TTS/一般 |
 | `asrTimeoutMs` | int | 300000 | 1000~1800000 | ASR/分离 |
 | `visionTimeoutMs` | int | 600000 | 1000~1800000 | 视觉 |
+| `localDescribe` | bool | true | — | 本地识图：需要识图时优先用本机视觉模型（v0.4）；旧配置缺字段按 true |
 | `healthIntervalMs` | int | 15000 | 5000~120000 | 健康轮询 |
 | `busyAfterMs` | int | 30000 | 5000~300000 | 队列等待阈值 |
 | `cacheTtlHours` | int | 72 | 1~720 | 必须 > fish-message 出站 TTL（24h） |
@@ -947,6 +977,7 @@ interface DescribeResult {
 | `DSH_FISH_SERVICE_INSTALL_DIR` | `installDir` | 同上 |
 | `DSH_FISH_SERVICE_DISABLE_INSTALL` | 隐藏安装 UI | 只读 |
 | `DSH_FISH_SERVICE_HEALTH_MS` | `healthIntervalMs` | 同上 |
+| `DSH_FISH_SERVICE_LOCAL_DESCRIBE` / `FISH_SERVICE_LOCAL_DESCRIBE` | `localDescribe` | 同上 |
 
 ### 5.4 迁移导入规则
 
