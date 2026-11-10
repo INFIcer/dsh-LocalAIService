@@ -2489,13 +2489,7 @@ select.fish-select option:checked {
         行('本地识图', 勾(配置.localDescribe !== false, (值) => 改('localDescribe', 值)),
           '打开后，输入框旁的「本地识图」按钮可用。第一次识别要等模型加载。'),
         行('会话识图',
-          h('div', null,
-            多行(配置.visionSessionPrompt, (值) => 改('visionSessionPrompt', 值), 会话识图默认),
-            h('button', {
-              type: 'button',
-              style: { ...S.link, marginTop: 2 },
-              onClick: () => 改('visionSessionPrompt', ''),
-            }, '恢复默认')),
+          多行(配置.visionSessionPrompt, (值) => 改('visionSessionPrompt', 值), 会话识图默认),
           '输入框旁的按钮识图时用这段提示词；留空用内置默认。'),
         行('工具默认档位', 下拉(规范识图档位(配置.visionDefaultPreset) || 'detailed', 识图档位选项,
           (值) => 改('visionDefaultPreset', 值)),
@@ -2503,12 +2497,7 @@ select.fish-select option:checked {
         h(折叠块, { 摘要: '工具提示词', 展开字样: '修改', 收起字样: '收起' },
           h('div', null, 识图档位们.map((档) => h('div', { key: 档.id, style: { marginBottom: 10 } },
             h('div', { style: { fontSize: 12.5, marginBottom: 2 } }, 档.名),
-            多行(预设表[档.id], (值) => 改提示词(档.id, 值), 档位默认(档)),
-            h('button', {
-              type: 'button',
-              style: { ...S.link, marginTop: 2 },
-              onClick: () => 改提示词(档.id, ''),
-            }, '恢复默认'))))))
+            多行(预设表[档.id], (值) => 改提示词(档.id, 值), 档位默认(档)))))))
 
       const 音色选项 = [{ value: 配置.ttsVoice || 'dafeiyu', label: 配置.ttsVoice || 'dafeiyu' }]
       for (const 名 of 音色们) {
