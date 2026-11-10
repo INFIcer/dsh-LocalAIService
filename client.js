@@ -8,7 +8,7 @@
 //     自动朗读开关（conversation.input.left）；
 //     设置页补「朗读」「语音输入」两个分区。
 // P3：本地识图：输入框旁独立按钮（conversation.input.right，与麦克风同一排），
-//     点选或拖入图片后在本机识别成文字，按顺序插入输入框；图片不进草稿、不上传、不进模型。
+//     点选图片后在本机识别成文字，按顺序插入输入框；图片不进草稿、不上传、不进模型。
 // P4：输入框左下工具行的本地 AI 状态胶囊（conversation.input.left）：
 //     显存占比 + 任务数，2 秒轮询；点开看 GPU / 模型 / 队列 / 版本详情。
 //
@@ -583,12 +583,7 @@ select.fish-select option:checked {
   user-select: text; -webkit-user-select: text;
 }
 .fish-selrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
-/* 输入框旁的本地识图按钮：拖入时高亮；识别状态用小浮条，不挤占输入栏 */
-.fish-iconbtn[data-drop="1"] {
-  outline: 2px solid var(--dsw-alias-state-business-primary, #2f6fed);
-  outline-offset: 1px;
-  background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.05));
-}
+/* 输入框旁的本地识图按钮：识别状态用小浮条，不挤占输入栏 */
 .fish-vision-toast {
   position: fixed; right: 18px; bottom: 84px; z-index: 60; max-width: 260px;
   padding: 6px 10px; border-radius: 8px; pointer-events: none;
@@ -1565,7 +1560,7 @@ select.fish-select option:checked {
     }
 
     // ---------------- 本地识图：输入框旁的独立按钮 ----------------
-    // 点按钮选图片（或把图片拖到按钮上），在本机识别成文字后按顺序插入输入框；
+    // 点按钮选图片，在本机识别成文字后按顺序插入输入框；
     // 图片不进草稿、不上传、不进模型。官方附件栏保持原样，不注册、不顶替。
 
     function 识图扩展(mime) {
@@ -1691,7 +1686,7 @@ select.fish-select option:checked {
     }
 
     // ---------------- 本地识图：输入框旁的独立按钮 ----------------
-    // 点按钮选图片，或把图片拖到按钮上；图片只在本机识别，不进草稿、不上传、不进模型。
+    // 点按钮选图片；图片只在本机识别，不进草稿、不上传、不进模型。
     // 每张图的「文件名 + 描述」按顺序进待插入队列，由输入框右侧组件（麦克风）统一消费插入。
 
     function 本地识图按钮(props) {
@@ -1699,7 +1694,6 @@ select.fish-select option:checked {
       const 偏好态 = useStore(偏好)
       const 提示态 = useStore(识图提示)
       const [忙, 设忙] = React.useState(false)
-      const [拖入, 设拖入] = React.useState(false)
       const [说, 设说] = React.useState('')
       const 文件框 = React.useRef(null)
       const 计时 = React.useRef(null)
@@ -1758,7 +1752,7 @@ select.fish-select option:checked {
 
       const 提示文 = 提示态.文案 && (!提示态.会话 || !sessionId || 提示态.会话 === sessionId) ? 提示态.文案 : ''
       const 文案 = 说 || 提示文
-      const 标题 = 忙 ? '正在本地识图…' : '本地识图：选图片，或把图片拖到这里'
+      const 标题 = 忙 ? '正在本地识图…' : '本地识图：选择图片'
 
       return h(React.Fragment, null,
         h('input', {
@@ -1777,26 +1771,12 @@ select.fish-select option:checked {
         h('button', {
           type: 'button',
           className: 'fish-iconbtn',
-          'data-drop': 拖入 ? '1' : undefined,
           disabled: 忙,
           title: 标题,
           'aria-label': '本地识图',
           // 别抢走输入框的焦点，否则插入位置会跳。
           onMouseDown: (事件) => { try { 事件.preventDefault() } catch { /* 忽略 */ } },
           onClick: 选文件,
-          onDragOver: (事件) => {
-            事件.preventDefault()
-            try { 事件.dataTransfer.dropEffect = 'copy' } catch { /* 忽略 */ }
-            if (!忙) 设拖入(true)
-          },
-          onDragLeave: () => 设拖入(false),
-          onDrop: (事件) => {
-            事件.preventDefault()
-            设拖入(false)
-            const 文件们 = []
-            try { for (const 文件 of 事件.dataTransfer.files || []) 文件们.push(文件) } catch { /* 忽略 */ }
-            if (文件们.length) void 处理(文件们)
-          },
         }, 忙 ? 图标转圈() : 图标图片()),
         文案 ? h('div', { className: 'fish-vision-toast', role: 'status' }, 文案) : null)
     }
@@ -2999,7 +2979,7 @@ select.fish-select option:checked {
       注册(ctx, 'conversation.chat.assistant-actions', { id: 'fish-read', order: 21, label: () => '朗读' }, 朗读按钮)
       // 输入框右侧：麦克风（开始/结束录音）。
       注册(ctx, 'conversation.input.right', { id: 'fish-mic', order: 32, label: () => '语音输入' }, 麦克风按钮)
-      // 输入框右侧：本地识图按钮（点选图片，或把图片拖到按钮上；图片不进草稿）。
+      // 输入框右侧：本地识图按钮（点选图片；图片不进草稿）。
       注册(ctx, 'conversation.input.right', { id: 'fish-vision', order: 31, label: () => '本地识图' }, 本地识图按钮)
       // 输入框上方浮层：录音状态 + 三选一面板（DSH 的 overlay 就挂在这里）。
       注册(ctx, 'conversation.input.overlay', { id: 'fish-voice', order: 40, label: () => '语音输入面板' }, 语音面板)
