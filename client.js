@@ -1469,6 +1469,78 @@ select.fish-select option:checked {
           录音中 ? h('span', { style: { fontSize: 11, fontVariantNumeric: 'tabular-nums' } }, 格式时间(态.seconds)) : null))
     }
 
+    // ---------------- 本地识图：会话图片旁的按钮 ----------------
+    // 官方 MessageImages（priority 100）画画廊；本组件用更低的 priority 占同一个槽位，
+    // 再调 conversation.images.content 把画廊画回来，只在下面多一个按钮。
+
+    function 识图扩展(mime) {
+      const 类型 = String(mime || '').toLowerCase()
+      if (类型.includes('png')) return '.png'
+      if (类型.includes('webp')) return '.webp'
+      if (类型.includes('gif')) return '.gif'
+      if (类型.includes('bmp')) return '.bmp'
+      return '.jpg'
+    }
+
+    /** 把槽位收到的图片读成 blob：附件走宿主授权地址，预览项直接用地址。 */
+    async function 读图片(项, loadImage) {
+      if (!项) return null
+      let 地址 = ''
+      if (项.attachment && typeof loadImage === 'function') 地址 = await loadImage(项.attachment)
+      else if (项.preview && 项.preview.url) 地址 = 项.preview.url
+      if (!地址) return null
+      const 响应 = await fetch(地址)
+      return 响应 && 响应.ok ? 响应.blob() : null
+    }
+
+    function 识图图片(props) {
+      const { images, loadImage, align, compact, renderFactorySlot, inputActions } = props || {}
+      const 偏好态 = useStore(偏好)
+      const [忙, 设忙] = React.useState(false)
+      const [说, 设说] = React.useState('')
+
+      const 开 = !(偏好态 && 偏好态.config) || 偏好态.config.localDescribe !== false
+      const 画 = () => (typeof renderFactorySlot === 'function'
+        ? renderFactorySlot('conversation.images.content', { images, loadImage, align, compact })
+        : null)
+
+      // 关掉本地识图时交还给官方画廊，行为与没有本插件一致。
+      if (!开) return 画()
+
+      const 识别 = async () => {
+        if (忙) return
+        设忙(true); 设说('正在识图…')
+        try {
+          const 图 = await 读图片(Array.isArray(images) ? images[0] : null, loadImage)
+          if (!图) { 设说('读不到这张图，请重新发送。'); return }
+          const 表单 = new FormData()
+          表单.append('file', 图, `image${识图扩展(图.type)}`)
+          表单.append('mode', 'caption')
+          const 结果 = await postForm('/describe-upload', 表单)
+          const 文字 = String((结果 && 结果.text) || '').trim()
+          if (!结果 || !结果.ok || !文字) { 设说((结果 && 结果.hint) || '识图失败，请稍后重试。'); return }
+          设说(插入文本(inputActions, 文字 + '\n') ? '' : '识别结果已复制到剪贴板。')
+        } catch {
+          设说('识图失败，请稍后重试。')
+        } finally {
+          设忙(false)
+        }
+      }
+
+      return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4, alignItems: align === 'end' ? 'flex-end' : 'flex-start' } },
+        画(),
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+          h('button', {
+            type: 'button',
+            style: S.link,
+            disabled: 忙,
+            title: '用本机视觉模型识别这张图',
+            onMouseDown: (事件) => { try { 事件.preventDefault() } catch { /* 忽略 */ } },
+            onClick: () => void 识别(),
+          }, 忙 ? '识图中…' : '本地识图')),
+        说 ? h('div', { style: S.hint }, 说) : null)
+    }
+
     function 格式时间(秒数) {
       const 总 = Math.max(0, Math.trunc(Number(秒数) || 0))
       const 分 = Math.floor(总 / 60)
@@ -1833,6 +1905,7 @@ select.fish-select option:checked {
       requestTimeoutMs: '请求超时',
       asrTimeoutMs: '语音识别超时',
       visionTimeoutMs: '视觉分析超时',
+      localDescribe: '本地识图',
       healthIntervalMs: '状态检查间隔',
       ttsVoice: '默认音色',
       ttsSpeed: '语速',
@@ -2088,6 +2161,12 @@ select.fish-select option:checked {
             ? h('div', { style: { ...S.danger, marginTop: 8 } }, '本地 AI 未启动，请先启动。')
             : null))
 
+      // 识图：一个开关管两处——工具提示（模型优先用本机视觉模型）和图片旁的按钮。
+      const 识图块 = h('div', { style: S.card },
+        h('div', { style: S.h2 }, '识图'),
+        行('本地识图', 勾(配置.localDescribe !== false, (值) => 改('localDescribe', 值)),
+          '需要识图时优先用本机视觉模型；会占用一些显存，第一次调用要等模型加载。'))
+
       const 音色选项 = [{ value: 配置.ttsVoice || 'dafeiyu', label: 配置.ttsVoice || 'dafeiyu' }]
       for (const 名 of 音色们) {
         if (!音色选项.some((x) => x.value === 名)) 音色选项.push({ value: 名, label: 名 })
@@ -2304,6 +2383,7 @@ select.fish-select option:checked {
       return h('div', { className: 'fish-service-settings', style: S.wrap },
         状态块,
         能力块,
+        识图块,
         朗读块,
         翻译块,
         语音块,
@@ -2403,6 +2483,9 @@ select.fish-select option:checked {
       注册(ctx, 'conversation.input.overlay', { id: 'fish-voice', order: 40, label: () => '语音输入面板' }, 语音面板)
       // 输入框左侧：自动朗读开关。
       注册(ctx, 'conversation.input.left', { id: 'fish-auto-read', order: 45, label: () => '自动朗读' }, 自动朗读开关)
+      // 用户消息里的图片：官方画廊 + 一个「本地识图」按钮。
+      // priority 必须小于官方 MessageImages 的 100 才能占据这个槽位（槽位是单占位，不叠加）。
+      注册(ctx, 'conversation.chat.user.images', { id: 'fish-vision', priority: 60 }, 识图图片)
       // 框选文字：朗读 / 翻译（需要同时注册 interaction 与 keyed 槽位）。
       注册选中交互(ctx)
 
@@ -2427,6 +2510,7 @@ select.fish-select option:checked {
       虚拟设备提示,
       注册选中交互,
       选中交互ID,
+      识图扩展,
     }
     return module.exports
   },

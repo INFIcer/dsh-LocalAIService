@@ -3,9 +3,13 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   取边界,
+  取图片扩展,
+  取图片文件,
   取音频扩展,
   取音频文件,
+  是图片扩展,
   是音频扩展,
+  最大图片字节,
   最大音频字节,
   最大录音毫秒,
   解析multipart,
@@ -100,4 +104,30 @@ test('是音频扩展 与 常量', () => {
   assert.equal(读数字字段('3000', 0), 3000)
   assert.equal(读数字字段('abc', 7), 7)
   assert.equal(读数字字段(undefined, 7), 7)
+})
+test('图片：取图片文件 / 取图片扩展 / 是图片扩展 / 上限', () => {
+  const 结果 = {
+    files: [
+      { field: 'thumb', filename: 'a.png', data: Buffer.from('x') },
+      { field: 'image', filename: 'b.webp', data: Buffer.from('y') },
+    ],
+  }
+  assert.equal(取图片文件(结果).field, 'image')
+  assert.equal(取图片文件({ files: [{ field: 'other', filename: 'c.gif' }] }).field, 'other')
+  assert.equal(取图片文件({ files: [] }), null)
+  assert.equal(取图片文件(null), null)
+
+  assert.equal(取图片扩展('image/png', 'x.bin'), '.png')
+  assert.equal(取图片扩展('image/jpeg; charset=binary', 'x'), '.jpg')
+  assert.equal(取图片扩展('image/x-ms-bmp', 'x'), '.bmp')
+  assert.equal(取图片扩展('application/octet-stream', '照片.JPEG'), '.jpg')
+  assert.equal(取图片扩展('application/octet-stream', 'x.webp'), '.webp')
+  assert.equal(取图片扩展('text/plain', 'x.txt'), '')
+  assert.equal(取图片扩展('', ''), '')
+
+  assert.equal(是图片扩展('a.png'), true)
+  assert.equal(是图片扩展('a.JPEG'), true)
+  assert.equal(是图片扩展('a.wav'), false)
+  assert.equal(是图片扩展(''), false)
+  assert.equal(最大图片字节, 15 * 1024 * 1024)
 })

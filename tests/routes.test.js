@@ -135,13 +135,14 @@ function 搭环境({ apiOverrides = {}, 初始快照 = 快照(), refreshImpl = n
   return { routes, api, 配置, configStore, capabilities, 调用, dispose, call }
 }
 
-test('注册 18 条约定路由；全部 kind=exact', () => {
+test('注册 19 条约定路由；全部 kind=exact', () => {
   const env = 搭环境()
   assert.deepEqual([...env.routes.keys()].sort(), [
     '/dsh-fish-service/audio',
     '/dsh-fish-service/cache/cleanup',
     '/dsh-fish-service/cache/clear',
     '/dsh-fish-service/cache/stats',
+    '/dsh-fish-service/describe-upload',
     '/dsh-fish-service/health',
     '/dsh-fish-service/logs',
     '/dsh-fish-service/open-folder',
@@ -894,6 +895,90 @@ test('POST /voice-upload：保留语音写到 cacheDir/voice；超 5 分钟拒�
     })
     assert.equal(超时.res.statusCode, 400)
     assert.match(超时.json.hint, /5 分钟/)
+  } finally {
+    temp.cleanup()
+  }
+})
+
+test('POST /describe-upload：图片上传 → 本机视觉模型 → 文字；临时文件随后删除', async () => {
+  const temp = makeTempDir()
+  try {
+    const cache = 真缓存(temp)
+    const 调用 = []
+    const env = 搭环境({
+      配置补丁: { cacheDir: join(temp.dir, 'cache'), localDescribe: true },
+      缓存: cache,
+      apiOverrides: {
+        visionPrefs: () => ({ localDescribe: true }),
+        visionDescribe: async (路径, opts) => {
+          调用.push({ 路径, opts, 存在: existsSync(路径) })
+          return { ok: true, items: [{ path: 路径, text: '一只橘猫趴在窗台上。', ms: 640 }], ms: 640 }
+        },
+      },
+    })
+    const 图 = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
+    const 体 = 造表单('D1', [
+      { name: 'file', filename: 'cat.png', type: 'image/png', data: 图 },
+      { name: 'mode', data: 'caption' },
+    ])
+    const { res, json } = await env.call('/dsh-fish-service/describe-upload', {
+      method: 'POST', headers: { host: 'x', 'content-type': 'multipart/form-data; boundary=D1' }, body: 体,
+    })
+    assert.equal(res.statusCode, 200)
+    assert.equal(json.ok, true)
+    assert.equal(json.text, '一只橘猫趴在窗台上。')
+    assert.equal(json.mode, 'caption')
+    assert.equal(json.bytes, 图.length)
+    assert.equal(调用.length, 1)
+    assert.equal(调用[0].opts.mode, 'caption')
+    assert.equal(调用[0].存在, true, '调视觉模型时临时文件必须还在')
+    assert.equal(existsSync(调用[0].路径), false, '请求结束后临时文件要删掉')
+  } finally {
+    temp.cleanup()
+  }
+})
+
+test('POST /describe-upload：关闭本地识图要拒绝；非图片、无文件、错方法都有明确提示', async () => {
+  const temp = makeTempDir()
+  try {
+    const cache = 真缓存(temp)
+    const env = 搭环境({
+      配置补丁: { cacheDir: join(temp.dir, 'cache') },
+      缓存: cache,
+      apiOverrides: {
+        visionPrefs: () => ({ localDescribe: false }),
+        visionDescribe: async () => { throw makeError('bad_request', { detail: 'should not run', hint: '不该被调用' }) },
+      },
+    })
+    const 图 = Buffer.from([1, 2, 3])
+    const 关 = 造表单('D2', [{ name: 'file', filename: 'a.png', type: 'image/png', data: 图 }])
+    const 关res = await env.call('/dsh-fish-service/describe-upload', {
+      method: 'POST', headers: { host: 'x', 'content-type': 'multipart/form-data; boundary=D2' }, body: 关,
+    })
+    assert.equal(关res.res.statusCode, 400)
+    assert.match(关res.json.hint, /本地识图已关闭/)
+
+    const 开 = 搭环境({
+      配置补丁: { cacheDir: join(temp.dir, 'cache') },
+      缓存: cache,
+      apiOverrides: { visionPrefs: () => ({ localDescribe: true }), visionDescribe: async () => ({ ok: true, items: [], ms: 1 }) },
+    })
+    const 错 = 造表单('D3', [{ name: 'file', filename: 'a.txt', type: 'text/plain', data: 图 }])
+    const 错res = await 开.call('/dsh-fish-service/describe-upload', {
+      method: 'POST', headers: { host: 'x', 'content-type': 'multipart/form-data; boundary=D3' }, body: 错,
+    })
+    assert.equal(错res.res.statusCode, 400)
+    assert.match(错res.json.hint, /JPG \/ PNG/)
+
+    const 空 = 造表单('D4', [{ name: 'mode', data: 'caption' }])
+    const 空res = await 开.call('/dsh-fish-service/describe-upload', {
+      method: 'POST', headers: { host: 'x', 'content-type': 'multipart/form-data; boundary=D4' }, body: 空,
+    })
+    assert.equal(空res.res.statusCode, 400)
+    assert.match(空res.json.hint, /未收到图片/)
+
+    const 错方法 = await 开.call('/dsh-fish-service/describe-upload')
+    assert.equal(错方法.res.statusCode, 405)
   } finally {
     temp.cleanup()
   }

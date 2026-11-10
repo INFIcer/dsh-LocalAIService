@@ -77,6 +77,7 @@ test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 面板 / �
     'conversation.input.right',
     'conversation.input.overlay',
     'conversation.input.left',
+    'conversation.chat.user.images',
     'conversation.chat.text-interaction',
   ])
   assert.deepEqual(注册们.map((x) => x.配置.id), [
@@ -85,8 +86,11 @@ test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 面板 / �
     'fish-mic',
     'fish-voice',
     'fish-auto-read',
+    'fish-vision',
     undefined,
   ])
+  // 图片槽是单占位：priority 必须小于官方 MessageImages 的 100，否则顶不掉它。
+  assert.equal(注册们.find((x) => x.配置.id === 'fish-vision').配置.priority, 60)
   assert.equal(注册们.at(-1).配置.key, 'fish-selection')
 
   // 框选交互：只对 selection + 有文本的请求 open；其它情况不抢。
@@ -110,8 +114,21 @@ test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 面板 / �
   assert.doesNotThrow(() => 组件们['fish-mic']({ sessionId: 's1' }))
   assert.doesNotThrow(() => 组件们['fish-voice']({ sessionId: 's1' }))
   assert.doesNotThrow(() => 组件们['fish-auto-read']())
+  // 图片旁的识图按钮：空图组也要能渲染（官方画廊由 renderFactorySlot 提供，这里没有就少画一块）。
+  assert.doesNotThrow(() => 组件们['fish-vision']({ images: [], loadImage: async () => '' }))
+  assert.doesNotThrow(() => 组件们['fish-vision']({ images: [{ attachment: { attachmentId: 'a1' } }], loadImage: async () => 'blob:x', align: 'end', compact: true, renderFactorySlot: () => null }))
   // 面板空闲时不应该渲染任何东西。
   assert.equal(组件们['fish-voice']({ sessionId: 's1' }), null)
+
+  // 上传前按 MIME 定扩展名：服务端只认这几种。
+  const { 识图扩展 } = 导出.__testing
+  assert.equal(识图扩展('image/png'), '.png')
+  assert.equal(识图扩展('image/jpeg'), '.jpg')
+  assert.equal(识图扩展('image/webp'), '.webp')
+  assert.equal(识图扩展('image/gif'), '.gif')
+  assert.equal(识图扩展('image/bmp'), '.bmp')
+  assert.equal(识图扩展(''), '.jpg')
+  assert.equal(识图扩展(undefined), '.jpg')
 })
 
 test('client.js：slots 还没就绪时会重试，而不是直接抛错', async () => {

@@ -381,6 +381,28 @@ test('visionDescribe：最多 10 张、缺文件、非图片扩展名都拒绝',
   assert.ok(existsSync(图))
 })
 
+test('visionPrefs：默认开、随配置变、可经 config.set 写入；不探服务', async (t) => {
+  const stack = await makeStack()
+  t.after(() => stack.close())
+
+  // 只读本地配置：服务一次都没探过，也要直接返回。
+  assert.deepEqual(stack.api.visionPrefs(), { localDescribe: true })
+  assert.equal(stack.api.config.get().localDescribe, true)
+
+  const 结果 = await stack.api.config.set({ localDescribe: false })
+  assert.equal(结果.ok, true)
+  assert.ok(结果.applied.includes('localDescribe'))
+  assert.deepEqual(stack.api.visionPrefs(), { localDescribe: false })
+
+  // 只认明确的开：其它值一律按关（与其它布尔字段一致）。
+  const 关 = await stack.api.config.set({ localDescribe: 0 })
+  assert.equal(关.ok, true)
+  assert.deepEqual(stack.api.visionPrefs(), { localDescribe: false })
+
+  await stack.api.config.set({ localDescribe: 1 })
+  assert.deepEqual(stack.api.visionPrefs(), { localDescribe: true })
+})
+
 test('separate：复制 stems 到缓存、返回 dir；未知 stem 拒绝', async (t) => {
   let 源目录 = ''
   const stack = await makeStack({

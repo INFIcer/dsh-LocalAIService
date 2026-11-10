@@ -2,6 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildToolDefinitions, TOOL_NAMES } from '../lib/tools/index.js'
+import { 语音摘要 } from '../lib/tools/tts.js'
 import { makeError } from '../lib/errors.js'
 
 const 能力 = {
@@ -122,6 +123,32 @@ test('fish_tts：合法参数原样传给服务，且不设置 returnBuffer', as
   assert.equal('returnBuffer' in opts, false)
   assert.equal(JSON.stringify(r).includes('base64'), false)
   assert.equal(JSON.stringify(r).includes('buffer'), false)
+})
+
+test('fish_tts：界面只显示一行（几段、文件在哪），失败给 hint', async () => {
+  const { api } = 造假服务()
+  const tts = 工具表(api).get('fish_tts')
+  const r = await tts.execute({ texts: ['你好'] }, {})
+  const 块 = tts.output.render({}, r)
+  assert.equal(块.length, 1)
+  assert.equal(块[0].type, 'text')
+  assert.equal(块[0].text, '语音已生成（1 段）：C:\\cache\\a.wav')
+  assert.equal(块[0].text.includes('{'), false)
+
+  assert.equal(语音摘要({ ok: false, hint: '显存不够。' }), '显存不够。')
+  assert.equal(语音摘要(null), '语音生成失败。')
+  assert.equal(语音摘要({ ok: true, items: [{ ms: 1 }] }), '语音已生成，但服务没有返回文件路径。')
+  assert.equal(语音摘要({ ok: true, items: [{ wavPath: 'a.wav' }, { wavPath: 'b.wav' }] }), '语音已生成（2 段）：a.wav；b.wav')
+})
+
+test('其它工具的结果渲染仍是原样 JSON（不改变既有契约）', async () => {
+  const { api } = 造假服务()
+  const 表 = 工具表(api)
+  const r = await 表.get('fish_describe_image').execute({ paths: ['C:\\a.png'] }, {})
+  const 块 = 表.get('fish_describe_image').output.render({}, r)
+  assert.equal(块.length, 1)
+  assert.equal(块[0].type, 'text')
+  assert.deepEqual(JSON.parse(块[0].text), r)
 })
 
 test('fish_asr：11 个文件 → bad_request；合法参数默认 speaker=true/timestamps=false', async () => {
