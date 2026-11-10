@@ -266,7 +266,7 @@ test('指标读取器：没有 baseUrl 时直接离线，不打上游', async ()
   })
   assert.deepEqual(await 读.read(), { ok: false, code: 'service_down', hint: '本地 AI 未启动' })
   assert.equal(打了, 0)
-  assert.equal(指标超时毫秒, 1500)
+  assert.equal(指标超时毫秒, 3000)
 })
 
 // ---------------- 路由 ----------------
