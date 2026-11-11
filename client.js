@@ -643,19 +643,33 @@ select.fish-select option:checked {
 .fish-metrics-actions { display: flex; gap: 8px; margin-top: 10px; }
 .fish-metrics-actions .fish-btn { flex: 1; padding: 5px 8px; }
 
-/* 右栏「双语翻译」：上下两栏对着翻，长文本在框内滚动。 */
-.fish-tr { display: flex; flex-direction: column; gap: 6px; height: 100%; min-height: 380px; padding: 10px 12px; box-sizing: border-box; }
-.fish-tr-pane { display: flex; flex-direction: column; gap: 4px; flex: 1 1 0; min-height: 0; }
+/* 右栏「双语翻译」：原文/译文左右并排对着翻，窄容器自动改上下；长文本在框内滚动。 */
+.fish-tr { display: flex; flex-direction: column; gap: 6px; height: 100%; min-height: 380px; padding: 10px 12px; box-sizing: border-box; container-type: inline-size; container-name: fish-tr; }
+.fish-tr-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-auto-rows: minmax(0, 1fr); gap: 8px; flex: 1 1 0; min-height: 0; }
+.fish-tr-pane { display: flex; flex-direction: column; gap: 4px; min-width: 0; min-height: 0; }
 .fish-tr-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-height: 16px; font-size: 11.5px; line-height: 1.4; }
 .fish-tr-role { flex: none; font-weight: 600; color: var(--dsw-alias-label-secondary, #666); }
-.fish-tr-textarea { flex: 1 1 0; width: 100%; min-height: 96px; box-sizing: border-box; resize: none; overflow: auto; padding: 8px 10px; border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.14)); border-radius: 8px; background: var(--dsw-alias-bg-layer-1, #fff); color: var(--dsw-alias-label-primary, #1f1f1f); font: inherit; font-size: 13px; line-height: 1.6; }
+.fish-tr-edit { position: relative; flex: 1 1 0; min-height: 96px; border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.14)); border-radius: 8px; background: var(--dsw-alias-bg-layer-1, #fff); overflow: hidden; }
+.fish-tr-edit:focus-within { border-color: var(--dsw-alias-state-business-primary, #2f6fed); }
+.fish-tr-mirror, .fish-tr-textarea { position: absolute; inset: 0; box-sizing: border-box; margin: 0; padding: 8px 10px; border: 0; font: inherit; font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: break-word; word-break: normal; }
+.fish-tr-mirror { color: transparent; overflow: hidden; pointer-events: none; user-select: none; }
+.fish-tr-textarea { width: 100%; height: 100%; resize: none; overflow: auto; background: transparent; color: var(--dsw-alias-label-primary, #1f1f1f); outline: none; }
 .fish-tr-textarea::placeholder { color: var(--dsw-alias-label-secondary, #888); opacity: 1; }
-.fish-tr-textarea:focus { outline: none; border-color: var(--dsw-alias-state-business-primary, #2f6fed); }
-.fish-tr-pane[data-locked="1"] .fish-tr-textarea { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.08)); color: var(--dsw-alias-label-secondary, #666); cursor: default; }
+.fish-tr-seg { border-radius: 3px; background: transparent; }
+.fish-tr-seg[data-active="1"] { background: var(--dsw-alias-state-business-primary-subtle, rgba(47,111,237,.16)); box-shadow: 0 0 0 2px var(--dsw-alias-state-business-primary-subtle, rgba(47,111,237,.16)); }
+.fish-tr-segbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: none; min-height: 24px; font-size: 12px; }
+.fish-tr-segbar[data-idle="1"] { opacity: .85; }
+.fish-tr-segbar .fish-btn { padding: 2px 8px; font-size: 12px; }
+.fish-tr-del { color: var(--dsw-alias-state-error-primary, #c0392b); }
+.fish-tr-pane[data-locked="1"] .fish-tr-edit { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.08)); }
+.fish-tr-pane[data-locked="1"] .fish-tr-textarea { color: var(--dsw-alias-label-secondary, #666); cursor: default; }
 .fish-tr-pane[data-busy="1"] { opacity: .72; }
 .fish-tr-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: none; }
 .fish-tr-actions .fish-btn { display: inline-flex; align-items: center; gap: 6px; }
 .fish-tr-note { font-size: 12px; line-height: 1.5; }
+@container fish-tr (max-width: 380px) {
+  .fish-tr-grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
+}
 `
 
     // 样式只注入一次：每个消息都渲染一份 <style> 会把 DOM 撑爆。
@@ -3195,22 +3209,444 @@ select.fish-select option:checked {
       return 批们
     }
 
-    function 翻译空状态() {
-      return { 上: '', 下: '', 原文侧: null, 阶段: '空闲', 提示: '', 进度: null, 方向: null, 成功: '' }
+    // ---------------- 分段映射 ----------------
+    //
+    // 分段们[i] = { 原文起, 原文止, 原文快照, 译文起, 译文止, 已译 }
+    //   - 原文起/止：第 i 段正文在「原文侧」文本里的区间（不含前导空白和句尾空白）；
+    //   - 译文起/止：对应译文在另一侧文本里的区间；
+    //   - 原文快照：上次翻译时这段的原文，用来判断这段改没改；
+    //   - 已译：这段是否已经有译文可沿用。
+    // 编辑时只把区间折过去，不重排分段；删除/移动分段时再按区间重建两侧文本。
+
+    // 两次文本之间「最小改动区间」：把中间那段换掉。
+    function 求编辑范围(旧文本, 新文本) {
+      const 旧 = String(旧文本 || '')
+      const 新 = String(新文本 || '')
+      const 最短 = Math.min(旧.length, 新.length)
+      let 起 = 0
+      while (起 < 最短 && 旧[起] === 新[起]) 起 += 1
+      let 尾 = 0
+      while (尾 < 最短 - 起 && 旧[旧.length - 1 - 尾] === 新[新.length - 1 - 尾]) 尾 += 1
+      return { 起, 旧止: 旧.length - 尾, 新止: 新.length - 尾 }
     }
 
-    // 编辑规则：翻译中谁都不能改；一旦某一边有字，另一边就只读当译文位；
-    // 只有原文那一侧还能改，改完回到「待翻译」。
+    // 把旧文本里的一个下标折到新文本里；改区间内部的边界贴到改动末尾。
+    function 映射位置(位置, 编辑) {
+      // 纯插入：插在 p 之后的所有边界后移；只有整篇最开头（p=0）的插入算进第一段，
+      // 否则开头新写的字会掉进前导空白、永远不参与翻译。
+      if (编辑.起 === 编辑.旧止) {
+        if (位置 === 0 && 编辑.起 === 0) return 0
+        return 位置 >= 编辑.起 ? 位置 + (编辑.新止 - 编辑.旧止) : 位置
+      }
+      if (位置 <= 编辑.起) return 位置
+      if (位置 >= 编辑.旧止) return 位置 + (编辑.新止 - 编辑.旧止)
+      return 编辑.新止
+    }
+
+    // 侧 = '原文' | '译文'：只调这一侧的区间，另一侧不动。
+    function 调整分段偏移(分段们, 侧, 旧文本, 新文本) {
+      if (!Array.isArray(分段们) || !分段们.length) return 分段们
+      const 编辑 = 求编辑范围(旧文本, 新文本)
+      if (编辑.起 === 编辑.旧止 && 编辑.起 === 编辑.新止) return 分段们
+      const 起键 = 侧 === '原文' ? '原文起' : '译文起'
+      const 止键 = 侧 === '原文' ? '原文止' : '译文止'
+      const 长 = String(新文本 || '').length
+      return 分段们.map((项) => {
+        const 起 = Math.min(长, Math.max(0, 映射位置(项[起键], 编辑)))
+        const 止 = Math.min(长, Math.max(起, 映射位置(项[止键], 编辑)))
+        return { ...项, [起键]: 起, [止键]: 止 }
+      })
+    }
+
+    // 把整段文本按分段区间拆成「前导们 + 内容们」；前导们 比 内容们 多一项。
+    function 切片段(文本, 分段们, 起键, 止键) {
+      const 原文 = String(文本 || '')
+      const 前导们 = []
+      const 内容们 = []
+      let 游标 = 0
+      for (const 项 of 分段们) {
+        const 起 = Math.min(原文.length, Math.max(游标, 项[起键]))
+        const 止 = Math.min(原文.length, Math.max(起, 项[止键]))
+        前导们.push(原文.slice(游标, 起))
+        内容们.push(原文.slice(起, 止))
+        游标 = 止
+      }
+      前导们.push(原文.slice(游标))
+      return { 前导们, 内容们 }
+    }
+
+    // 取某一侧的渲染片段；没有有效映射时返回 null（此时不显示分段高亮）。
+    function 取侧片段(状态, 侧) {
+      const 分段们 = 状态 && 状态.分段们
+      if (!Array.isArray(分段们) || !分段们.length || !状态.原文侧) return null
+      const 文本 = String(状态[侧] || '')
+      if (侧 === 状态.原文侧) return 切片段(文本, 分段们, '原文起', '原文止')
+      return 切片段(文本, 分段们, '译文起', '译文止')
+    }
+
+    function 映射有效(状态) {
+      if (!状态 || !状态.原文侧) return false
+      const 分段们 = 状态.分段们
+      if (!Array.isArray(分段们) || !分段们.length) return false
+      const 另一侧 = 状态.原文侧 === '上' ? '下' : '上'
+      const 原文文本 = String(状态[状态.原文侧] || '')
+      const 译文文本 = String(状态[另一侧] || '')
+      for (const 项 of 分段们) {
+        if (!项 || 项.原文起 > 项.原文止 || 项.译文起 > 项.译文止) return false
+        if (项.原文起 < 0 || 项.译文起 < 0) return false
+        if (项.原文止 > 原文文本.length || 项.译文止 > 译文文本.length) return false
+      }
+      return true
+    }
+
+    // 由「切段结果 + 每段译文」拼出两侧文本和分段映射；已译表决定哪段可沿用。
+    function 拼接分段(段们, 译文表, 已译表) {
+      const 原文块 = []
+      const 译文块 = []
+      const 分段们 = []
+      let 原游标 = 0
+      let 译游标 = 0
+      段们.forEach((段, 索引) => {
+        const 前导 = String(段.前导 || '')
+        const 正文 = String(段.文本 || '')
+        const 尾 = String(段.尾 || '')
+        const 译文 = 译文表[索引] == null ? '' : String(译文表[索引])
+        const 原文起 = 原游标 + 前导.length
+        const 原文止 = 原文起 + 正文.length
+        const 译文起 = 译游标 + 前导.length
+        const 译文止 = 译文起 + 译文.length
+        原文块.push(前导, 正文, 尾)
+        译文块.push(前导, 译文, 尾)
+        原游标 = 原文止 + 尾.length
+        译游标 = 译文止 + 尾.length
+        分段们.push({
+          原文起,
+          原文止,
+          原文快照: 正文,
+          译文起,
+          译文止,
+          已译: 已译表 ? Boolean(已译表[索引]) : true,
+        })
+      })
+      return { 原文文本: 原文块.join(''), 译文文本: 译文块.join(''), 分段们 }
+    }
+
+    function 同方向(甲, 乙) {
+      return Boolean(甲 && 乙 && 甲.source === 乙.source && 甲.target === 乙.target)
+    }
+
+    // 这次要翻什么：方向按原文侧现算；没改过的段先沿用 state 里的译文，
+    // 再查全局缓存，都没有的才进待翻。待翻的段先用上一版译文占位，
+    // 中途失败/取消时框里不会整段变空。
+    function 建翻译计划(状态, 配置) {
+      if (!状态 || !状态.原文侧) return null
+      const 侧 = 状态.原文侧
+      const 另一侧 = 侧 === '上' ? '下' : '上'
+      const 原文 = String(状态[侧] || '')
+      if (!原文.trim()) return null
+      const 方向 = 选翻译方向(原文, 配置)
+      const 段们 = 切段(原文)
+      const 旧分段们 = Array.isArray(状态.分段们) && 状态.分段们.length ? 状态.分段们 : []
+      const 旧译文 = String(状态[另一侧] || '')
+      const 可沿用 = 同方向(状态.方向, 方向) && 旧分段们.length > 0
+      const 译文表 = 段们.map(() => '')
+      const 已译 = 段们.map(() => false)
+      const 待翻 = []
+      const 已用 = new Set()
+      段们.forEach((段, 索引) => {
+        if (!段.文本) {
+          译文表[索引] = ''
+          已译[索引] = true
+          return
+        }
+        if (可沿用) {
+          for (let k = 0; k < 旧分段们.length; k += 1) {
+            const 项 = 旧分段们[k]
+            if (已用.has(k) || !项.已译 || 项.原文快照 !== 段.文本) continue
+            译文表[索引] = 旧译文.slice(项.译文起, 项.译文止)
+            已译[索引] = true
+            已用.add(k)
+            return
+          }
+        }
+        const 缓存 = 读缓存(方向, 段.文本)
+        if (缓存 !== undefined) {
+          译文表[索引] = 缓存
+          已译[索引] = true
+          return
+        }
+        const 旧项 = 旧分段们.length ? 旧分段们[索引] : null
+        if (旧项 && 旧项.已译) 译文表[索引] = 旧译文.slice(旧项.译文起, 旧项.译文止)
+        待翻.push({ 索引, 文本: 段.文本 })
+      })
+      const 总段数 = 段们.filter((段) => 段.文本).length
+      return {
+        侧,
+        另一侧,
+        原文,
+        方向,
+        段们,
+        译文表,
+        已译,
+        待翻,
+        总段数,
+        沿用数: 总段数 - 待翻.length,
+      }
+    }
+
+    function 计划映射(计划) {
+      return 拼接分段(计划.段们, 计划.译文表, 计划.已译)
+    }
+
+    function 翻译开始状态(旧, 计划) {
+      const 结果 = 计划映射(计划)
+      return {
+        ...旧,
+        阶段: '翻译中',
+        提示: '',
+        成功: '',
+        方向: 计划.方向,
+        进度: { 完成: 0, 总数: 计划.待翻.length },
+        [计划.侧]: 计划.原文,
+        [计划.另一侧]: 结果.译文文本,
+        分段们: 结果.分段们,
+      }
+    }
+
+    function 翻译成功状态(旧, 计划) {
+      const 结果 = 计划映射(计划)
+      const 沿用文案 = 计划.沿用数 ? `（${计划.沿用数} 段沿用上次）` : ''
+      return {
+        ...旧,
+        阶段: '空闲',
+        提示: '',
+        进度: null,
+        方向: 计划.方向,
+        [计划.侧]: 计划.原文,
+        [计划.另一侧]: 结果.译文文本,
+        分段们: 结果.分段们,
+        成功: `${翻译方向文案(计划.方向)} · 已翻译 ${计划.总段数} 段${沿用文案}`,
+      }
+    }
+
+    function 翻译中断状态(旧, 计划, 阶段, 提示) {
+      const 结果 = 计划映射(计划)
+      return {
+        ...旧,
+        阶段,
+        提示: 提示 || '',
+        成功: '',
+        进度: null,
+        [计划.侧]: 计划.原文,
+        [计划.另一侧]: 结果.译文文本,
+        分段们: 结果.分段们,
+      }
+    }
+
+    const 翻译重试码 = ['service_down', 'model_loading', 'busy', 'timeout', 'upstream_error']
+
+    // 只跑待翻的批；每翻完一批就把结果写回计划并推给界面。
+    // post / 等待 / 运行 都由调用方注入，单元测试可以完全不走网络。
+    async function 执行翻译(计划, 依赖 = {}) {
+      const 发送 =
+        typeof 依赖.post === 'function'
+          ? 依赖.post
+          : (路径, 体, 选项) => post(路径, 体, 选项 || {})
+      const 运行 = 依赖.运行 || { 已取消: false, 控制器: null }
+      const 推送 = typeof 依赖.推送 === 'function' ? 依赖.推送 : () => {}
+      const 等待 = typeof 依赖.等待 === 'function' ? 依赖.等待 : (毫秒) => new Promise((好) => setTimeout(好, 毫秒))
+      const 批们 = 规划批次(计划.待翻)
+      let 完成 = 0
+      let 失败 = ''
+
+      const 请求一批 = async (批) => {
+        const 体 = {
+          texts: 批.map((项) => ({ id: 项.索引, text: 项.文本 })),
+          source: 计划.方向.source,
+          target: 计划.方向.target,
+        }
+        const 选项 = 运行.控制器 ? { signal: 运行.控制器.signal } : undefined
+        let 结果
+        try {
+          结果 = await 发送('/translate/batch', 体, 选项)
+        } catch {
+          结果 = null
+        }
+        if (运行.已取消) return null
+        const 可重试 = 结果 && !结果.ok && 翻译重试码.includes(结果.code)
+        if (可重试) {
+          await 等待(800)
+          if (运行.已取消) return null
+          try {
+            结果 = await 发送('/translate/batch', 体, 选项)
+          } catch {
+            结果 = null
+          }
+        }
+        return 结果
+      }
+
+      const 跑一批 = async (批) => {
+        const 结果 = await 请求一批(批)
+        if (运行.已取消 || !结果) return
+        if (!结果.ok) {
+          失败 = 结果.hint || '这次没翻完，可以点继续翻译重试'
+          return
+        }
+        const 按索引 = new Map()
+        for (const 条 of 结果.results || []) 按索引.set(String(条 && 条.id), 条)
+        for (const 项 of 批) {
+          const 条 = 按索引.get(String(项.索引))
+          if (条 && !条.error && typeof 条.translated === 'string') {
+            计划.译文表[项.索引] = 条.translated
+            计划.已译[项.索引] = true
+            写缓存(计划.方向, 项.文本, 条.translated)
+            完成 += 1
+          } else {
+            失败 = (条 && 条.error && 条.error.hint) || '这次没翻完，可以点继续翻译重试'
+          }
+        }
+        推送(完成)
+      }
+
+      let 下一个 = 0
+      const 工人 = async () => {
+        for (;;) {
+          if (运行.已取消 || 失败) return
+          const 序号 = 下一个
+          下一个 += 1
+          if (序号 >= 批们.length) return
+          await 跑一批(批们[序号])
+        }
+      }
+      if (批们.length) {
+        const 工人们 = []
+        for (let i = 0; i < Math.min(可取译文, 批们.length); i += 1) 工人们.push(工人())
+        await Promise.all(工人们)
+      }
+      return { 完成, 失败, 已取消: Boolean(运行.已取消), 请求批次: 批们.length }
+    }
+
+    // ---------------- 分段删除 / 移动（只改文本和映射，不请求翻译） ----------------
+
+    function 删除片段项(片段, 索引) {
+      const 段数 = 片段.内容们.length
+      片段.内容们.splice(索引, 1)
+      if (索引 < 段数 - 1) 片段.前导们.splice(索引 + 1, 1)
+      else 片段.前导们.splice(索引, 1)
+    }
+
+    function 交换片段项(片段, 甲, 乙) {
+      const 临时 = 片段.内容们[甲]
+      片段.内容们[甲] = 片段.内容们[乙]
+      片段.内容们[乙] = 临时
+    }
+
+    // 片段们 -> 两侧文本 + 新分段映射；原文快照/已译跟着原来的段走。
+    function 由片段建映射(原文片段, 译文片段, 来源, 旧分段们) {
+      const 段数 = 原文片段.内容们.length
+      const 分段们 = []
+      let 原文本 = 原文片段.前导们[0] || ''
+      let 译文本 = 译文片段.前导们[0] || ''
+      for (let i = 0; i < 段数; i += 1) {
+        const 内容原 = 原文片段.内容们[i] || ''
+        const 内容译 = 译文片段.内容们[i] || ''
+        const 原文起 = 原文本.length
+        const 原文止 = 原文起 + 内容原.length
+        const 译文起 = 译文本.length
+        const 译文止 = 译文起 + 内容译.length
+        原文本 += 内容原 + (原文片段.前导们[i + 1] || '')
+        译文本 += 内容译 + (译文片段.前导们[i + 1] || '')
+        const 旧 = 旧分段们[来源[i]]
+        分段们.push({
+          原文起,
+          原文止,
+          原文快照: 旧 ? 旧.原文快照 : 内容原,
+          译文起,
+          译文止,
+          已译: 旧 ? 旧.已译 : false,
+        })
+      }
+      return { 原文文本: 原文本, 译文文本: 译文本, 分段们 }
+    }
+
+    // 操作 = '删除' | '上移' | '下移'；只动本地状态，不调用翻译服务。
+    function 分段操作(状态, 操作, 索引) {
+      if (!状态 || 状态.阶段 === '翻译中') return 状态
+      if (!映射有效(状态)) return 状态
+      const 分段们 = 状态.分段们
+      const 位置 = Number(索引)
+      if (!Number.isInteger(位置) || 位置 < 0 || 位置 >= 分段们.length) return 状态
+      const 原文侧 = 状态.原文侧
+      const 另一侧 = 原文侧 === '上' ? '下' : '上'
+      const 原文片段 = 切片段(状态[原文侧], 分段们, '原文起', '原文止')
+      const 译文片段 = 切片段(状态[另一侧], 分段们, '译文起', '译文止')
+      const 来源 = 分段们.map((_, i) => i)
+      if (操作 === '删除') {
+        删除片段项(原文片段, 位置)
+        删除片段项(译文片段, 位置)
+        来源.splice(位置, 1)
+      } else if (操作 === '上移' && 位置 > 0) {
+        交换片段项(原文片段, 位置, 位置 - 1)
+        交换片段项(译文片段, 位置, 位置 - 1)
+        const 临时 = 来源[位置]
+        来源[位置] = 来源[位置 - 1]
+        来源[位置 - 1] = 临时
+      } else if (操作 === '下移' && 位置 < 分段们.length - 1) {
+        交换片段项(原文片段, 位置, 位置 + 1)
+        交换片段项(译文片段, 位置, 位置 + 1)
+        const 临时 = 来源[位置]
+        来源[位置] = 来源[位置 + 1]
+        来源[位置 + 1] = 临时
+      } else {
+        return 状态
+      }
+      const 映射 = 由片段建映射(原文片段, 译文片段, 来源, 分段们)
+      if (!映射.原文文本.trim() && !映射.译文文本.trim()) return 翻译空状态()
+      return {
+        ...状态,
+        [原文侧]: 映射.原文文本,
+        [另一侧]: 映射.译文文本,
+        分段们: 映射.分段们,
+        成功: '',
+      }
+    }
+
+    // ---------------- 状态机 ----------------
+
+    function 翻译空状态() {
+      return { 上: '', 下: '', 原文侧: null, 阶段: '空闲', 提示: '', 进度: null, 方向: null, 成功: '', 分段们: null }
+    }
+
+    // 编辑规则：
+    //   - 翻译中谁都不能改；
+    //   - 翻译完成后角色固定（原文侧不变），改译文只改译文，不换方向；
+    //   - 还没翻译过时谁先写谁当原文，另一边先锁着。
     function 翻译编辑(状态, 侧, 值) {
       if (状态.阶段 === '翻译中') return 状态
       const 文本 = String(值 == null ? '' : 值)
       const 下个 = { ...状态, [侧]: 文本, 提示: '', 成功: '' }
-      if (状态.阶段 === '空闲') {
+      const 另一侧 = 侧 === '上' ? '下' : '上'
+      const 有映射 = Array.isArray(状态.分段们) && 状态.分段们.length > 0
+      if (状态.阶段 === '空闲' && !有映射) {
         if (!文本.trim()) {
           if (状态.原文侧 !== 侧) return 下个
-          return { ...下个, 原文侧: null, 方向: null, 进度: null }
+          return { ...下个, 原文侧: null, 方向: null, 进度: null, 分段们: null }
         }
-        return { ...下个, 原文侧: 侧, 阶段: '待翻译', 进度: null, 方向: null }
+        return { ...下个, 原文侧: 侧, 阶段: '待翻译', 方向: null, 进度: null, 分段们: null }
+      }
+      if (有映射) {
+        if (侧 === 状态.原文侧) {
+          if (!文本.trim()) {
+            return { ...翻译空状态(), [侧]: 文本, [另一侧]: 状态[另一侧] }
+          }
+          return {
+            ...下个,
+            阶段: '待翻译',
+            分段们: 调整分段偏移(状态.分段们, '原文', 状态[侧], 文本),
+          }
+        }
+        return { ...下个, 分段们: 调整分段偏移(状态.分段们, '译文', 状态[侧], 文本) }
       }
       if (侧 !== 状态.原文侧) return 状态
       if (!文本.trim()) return { ...下个, 阶段: '空闲', 原文侧: null, 方向: null, 进度: null }
@@ -3219,6 +3655,9 @@ select.fish-select option:checked {
 
     function 翻译锁定侧(状态) {
       if (状态.阶段 === '空闲' || !状态.原文侧) return null
+      const 有映射 = Array.isArray(状态.分段们) && 状态.分段们.length > 0
+      // 已经有分段映射：两侧都能改；原文侧不动，译文侧改了也能直接重翻。
+      if (有映射) return null
       return 状态.原文侧 === '上' ? '下' : '上'
     }
 
@@ -3241,9 +3680,30 @@ select.fish-select option:checked {
       const 会话键 = String((props && props.sessionId) || '')
       const 偏好态 = useStore(偏好)
       const [状态, 设状态] = React.useState(() => 翻译草稿.get(会话键) || 翻译空状态())
+      const [悬停段, 设悬停段] = React.useState(null)
       const 状态引用 = React.useRef(状态)
       状态引用.current = 状态
       const 运行 = React.useRef(null)
+      const 框引用 = React.useRef({ 上: null, 下: null })
+      const 镜引用 = React.useRef({ 上: null, 下: null })
+      const 清除计时 = React.useRef(null)
+
+      const 取消清除计时 = () => {
+        const 计时 = 清除计时.current
+        if (计时) {
+          clearTimeout(计时)
+          清除计时.current = null
+        }
+      }
+      // 鼠标挪到分段操作条上时不要把悬停状态清掉，否则按钮点不到。
+      // 留一点余量：从文本框移到下面按钮的这段路不算「移出」。
+      const 安排清除 = () => {
+        取消清除计时()
+        清除计时.current = setTimeout(() => {
+          清除计时.current = null
+          设悬停段(null)
+        }, 400)
+      }
 
       React.useEffect(() => {
         翻译草稿.set(会话键, 状态)
@@ -3262,15 +3722,24 @@ select.fish-select option:checked {
             if (在跑.控制器) 在跑.控制器.abort()
           }
           运行.current = null
+          取消清除计时()
         }
       }, [])
 
       const 配置 = (偏好态 && 偏好态.config) || {}
       const 原文侧 = 状态.原文侧
+      const 另一侧 = 原文侧 === '上' ? '下' : '上'
       const 翻译中 = 状态.阶段 === '翻译中'
       const 锁定 = 翻译锁定侧(状态)
+      const 有映射 = 映射有效(状态)
+      const 分段数 = Array.isArray(状态.分段们) ? 状态.分段们.length : 0
+      const 当前段 = 有映射 && 悬停段 != null && 悬停段 >= 0 && 悬停段 < 分段数 ? 悬停段 : null
 
-      const 编辑 = (侧, 值) => 设状态((旧) => 翻译编辑(旧, 侧, 值))
+      const 编辑 = (侧, 值) => {
+        取消清除计时()
+        设悬停段(null)
+        设状态((旧) => 翻译编辑(旧, 侧, 值))
+      }
 
       const 取消 = () => {
         const 在跑 = 运行.current
@@ -3279,133 +3748,115 @@ select.fish-select option:checked {
         if (在跑.控制器) 在跑.控制器.abort()
       }
 
+      const 处理分段 = (操作, 索引) => {
+        const 当前 = 状态引用.current
+        if (当前.阶段 === '翻译中') return
+        取消清除计时()
+        设悬停段(null)
+        设状态((旧) => 分段操作(旧, 操作, 索引))
+      }
+
       const 翻译 = async () => {
         const 当前 = 状态引用.current
-        if (!翻译可执行(当前)) return
-        const 侧 = 当前.原文侧
-        const 另一侧 = 侧 === '上' ? '下' : '上'
-        const 原文 = String(当前[侧] || '')
-        const 方向 = 选翻译方向(原文, 偏好.get().config || {})
-        const 段们 = 切段(原文)
-        const { 译文表, 待翻 } = 规划翻译(段们, 方向)
-        const 总段数 = 段们.filter((段) => 段.文本).length
-        const 沿用 = 总段数 - 待翻.length
-        const 批们 = 规划批次(待翻)
-
+        const 计划 = 建翻译计划(当前, 配置)
+        if (!计划) return
+        取消清除计时()
+        设悬停段(null)
         const 运行对象 = {
           已取消: false,
           控制器: typeof AbortController === 'function' ? new AbortController() : null,
         }
         运行.current = 运行对象
-        设状态((旧) => ({
-          ...旧,
-          阶段: '翻译中',
-          提示: '',
-          成功: '',
-          方向,
-          进度: { 完成: 0, 总数: 待翻.length },
-          [另一侧]: 组装译文(段们, 译文表),
-        }))
-
-        const 刷新译文 = () => 设状态((旧) => ({ ...旧, [另一侧]: 组装译文(段们, 译文表) }))
-        let 完成 = 0
-        let 失败 = ''
-
-        const 请求一批 = async (批) => {
-          const 体 = {
-            texts: 批.map((项) => ({ id: 项.索引, text: 项.文本 })),
-            source: 方向.source,
-            target: 方向.target,
-          }
-          let 结果
-          try {
-            结果 = await post('/translate/batch', 体, { signal: 运行对象.控制器 ? 运行对象.控制器.signal : undefined })
-          } catch {
-            结果 = null
-          }
-          if (运行对象.已取消) return null
-          const 可重试 = 结果 && !结果.ok && ['service_down', 'model_loading', 'busy', 'timeout', 'upstream_error'].includes(结果.code)
-          if (可重试) {
-            await new Promise((好) => setTimeout(好, 800))
-            if (运行对象.已取消) return null
-            try {
-              结果 = await post('/translate/batch', 体, { signal: 运行对象.控制器 ? 运行对象.控制器.signal : undefined })
-            } catch {
-              结果 = null
-            }
-          }
-          return 结果
+        设状态((旧) => 翻译开始状态(旧, 计划))
+        const 推送 = (完成) => {
+          设状态((旧) => ({
+            ...翻译开始状态(旧, 计划),
+            进度: { 完成, 总数: 计划.待翻.length },
+          }))
         }
-
-        const 跑一批 = async (批) => {
-          const 结果 = await 请求一批(批)
-          if (运行对象.已取消 || !结果) return
-          if (!结果.ok) {
-            失败 = 结果.hint || '这次没翻完，可以点继续翻译重试'
-            return
-          }
-          const 按索引 = new Map()
-          for (const 条 of 结果.results || []) 按索引.set(String(条 && 条.id), 条)
-          for (const 项 of 批) {
-            const 条 = 按索引.get(String(项.索引))
-            if (条 && !条.error && typeof 条.translated === 'string') {
-              译文表[项.索引] = 条.translated
-              写缓存(方向, 项.文本, 条.translated)
-              完成 += 1
-            } else {
-              失败 = (条 && 条.error && 条.error.hint) || '这次没翻完，可以点继续翻译重试'
-            }
-          }
-          刷新译文()
-          设状态((旧) => ({ ...旧, 进度: { 完成, 总数: 待翻.length } }))
-        }
-
-        let 下一个 = 0
-        const 工人 = async () => {
-          for (;;) {
-            if (运行对象.已取消 || 失败) return
-            const 序号 = 下一个
-            下一个 += 1
-            if (序号 >= 批们.length) return
-            await 跑一批(批们[序号])
-          }
-        }
-        if (批们.length) {
-          const 工人们 = []
-          for (let i = 0; i < Math.min(可取译文, 批们.length); i += 1) 工人们.push(工人())
-          await Promise.all(工人们)
-        }
-
+        const 结果 = await 执行翻译(计划, { 运行: 运行对象, 推送 })
         运行.current = null
-        if (运行对象.已取消) {
-          设状态((旧) => ({ ...旧, 阶段: '已取消', 提示: '已取消，已翻好的部分保留', 进度: null }))
+        if (运行对象.已取消 || (结果 && 结果.已取消)) {
+          设状态((旧) => 翻译中断状态(旧, 计划, '已取消', '已取消，已翻好的部分保留'))
           return
         }
-        if (失败) {
-          设状态((旧) => ({ ...旧, 阶段: '失败', 提示: 失败, 进度: null }))
+        if (结果 && 结果.失败) {
+          设状态((旧) => 翻译中断状态(旧, 计划, '失败', 结果.失败))
           return
         }
-        设状态((旧) => ({
-          ...旧,
-          阶段: '空闲',
-          提示: '',
-          进度: null,
-          原文侧: null,
-          成功: `${翻译方向文案(方向)} · 已翻译 ${总段数} 段${沿用 ? `（${沿用} 段沿用上次）` : ''}`,
-        }))
+        设状态((旧) => 翻译成功状态(旧, 计划))
+      }
+
+      // 悬浮定位：textarea 在上面收事件，背后的 mirror 负责量出每段的位置。
+      const 悬停测量 = (侧, 事件) => {
+        const 当前 = 状态引用.current
+        if (!映射有效(当前)) return
+        const 框 = 框引用.current[侧]
+        const 镜 = 镜引用.current[侧]
+        if (!框 || !镜 || typeof 镜.querySelectorAll !== 'function') return
+        取消清除计时()
+        const 宽 = 框.clientWidth
+        if (宽 > 0 && 镜.style.width !== `${宽}px`) 镜.style.width = `${宽}px`
+        if (镜.scrollTop !== 框.scrollTop) 镜.scrollTop = 框.scrollTop
+        if (镜.scrollLeft !== 框.scrollLeft) 镜.scrollLeft = 框.scrollLeft
+        const 点X = 事件.clientX
+        const 点Y = 事件.clientY
+        let 命中 = null
+        for (const 节点 of 镜.querySelectorAll('[data-seg]')) {
+          const 矩形们 = 节点.getClientRects()
+          for (const 矩形 of 矩形们) {
+            if (点X >= 矩形.left && 点X <= 矩形.right && 点Y >= 矩形.top && 点Y <= 矩形.bottom) {
+              命中 = Number(节点.getAttribute('data-seg'))
+              break
+            }
+          }
+          if (命中 !== null) break
+        }
+        设悬停段(命中)
+      }
+
+      const 同步滚动 = (侧) => {
+        const 框 = 框引用.current[侧]
+        const 镜 = 镜引用.current[侧]
+        if (!框 || !镜) return
+        镜.scrollTop = 框.scrollTop
+        镜.scrollLeft = 框.scrollLeft
+      }
+
+      const 渲染镜像 = (侧) => {
+        const 片段 = 取侧片段(状态, 侧)
+        if (!片段) return null
+        const 子们 = []
+        for (let i = 0; i < 片段.内容们.length; i += 1) {
+          子们.push(片段.前导们[i] || '')
+          子们.push(
+            h(
+              'span',
+              {
+                key: `段${i}`,
+                className: 'fish-tr-seg',
+                'data-seg': i,
+                'data-active': 当前段 === i ? '1' : undefined,
+              },
+              片段.内容们[i] || '',
+            ),
+          )
+        }
+        子们.push(片段.前导们[片段.内容们.length] || '')
+        return 子们
       }
 
       const 侧标签 = (侧) => {
-        if (状态.阶段 === '空闲') return '可输入'
-        return 侧 === 原文侧 ? '原文' : '译文'
+        if (!状态.原文侧) return '可输入'
+        return 侧 === 状态.原文侧 ? '原文' : '译文'
       }
       const 侧说明 = (侧) => {
-        if (状态.阶段 === '空闲') return ''
+        if (!状态.原文侧) return ''
         if (翻译中) return '正在翻译，暂时不能编辑'
-        return 侧 === 原文侧 ? '这边是原文' : '译文输出，翻译后可编辑'
+        return 侧 === 状态.原文侧 ? '这边是原文' : '译文输出，翻译后可编辑'
       }
       const 占位 = (侧) => {
-        if (状态.阶段 === '空闲' || 侧 === 原文侧) return '输入或粘贴要翻译的文字'
+        if (!状态.原文侧 || 侧 === 状态.原文侧) return '输入或粘贴要翻译的文字'
         return '点「翻译」后，译文出现在这里'
       }
 
@@ -3427,16 +3878,70 @@ select.fish-select option:checked {
             h('span', { className: 'fish-tr-role' }, 侧标签(侧)),
             h('span', { className: 'fish-panel-dim' }, 侧说明(侧)),
           ),
-          h('textarea', {
-            className: 'fish-tr-textarea',
-            value: 状态[侧],
-            readOnly: 翻译中 || 锁定 === 侧,
-            disabled: 翻译中,
-            placeholder: 占位(侧),
-            'aria-label': `${侧标签(侧)}框`,
-            onChange: (事件) => 编辑(侧, 事件.target.value),
-          }),
+          h(
+            'div',
+            { className: 'fish-tr-edit' },
+            有映射 ? h('div', { className: 'fish-tr-mirror', 'aria-hidden': 'true', ref: (节点) => { 镜引用.current[侧] = 节点 } }, 渲染镜像(侧)) : null,
+            h('textarea', {
+              className: 'fish-tr-textarea',
+              value: 状态[侧],
+              readOnly: 翻译中 || 锁定 === 侧,
+              disabled: 翻译中,
+              placeholder: 占位(侧),
+              'aria-label': `${侧标签(侧)}框`,
+              ref: (节点) => { 框引用.current[侧] = 节点 },
+              onMouseMove: (事件) => 悬停测量(侧, 事件),
+              onMouseLeave: 安排清除,
+              onScroll: () => 同步滚动(侧),
+              onChange: (事件) => 编辑(侧, 事件.target.value),
+            }),
+          ),
         )
+
+      const 分段条 =
+        有映射 && !翻译中
+          ? h(
+              'div',
+              {
+                className: 'fish-tr-segbar',
+                'data-idle': 当前段 == null ? '1' : undefined,
+                onMouseEnter: 取消清除计时,
+                onMouseLeave: 安排清除,
+              },
+              当前段 == null
+                ? h('span', { className: 'fish-panel-dim' }, `共 ${分段数} 段，悬浮分段可单独处理`)
+                : [
+                    h('span', { key: '位置', className: 'fish-panel-dim' }, `第 ${当前段 + 1}/${分段数} 段`),
+                    h('button', {
+                      key: '上移',
+                      type: 'button',
+                      className: 'fish-btn',
+                      disabled: 当前段 === 0,
+                      title: '与上一段交换位置',
+                      onClick: () => 处理分段('上移', 当前段),
+                    }, '上移'),
+                    h('button', {
+                      key: '下移',
+                      type: 'button',
+                      className: 'fish-btn',
+                      disabled: 当前段 === 分段数 - 1,
+                      title: '与下一段交换位置',
+                      onClick: () => 处理分段('下移', 当前段),
+                    }, '下移'),
+                    h('button', {
+                      key: '删除',
+                      type: 'button',
+                      className: 'fish-btn fish-tr-del',
+                      title: '删除这一段，两侧一起删除',
+                      onClick: () => {
+                        const 问 = typeof window !== 'undefined' && typeof window.confirm === 'function'
+                        if (问 && !window.confirm('删除这一段？两侧对应内容会一起删除，无法撤销。')) return
+                        处理分段('删除', 当前段)
+                      },
+                    }, '删除'),
+                  ],
+            )
+          : null
 
       const 提示 = 状态.提示
         ? h('div', { className: 状态.阶段 === '失败' ? 'fish-err fish-tr-note' : 'fish-panel-dim fish-tr-note', role: 'status' }, 状态.提示)
@@ -3449,8 +3954,8 @@ select.fish-select option:checked {
       return h(
         'div',
         { className: 'fish-tr' },
-        一栏('上'),
-        一栏('下'),
+        h('div', { className: 'fish-tr-grid' }, 一栏('上'), 一栏('下')),
+        分段条,
         h(
           'div',
           { className: 'fish-tr-actions' },
@@ -3696,6 +4201,22 @@ select.fish-select option:checked {
       组装译文,
       规划翻译,
       规划批次,
+      取翻译方向配置,
+      求编辑范围,
+      映射位置,
+      调整分段偏移,
+      切片段,
+      取侧片段,
+      映射有效,
+      拼接分段,
+      同方向,
+      建翻译计划,
+      执行翻译,
+      翻译开始状态,
+      翻译成功状态,
+      翻译中断状态,
+      分段操作,
+      翻译草稿,
       缓存键,
       读缓存,
       写缓存,
