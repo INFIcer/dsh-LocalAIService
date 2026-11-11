@@ -269,6 +269,21 @@ test('POST /save：按会话自动朗读随补丁原样传给配置层', async (
   assert.deepEqual(env.调用.保存.at(-1), { autoReadSessions: 会话 })
 })
 
+test('POST /save：四个界面开关能真正写进配置（不再被白名单丢掉）', async () => {
+  const env = 搭环境()
+  for (const [字段, 值] of [['uiVoiceInput', false], ['uiVision', false], ['uiMetrics', false], ['uiAutoRead', false]]) {
+    const r = await env.call('/dsh-fish-service/save', {
+      method: 'POST',
+      body: { config: { [字段]: 值 } },
+      headers: { host: '127.0.0.1:10154' },
+    })
+    assert.equal(r.res.statusCode, 200, 字段)
+    assert.deepEqual(r.json.applied, [字段], 字段)
+    assert.deepEqual(env.调用.保存.at(-1), { [字段]: 值 }, 字段)
+  }
+})
+
+
 test('POST /test：在线返回能力；离线返回 code/hint', async () => {
   const env = 搭环境()
   const ok = await env.call('/dsh-fish-service/test', {
