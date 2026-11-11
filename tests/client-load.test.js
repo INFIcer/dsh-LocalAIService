@@ -51,14 +51,21 @@ test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 本地识�
     throw new Error(`未预期的 require：${名字}`)
   })
   assert.equal(typeof 导出.apply, 'function')
-  assert.deepEqual([...导出.inject], ['slots', 'uiConversation'])
+  assert.deepEqual([...导出.inject], ['slots', 'uiConversation', 'sidebarRightTabs'])
 
   const 注册们 = []
   const 交互们 = []
+  const 右栏定义 = []
   const 服务 = {
     inject: (_槽位, 回调) => 回调(),
     register: (配置, 组件) => {
       注册们.push({ 配置, 组件 })
+      return () => {}
+    },
+  }
+  const 右栏 = {
+    register: (定义) => {
+      右栏定义.push(定义)
       return () => {}
     },
   }
@@ -70,7 +77,10 @@ test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 本地识�
       },
     },
   }
-  const ctx = { get: (名字) => (名字 === 'slots' ? 服务 : 名字 === 'uiConversation' ? ui : undefined) }
+  const ctx = {
+    get: (名字) =>
+      名字 === 'slots' ? 服务 : 名字 === 'uiConversation' ? ui : 名字 === 'sidebarRightTabs' ? 右栏 : undefined,
+  }
   导出.apply(ctx)
 
   assert.deepEqual(注册们.map((x) => x.配置.name), [
@@ -82,6 +92,7 @@ test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 本地识�
     'conversation.input.left',
     'conversation.input.left',
     'conversation.chat.text-interaction',
+    'sidebar.right.pane.tab',
   ])
   assert.deepEqual(注册们.map((x) => x.配置.id), [
     'fish-service',
@@ -91,6 +102,7 @@ test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 本地识�
     'fish-voice',
     'fish-auto-read',
     'fish-metrics',
+    undefined,
     undefined,
   ])
   // 本地识图是输入框旁的独立按钮，和麦克风同一排；官方附件栏不再被顶替。
@@ -102,7 +114,26 @@ test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 本地识�
   assert.equal(状态胶囊.配置.priority, undefined)
   assert.equal(注册们.some((x) => x.配置.name === 'conversation.input.attachments'), false)
   assert.equal(注册们.some((x) => x.配置.name === 'shell.bottom'), false)
-  assert.equal(注册们.at(-1).配置.key, 'fish-selection')
+  assert.equal(注册们.at(-2).配置.key, 'fish-selection')
+  // 右栏面板是 keyed 槽，key 必须是 tab 类型的 id。
+  assert.equal(注册们.at(-1).配置.key, 'dsh-fish-service/translate')
+  // 面板靠 inject 拿当前会话 id，草稿才能按会话隔离。
+  assert.equal(typeof 注册们.at(-1).配置.inject, 'function')
+  assert.equal(注册们.at(-1).配置.inject('session-1').sessionId, 'session-1')
+
+  // 右栏卡片：只注册一个类型，id/kind 都要唯一，guide 里给出一张入口卡。
+  assert.equal(右栏定义.length, 1)
+  assert.equal(右栏定义[0].id, 'dsh-fish-service/translate')
+  assert.equal(右栏定义[0].kind, 'fish-translate')
+  assert.equal(右栏定义[0].keepMounted, true)
+  assert.equal(右栏定义[0].title(), '双语翻译')
+  assert.equal(右栏定义[0].guide.length, 1)
+  assert.deepEqual(
+    { id: 右栏定义[0].guide[0].id, order: 右栏定义[0].guide[0].order },
+    { id: 'translate', order: 35 },
+  )
+  assert.equal(右栏定义[0].guide[0].title(), '双语翻译')
+  assert.match(右栏定义[0].guide[0].description(), /对着翻/)
 
   // 框选交互：只对 selection + 有文本的请求 open；其它情况不抢。
   assert.equal(交互们.length, 1)
@@ -132,6 +163,9 @@ test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 本地识�
   assert.doesNotThrow(() => 组件们['fish-vision']())
   // 面板空闲时不应该渲染任何东西。
   assert.equal(组件们['fish-voice']({ sessionId: 's1' }), null)
+  // 右栏翻译面板：没有会话 id 也要能渲染。
+  assert.doesNotThrow(() => 导出.__testing.翻译面板({}))
+  assert.doesNotThrow(() => 导出.__testing.翻译面板({ sessionId: 's1' }))
 
   // 上传前按 MIME 定扩展名：服务端只认这几种。
   const { 识图扩展 } = 导出.__testing

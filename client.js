@@ -27,7 +27,7 @@ window.__ModuleLoader__.load({
     const module = { exports: {} }
     const exports = module.exports
     const React = require('react')
-    const inject = ['slots', 'uiConversation']
+    const inject = ['slots', 'uiConversation', 'sidebarRightTabs']
     const h = React.createElement
     const B = '/dsh-fish-service'
 
@@ -642,6 +642,20 @@ select.fish-select option:checked {
 .fish-metrics-hint { color: #e0524a; margin-top: 6px; }
 .fish-metrics-actions { display: flex; gap: 8px; margin-top: 10px; }
 .fish-metrics-actions .fish-btn { flex: 1; padding: 5px 8px; }
+
+/* 右栏「双语翻译」：上下两栏对着翻，长文本在框内滚动。 */
+.fish-tr { display: flex; flex-direction: column; gap: 6px; height: 100%; min-height: 380px; padding: 10px 12px; box-sizing: border-box; }
+.fish-tr-pane { display: flex; flex-direction: column; gap: 4px; flex: 1 1 0; min-height: 0; }
+.fish-tr-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-height: 16px; font-size: 11.5px; line-height: 1.4; }
+.fish-tr-role { flex: none; font-weight: 600; color: var(--dsw-alias-label-secondary, #666); }
+.fish-tr-textarea { flex: 1 1 0; width: 100%; min-height: 96px; box-sizing: border-box; resize: none; overflow: auto; padding: 8px 10px; border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.14)); border-radius: 8px; background: var(--dsw-alias-bg-layer-1, #fff); color: var(--dsw-alias-label-primary, #1f1f1f); font: inherit; font-size: 13px; line-height: 1.6; }
+.fish-tr-textarea::placeholder { color: var(--dsw-alias-label-secondary, #888); opacity: 1; }
+.fish-tr-textarea:focus { outline: none; border-color: var(--dsw-alias-state-business-primary, #2f6fed); }
+.fish-tr-pane[data-locked="1"] .fish-tr-textarea { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.08)); color: var(--dsw-alias-label-secondary, #666); cursor: default; }
+.fish-tr-pane[data-busy="1"] { opacity: .72; }
+.fish-tr-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: none; }
+.fish-tr-actions .fish-btn { display: inline-flex; align-items: center; gap: 6px; }
+.fish-tr-note { font-size: 12px; line-height: 1.5; }
 `
 
     // 样式只注入一次：每个消息都渲染一份 <style> 会把 DOM 撑爆。
@@ -2963,6 +2977,567 @@ select.fish-select option:checked {
         展开 ? 浮层 : null)
     }
 
+    // ---------------- 右栏「双语翻译」：分段、缓存、面板 ----------------
+
+    const 翻译TabID = 'dsh-fish-service/translate'
+    const 翻译TabKind = 'fish-translate'
+    const 翻译语言名称 = { zh: '中文', en: '英文', ja: '日文', ko: '韩文', yue: '粤语' }
+
+    const 段字数上限 = 800
+    const 每批段数上限 = 20
+    const 每批字数上限 = 8000
+    const 翻译缓存上限 = 2000
+    const 可取译文 = 2
+
+    // 与 lib/lang.js 的 检测语言 同规则（本地字符范围判断，不请求模型）。
+    function 检测语言(文本) {
+      let 假名 = 0
+      let 谚文 = 0
+      let 汉字 = 0
+      let 拉丁 = 0
+      for (const 字 of String(文本 || '')) {
+        const 码 = 字.codePointAt(0)
+        if ((码 >= 0x3040 && 码 <= 0x30ff) || (码 >= 0x31f0 && 码 <= 0x31ff)) 假名 += 1
+        else if ((码 >= 0xac00 && 码 <= 0xd7af) || (码 >= 0x1100 && 码 <= 0x11ff)) 谚文 += 1
+        else if ((码 >= 0x4e00 && 码 <= 0x9fff) || (码 >= 0x3400 && 码 <= 0x4dbf) || (码 >= 0xf900 && 码 <= 0xfaff)) 汉字 += 1
+        else if ((码 >= 0x41 && 码 <= 0x5a) || (码 >= 0x61 && 码 <= 0x7a) || (码 >= 0xc0 && 码 <= 0x24f)) 拉丁 += 1
+      }
+      if (假名 > 0) return 'ja'
+      if (谚文 > 0) return 'ko'
+      if (汉字 > 0) return 'zh'
+      if (拉丁 > 0) return 'en'
+      return null
+    }
+
+    function 翻译语言标签(代码) {
+      return 翻译语言名称[代码] || String(代码 || '')
+    }
+
+    function 取翻译方向配置(配置) {
+      const 第一 = 翻译语言名称[配置 && 配置.primaryLanguage] ? 配置.primaryLanguage : 'zh'
+      const 第二 = 翻译语言名称[配置 && 配置.secondaryLanguage] ? 配置.secondaryLanguage : 'en'
+      return { 第一, 第二 }
+    }
+
+    // 需求规则：原文语言不是第一语言就翻成第一语言，否则翻成第二语言；测不出来按第一语言。
+    function 选翻译方向(文本, 配置) {
+      const { 第一, 第二 } = 取翻译方向配置(配置)
+      const 检测到 = 检测语言(文本)
+      const 目标 = !检测到 ? 第一 : 检测到 === 第一 ? 第二 : 第一
+      return { source: 检测到 || 'auto', target: 目标, detected: 检测到 }
+    }
+
+    function 翻译方向文案(方向) {
+      const 源 = 方向 && 方向.source === 'auto' ? '自动检测' : 翻译语言标签(方向 && 方向.source)
+      return `${源} → ${翻译语言标签(方向 && 方向.target)}`
+    }
+
+    // 按钮下面那行规则说明；lead 要求一行、20 字左右、不可点选。
+    function 翻译规则文案(配置) {
+      const { 第一, 第二 } = 取翻译方向配置(配置)
+      return `自动：非${翻译语言标签(第一)} → ${翻译语言标签(第一)}，${翻译语言标签(第一)} → ${翻译语言标签(第二)}`
+    }
+
+    const 句末标点 = '。！？!?；;…'
+    const 收尾字符 = '」』"”’）)】]'
+
+    // 把一段文字按句末标点/换行切开；尾是句末空白，重组时原样贴回。
+    function 切句(文本) {
+      const 原文 = String(文本 || '')
+      const 段们 = []
+      let 起 = 0
+      for (let i = 0; i < 原文.length; i += 1) {
+        const 字 = 原文[i]
+        const 换行 = 字 === '\n'
+        const 句末 = !换行 && (句末标点.includes(字) || (字 === '.' && (i + 1 >= 原文.length || /\s/.test(原文[i + 1]))))
+        if (!换行 && !句末) continue
+        let 内容末 = 换行 ? i : i + 1
+        while (!换行 && 内容末 < 原文.length && 收尾字符.includes(原文[内容末])) 内容末 += 1
+        let 尾起 = 内容末
+        while (尾起 < 原文.length && /\s/.test(原文[尾起])) 尾起 += 1
+        const 内容 = 原文.slice(起, 内容末)
+        if (!内容) {
+          const 空白 = 原文.slice(起, 尾起)
+          if (段们.length) 段们[段们.length - 1].尾 += 空白
+          else if (空白) 段们.push({ 前导: '', 文本: '', 尾: 空白 })
+        } else {
+          段们.push({ 前导: '', 文本: 内容, 尾: 原文.slice(内容末, 尾起) })
+        }
+        起 = 尾起
+        i = 尾起 - 1
+      }
+      if (起 < 原文.length) 段们.push({ 前导: '', 文本: 原文.slice(起), 尾: '' })
+      return 段们
+    }
+
+    // 单句超过段上限：尽量在空格处切，实在没有就硬切。
+    function 硬切(文本, 上限 = 段字数上限) {
+      const 原文 = String(文本 || '')
+      const 段们 = []
+      let 起 = 0
+      while (原文.length - 起 > 上限) {
+        const 窗口 = 原文.slice(起, 起 + 上限)
+        const 候选 = Math.max(窗口.lastIndexOf(' '), 窗口.lastIndexOf('\t'), 窗口.lastIndexOf('\n'))
+        const 切 = 起 + (候选 > 上限 * 0.5 ? 候选 : 上限)
+        let 尾起 = 切
+        while (尾起 < 原文.length && /\s/.test(原文[尾起])) 尾起 += 1
+        段们.push({ 前导: '', 文本: 原文.slice(起, 切), 尾: 原文.slice(切, 尾起) })
+        起 = 尾起
+      }
+      if (起 < 原文.length) 段们.push({ 前导: '', 文本: 原文.slice(起), 尾: '' })
+      return 段们
+    }
+
+    // 切段：先按空行切块（整块优先，保住上下文），块太长再切句/硬切。
+    function 切段(文本) {
+      const 原文 = String(文本 || '')
+      const 段们 = []
+      const 块们 = 原文.split(/(\r?\n[ \t]*\r?\n+)/)
+      for (let i = 0; i < 块们.length; i += 2) {
+        const 块原文 = 块们[i]
+        const 块尾 = 块们[i + 1] || ''
+        if (!块原文) {
+          if (段们.length) 段们[段们.length - 1].尾 += 块尾
+          else if (块尾) 段们.push({ 前导: '', 文本: '', 尾: 块尾 })
+          continue
+        }
+        const 前导 = (块原文.match(/^[ \t]*/) || [''])[0]
+        const 块内容 = 块原文.slice(前导.length)
+        if (块内容.length <= 段字数上限) {
+          段们.push({ 前导, 文本: 块内容, 尾: 块尾 })
+          continue
+        }
+        const 句们 = 切句(块内容)
+        const 拆开 = []
+        for (const 句 of 句们) {
+          if (句.文本.length <= 段字数上限) {
+            拆开.push(句)
+            continue
+          }
+          const 片们 = 硬切(句.文本, 段字数上限)
+          if (片们.length) 片们[片们.length - 1].尾 += 句.尾
+          拆开.push(...片们)
+        }
+        if (!拆开.length) 拆开.push({ 前导: '', 文本: 块内容, 尾: '' })
+        拆开[0].前导 = 前导
+        拆开[拆开.length - 1].尾 += 块尾
+        段们.push(...拆开)
+      }
+      return 段们
+    }
+
+    function 组装译文(段们, 译文表) {
+      return 段们.map((段, 索引) => `${段.前导 || ''}${译文表[索引] == null ? '' : 译文表[索引]}${段.尾 || ''}`).join('')
+    }
+
+    // 缓存键带方向：同一段中文翻英文和翻日文的译文不能混用。
+    const 翻译缓存 = new Map()
+
+    function 缓存键(方向, 文本) {
+      const 源 = (方向 && 方向.source) || 'auto'
+      const 目标 = (方向 && 方向.target) || ''
+      return `${源}→${目标}\u0000${文本}`
+    }
+
+    function 读缓存(方向, 文本) {
+      const 键 = 缓存键(方向, 文本)
+      if (!翻译缓存.has(键)) return undefined
+      const 译文 = 翻译缓存.get(键)
+      翻译缓存.delete(键)
+      翻译缓存.set(键, 译文)
+      return 译文
+    }
+
+    function 写缓存(方向, 文本, 译文) {
+      const 键 = 缓存键(方向, 文本)
+      翻译缓存.delete(键)
+      翻译缓存.set(键, 译文)
+      while (翻译缓存.size > 翻译缓存上限) {
+        const 最旧 = 翻译缓存.keys().next().value
+        翻译缓存.delete(最旧)
+      }
+    }
+
+    function 清空翻译缓存() {
+      翻译缓存.clear()
+    }
+
+    // 规划：空段不翻；命中缓存的段直接用，剩下的才要请求。
+    function 规划翻译(段们, 方向) {
+      const 译文表 = 段们.map(() => '')
+      const 待翻 = []
+      段们.forEach((段, 索引) => {
+        if (!段.文本) return
+        const 命中 = 读缓存(方向, 段.文本)
+        if (命中 !== undefined) {
+          译文表[索引] = 命中
+          return
+        }
+        待翻.push({ 索引, 文本: 段.文本 })
+      })
+      return { 译文表, 待翻 }
+    }
+
+    function 规划批次(待翻, 段数上限 = 每批段数上限, 字数上限 = 每批字数上限) {
+      const 批们 = []
+      let 当前 = []
+      let 字数 = 0
+      for (const 项 of 待翻) {
+        if (当前.length && (当前.length >= 段数上限 || 字数 + 项.文本.length > 字数上限)) {
+          批们.push(当前)
+          当前 = []
+          字数 = 0
+        }
+        当前.push(项)
+        字数 += 项.文本.length
+      }
+      if (当前.length) 批们.push(当前)
+      return 批们
+    }
+
+    function 翻译空状态() {
+      return { 上: '', 下: '', 原文侧: null, 阶段: '空闲', 提示: '', 进度: null, 方向: null, 成功: '' }
+    }
+
+    // 编辑规则：翻译中谁都不能改；一旦某一边有字，另一边就只读当译文位；
+    // 只有原文那一侧还能改，改完回到「待翻译」。
+    function 翻译编辑(状态, 侧, 值) {
+      if (状态.阶段 === '翻译中') return 状态
+      const 文本 = String(值 == null ? '' : 值)
+      const 下个 = { ...状态, [侧]: 文本, 提示: '', 成功: '' }
+      if (状态.阶段 === '空闲') {
+        if (!文本.trim()) {
+          if (状态.原文侧 !== 侧) return 下个
+          return { ...下个, 原文侧: null, 方向: null, 进度: null }
+        }
+        return { ...下个, 原文侧: 侧, 阶段: '待翻译', 进度: null, 方向: null }
+      }
+      if (侧 !== 状态.原文侧) return 状态
+      if (!文本.trim()) return { ...下个, 阶段: '空闲', 原文侧: null, 方向: null, 进度: null }
+      return { ...下个, 阶段: '待翻译' }
+    }
+
+    function 翻译锁定侧(状态) {
+      if (状态.阶段 === '空闲' || !状态.原文侧) return null
+      return 状态.原文侧 === '上' ? '下' : '上'
+    }
+
+    function 翻译可执行(状态) {
+      if (状态.阶段 === '翻译中') return false
+      if (!状态.原文侧) return false
+      return Boolean(String(状态[状态.原文侧] || '').trim())
+    }
+
+    function 翻译按钮文字(状态) {
+      if (状态.阶段 === '翻译中') return '正在翻译…'
+      if (状态.阶段 === '已取消' || 状态.阶段 === '失败') return '继续翻译'
+      return '翻译'
+    }
+
+    // 每个会话留一份草稿：切走再切回来，原文和已翻好的译文都还在。
+    const 翻译草稿 = new Map()
+
+    function 翻译面板(props) {
+      const 会话键 = String((props && props.sessionId) || '')
+      const 偏好态 = useStore(偏好)
+      const [状态, 设状态] = React.useState(() => 翻译草稿.get(会话键) || 翻译空状态())
+      const 状态引用 = React.useRef(状态)
+      状态引用.current = 状态
+      const 运行 = React.useRef(null)
+
+      React.useEffect(() => {
+        翻译草稿.set(会话键, 状态)
+        if (翻译草稿.size > 20) {
+          const 最旧 = 翻译草稿.keys().next().value
+          if (最旧 !== 会话键) 翻译草稿.delete(最旧)
+        }
+      }, [会话键, 状态])
+
+      React.useEffect(() => {
+        if (!偏好.get().载入) void 载入偏好()
+        return () => {
+          const 在跑 = 运行.current
+          if (在跑) {
+            在跑.已取消 = true
+            if (在跑.控制器) 在跑.控制器.abort()
+          }
+          运行.current = null
+        }
+      }, [])
+
+      const 配置 = (偏好态 && 偏好态.config) || {}
+      const 原文侧 = 状态.原文侧
+      const 翻译中 = 状态.阶段 === '翻译中'
+      const 锁定 = 翻译锁定侧(状态)
+
+      const 编辑 = (侧, 值) => 设状态((旧) => 翻译编辑(旧, 侧, 值))
+
+      const 取消 = () => {
+        const 在跑 = 运行.current
+        if (!在跑) return
+        在跑.已取消 = true
+        if (在跑.控制器) 在跑.控制器.abort()
+      }
+
+      const 翻译 = async () => {
+        const 当前 = 状态引用.current
+        if (!翻译可执行(当前)) return
+        const 侧 = 当前.原文侧
+        const 另一侧 = 侧 === '上' ? '下' : '上'
+        const 原文 = String(当前[侧] || '')
+        const 方向 = 选翻译方向(原文, 偏好.get().config || {})
+        const 段们 = 切段(原文)
+        const { 译文表, 待翻 } = 规划翻译(段们, 方向)
+        const 总段数 = 段们.filter((段) => 段.文本).length
+        const 沿用 = 总段数 - 待翻.length
+        const 批们 = 规划批次(待翻)
+
+        const 运行对象 = {
+          已取消: false,
+          控制器: typeof AbortController === 'function' ? new AbortController() : null,
+        }
+        运行.current = 运行对象
+        设状态((旧) => ({
+          ...旧,
+          阶段: '翻译中',
+          提示: '',
+          成功: '',
+          方向,
+          进度: { 完成: 0, 总数: 待翻.length },
+          [另一侧]: 组装译文(段们, 译文表),
+        }))
+
+        const 刷新译文 = () => 设状态((旧) => ({ ...旧, [另一侧]: 组装译文(段们, 译文表) }))
+        let 完成 = 0
+        let 失败 = ''
+
+        const 请求一批 = async (批) => {
+          const 体 = {
+            texts: 批.map((项) => ({ id: 项.索引, text: 项.文本 })),
+            source: 方向.source,
+            target: 方向.target,
+          }
+          let 结果
+          try {
+            结果 = await post('/translate/batch', 体, { signal: 运行对象.控制器 ? 运行对象.控制器.signal : undefined })
+          } catch {
+            结果 = null
+          }
+          if (运行对象.已取消) return null
+          const 可重试 = 结果 && !结果.ok && ['service_down', 'model_loading', 'busy', 'timeout', 'upstream_error'].includes(结果.code)
+          if (可重试) {
+            await new Promise((好) => setTimeout(好, 800))
+            if (运行对象.已取消) return null
+            try {
+              结果 = await post('/translate/batch', 体, { signal: 运行对象.控制器 ? 运行对象.控制器.signal : undefined })
+            } catch {
+              结果 = null
+            }
+          }
+          return 结果
+        }
+
+        const 跑一批 = async (批) => {
+          const 结果 = await 请求一批(批)
+          if (运行对象.已取消 || !结果) return
+          if (!结果.ok) {
+            失败 = 结果.hint || '这次没翻完，可以点继续翻译重试'
+            return
+          }
+          const 按索引 = new Map()
+          for (const 条 of 结果.results || []) 按索引.set(String(条 && 条.id), 条)
+          for (const 项 of 批) {
+            const 条 = 按索引.get(String(项.索引))
+            if (条 && !条.error && typeof 条.translated === 'string') {
+              译文表[项.索引] = 条.translated
+              写缓存(方向, 项.文本, 条.translated)
+              完成 += 1
+            } else {
+              失败 = (条 && 条.error && 条.error.hint) || '这次没翻完，可以点继续翻译重试'
+            }
+          }
+          刷新译文()
+          设状态((旧) => ({ ...旧, 进度: { 完成, 总数: 待翻.length } }))
+        }
+
+        let 下一个 = 0
+        const 工人 = async () => {
+          for (;;) {
+            if (运行对象.已取消 || 失败) return
+            const 序号 = 下一个
+            下一个 += 1
+            if (序号 >= 批们.length) return
+            await 跑一批(批们[序号])
+          }
+        }
+        if (批们.length) {
+          const 工人们 = []
+          for (let i = 0; i < Math.min(可取译文, 批们.length); i += 1) 工人们.push(工人())
+          await Promise.all(工人们)
+        }
+
+        运行.current = null
+        if (运行对象.已取消) {
+          设状态((旧) => ({ ...旧, 阶段: '已取消', 提示: '已取消，已翻好的部分保留', 进度: null }))
+          return
+        }
+        if (失败) {
+          设状态((旧) => ({ ...旧, 阶段: '失败', 提示: 失败, 进度: null }))
+          return
+        }
+        设状态((旧) => ({
+          ...旧,
+          阶段: '空闲',
+          提示: '',
+          进度: null,
+          原文侧: null,
+          成功: `${翻译方向文案(方向)} · 已翻译 ${总段数} 段${沿用 ? `（${沿用} 段沿用上次）` : ''}`,
+        }))
+      }
+
+      const 侧标签 = (侧) => {
+        if (状态.阶段 === '空闲') return '可输入'
+        return 侧 === 原文侧 ? '原文' : '译文'
+      }
+      const 侧说明 = (侧) => {
+        if (状态.阶段 === '空闲') return ''
+        if (翻译中) return '正在翻译，暂时不能编辑'
+        return 侧 === 原文侧 ? '这边是原文' : '译文输出，翻译后可编辑'
+      }
+      const 占位 = (侧) => {
+        if (状态.阶段 === '空闲' || 侧 === 原文侧) return '输入或粘贴要翻译的文字'
+        return '点「翻译」后，译文出现在这里'
+      }
+
+      const 可执行 = 翻译可执行(状态)
+      const 禁用原因 = 可执行 || 翻译中 ? '' : '先输入要翻译的文字'
+      const 进度线 = 翻译中 ? `正在翻译 ${状态.进度 ? 状态.进度.完成 : 0}/${状态.进度 ? 状态.进度.总数 : 0} 段` : ''
+
+      const 一栏 = (侧) =>
+        h(
+          'div',
+          {
+            className: 'fish-tr-pane',
+            'data-locked': 锁定 === 侧 ? '1' : undefined,
+            'data-busy': 翻译中 ? '1' : undefined,
+          },
+          h(
+            'div',
+            { className: 'fish-tr-head' },
+            h('span', { className: 'fish-tr-role' }, 侧标签(侧)),
+            h('span', { className: 'fish-panel-dim' }, 侧说明(侧)),
+          ),
+          h('textarea', {
+            className: 'fish-tr-textarea',
+            value: 状态[侧],
+            readOnly: 翻译中 || 锁定 === 侧,
+            disabled: 翻译中,
+            placeholder: 占位(侧),
+            'aria-label': `${侧标签(侧)}框`,
+            onChange: (事件) => 编辑(侧, 事件.target.value),
+          }),
+        )
+
+      const 提示 = 状态.提示
+        ? h('div', { className: 状态.阶段 === '失败' ? 'fish-err fish-tr-note' : 'fish-panel-dim fish-tr-note', role: 'status' }, 状态.提示)
+        : 状态.成功
+          ? h('div', { className: 'fish-ok fish-tr-note', role: 'status' }, 状态.成功)
+          : 禁用原因
+            ? h('div', { className: 'fish-panel-dim fish-tr-note' }, 禁用原因)
+            : null
+
+      return h(
+        'div',
+        { className: 'fish-tr' },
+        一栏('上'),
+        一栏('下'),
+        h(
+          'div',
+          { className: 'fish-tr-actions' },
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'fish-btn',
+              'data-primary': '1',
+              disabled: !可执行,
+              'aria-busy': 翻译中 ? 'true' : undefined,
+              onClick: () => void 翻译(),
+            },
+            翻译中 ? 图标转圈(13) : null,
+            翻译按钮文字(状态),
+          ),
+          翻译中 ? h('button', { type: 'button', className: 'fish-btn', onClick: 取消 }, '取消') : null,
+          进度线 ? h('span', { className: 'fish-panel-dim', role: 'status' }, 进度线) : null,
+        ),
+        提示,
+        h('div', { className: 'fish-panel-dim fish-tr-note' }, 翻译规则文案(配置)),
+      )
+    }
+
+    function 翻译图标({ size = 26, className } = {}) {
+      return h(
+        'svg',
+        {
+          viewBox: '0 0 24 24',
+          width: size,
+          height: size,
+          className,
+          fill: 'none',
+          stroke: 'currentColor',
+          strokeWidth: 1.7,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          'aria-hidden': true,
+        },
+        h('path', { d: 'M3.4 5.2h8.2M7.5 3.4v1.8M10.4 5.2c-.7 2.8-2.3 5.3-4.5 7.1M5.2 9.4c1.4 1.8 3.1 3.1 5 3.8' }),
+        h('path', { d: 'M12.6 19.6 16.2 10h.9l3.6 9.6M13.9 16.2h5.2' }),
+      )
+    }
+
+    // 右栏「开始」页的卡片：注册一个 tab 类型 + guide 条目，body 走 sidebar.right.pane.tab 槽。
+    function 注册右栏(ctx) {
+      let 剩余 = 40
+      const 尝试 = () => {
+        let 右栏 = null
+        try {
+          右栏 = ctx.get('sidebarRightTabs')
+        } catch {
+          右栏 = null
+        }
+        if ((!右栏 || typeof 右栏.register !== 'function') && ctx && ctx.sidebarRightTabs) 右栏 = ctx.sidebarRightTabs
+        if (!右栏 || typeof 右栏.register !== 'function') {
+          if (剩余 > 0) {
+            剩余 -= 1
+            setTimeout(尝试, 250)
+          } else {
+            try { console.warn('[dsh-fish-service] 右栏服务没就绪，双语翻译卡片没有注册') } catch { /* 忽略 */ }
+          }
+          return
+        }
+        try {
+          右栏.register({
+            id: 翻译TabID,
+            kind: 翻译TabKind,
+            title: () => '双语翻译',
+            keepMounted: true,
+            guide: [
+              {
+                id: 'translate',
+                order: 35,
+                title: () => '双语翻译',
+                description: () => '两段文字对着翻，长的只重译改过的地方',
+                icon: 翻译图标,
+              },
+            ],
+          })
+        } catch (错误) {
+          try { console.warn('[dsh-fish-service] 注册双语翻译卡片失败', 错误) } catch { /* 忽略 */ }
+        }
+      }
+      尝试()
+    }
+
     // ---------------- 注册 ----------------
 
     function 注册(ctx, 槽位, 配置项, 组件) {
@@ -3059,6 +3634,10 @@ select.fish-select option:checked {
       注册(ctx, 'conversation.input.left', { id: 'fish-metrics', order: 40, label: () => '本地 AI 状态' }, 指标胶囊)
       // 框选文字：朗读 / 翻译（需要同时注册 interaction 与 keyed 槽位）。
       注册选中交互(ctx)
+      // 右栏「开始」页：双语翻译卡片（guide 入口 + 面板 body）。
+      // inject 拿到当前会话 id，面板据此给每个会话留一份草稿。
+      注册(ctx, 'sidebar.right.pane.tab', { key: 翻译TabID, inject: (会话) => ({ sessionId: 会话 }) }, 翻译面板)
+      注册右栏(ctx)
 
       // 预热一次偏好（不阻塞）；失败也无所谓，组件挂载时会再拉。
       void 载入偏好()
@@ -3106,6 +3685,27 @@ select.fish-select option:checked {
       语音附件名,
       取会话对话,
       挂语音附件,
+      检测语言,
+      选翻译方向,
+      翻译方向文案,
+      翻译规则文案,
+      翻译语言标签,
+      切段,
+      切句,
+      硬切,
+      组装译文,
+      规划翻译,
+      规划批次,
+      缓存键,
+      读缓存,
+      写缓存,
+      清空翻译缓存,
+      翻译空状态,
+      翻译编辑,
+      翻译锁定侧,
+      翻译可执行,
+      翻译按钮文字,
+      翻译面板,
       Section,
     }
     return module.exports
