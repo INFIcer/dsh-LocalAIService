@@ -542,3 +542,75 @@ test('schemastery 配置 schema 能构建（拿不到包时允许为 undefined�
     temp.cleanup()
   }
 })
+
+test('界面开关：默认开，明确关闭才关，非法值回落默认，env 可覆盖', () => {
+  const temp = makeTempDir()
+  try {
+    const 键们 = ['uiVoiceInput', 'uiVision', 'uiMetrics', 'uiAutoRead']
+    const 默认 = defaultConfig(temp.dir)
+    for (const 键 of 键们) assert.equal(默认[键], true)
+
+    // 旧配置没有这四个字段：按开处理，行为与以前一致。
+    const 旧 = normalizeConfig({ autoRead: true }, { homeDir: temp.dir })
+    for (const 键 of 键们) assert.equal(旧[键], true)
+
+    // 无法识别的值：回落默认（开），不抛错。
+    assert.equal(normalizeConfig({ uiVoiceInput: '乱写' }, { homeDir: temp.dir }).uiVoiceInput, true)
+
+    // false / 'false' / 0 / '0' 都算关；true / 'true' / 1 / '1' 都算开。
+    for (const 键 of 键们) {
+      for (const 值 of [false, 'false', 0, '0']) {
+        assert.equal(normalizeConfig({ [键]: 值 }, { homeDir: temp.dir })[键], false)
+      }
+      for (const 值 of [true, 'true', 1, '1']) {
+        assert.equal(normalizeConfig({ [键]: 值 }, { homeDir: temp.dir })[键], true)
+      }
+    }
+
+    // 环境变量最高优先级；大小写两套变量名都认。
+    const 覆盖 = applyEnv(defaultConfig(temp.dir), {
+      DSH_FISH_SERVICE_UI_VISION: 'false',
+      FISH_SERVICE_UI_AUTO_READ: '0',
+      FISH_SERVICE_UI_METRICS: 'true',
+    }, { homeDir: temp.dir })
+    assert.equal(覆盖.config.uiVision, false)
+    assert.equal(覆盖.config.uiAutoRead, false)
+    assert.equal(覆盖.config.uiMetrics, true)
+    assert.deepEqual(覆盖.overrides.sort(), ['uiAutoRead', 'uiMetrics', 'uiVision'])
+  } finally {
+    temp.cleanup()
+  }
+})
+
+test('界面开关：保存后真正落盘，重读仍是关闭', async () => {
+  const temp = makeTempDir()
+  try {
+    const store = new ConfigStore({ homeDir: temp.dir })
+    store.load({}, {})
+    store.save({
+      ...store.current,
+      uiVoiceInput: false,
+      uiMetrics: false,
+      uiVision: true,
+      uiAutoRead: false,
+    })
+    const raw = JSON.parse(readFileSync(join(temp.dir, 'fish-service-config.json'), 'utf8'))
+    assert.equal(raw.uiVoiceInput, false)
+    assert.equal(raw.uiMetrics, false)
+    assert.equal(raw.uiVision, true)
+    assert.equal(raw.uiAutoRead, false)
+
+    const again = new ConfigStore({ homeDir: temp.dir })
+    const 重读 = again.load({}, {})
+    assert.equal(重读.uiVoiceInput, false)
+    assert.equal(重读.uiAutoRead, false)
+    assert.deepEqual(again.warnings, [])
+
+    // schema 里也要有这四项，设置页才能正常绑定。
+    const z = await import('@deepseek-ai/schemastery')
+    const text = String(buildConfigSchema(z.default, temp.dir))
+    for (const 键 of ['uiVoiceInput', 'uiVision', 'uiMetrics', 'uiAutoRead']) assert.match(text, new RegExp(键))
+  } finally {
+    temp.cleanup()
+  }
+})

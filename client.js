@@ -743,6 +743,7 @@ select.fish-select option:checked {
       const 播放中 = 正在这条 && 播放态.phase === 'playing'
       const 自动朗读 = 读会话自动朗读(偏好态.config, 会话键)
       const 后台朗读 = 读后台自动朗读(偏好态.config)
+      const 全局自动朗读开 = 界面开关开(偏好态.config, '自动朗读')
 
       const 取文本 = () => 文本 || DOM取文本(按钮.current)
 
@@ -764,7 +765,7 @@ select.fish-select option:checked {
       // 是否朗读由「后台也自动朗读」决定（默认开）。
       React.useEffect(() => {
         if (!挂载时已载入.current) return
-        if (!偏好态.载入 || !自动朗读) return
+        if (!偏好态.载入 || !自动朗读 || !全局自动朗读开) return
         if (!文本 || !位置) return
         const [轮次文本, 最后] = String(位置).split('|')
         if (最后 !== '1') return
@@ -776,7 +777,7 @@ select.fish-select option:checked {
         if (!是否自动朗读(偏好态.config, 会话键, 页面可见)) return
         已自动朗读.add(messageId)
         void 播放.合成并播放(messageId, 文本, 偏好.get().config || {})
-      }, [文本, 位置, 偏好态.载入, 自动朗读, 后台朗读, messageId, 会话键])
+      }, [文本, 位置, 偏好态.载入, 自动朗读, 后台朗读, 全局自动朗读开, messageId, 会话键])
 
       const 标题 = 合成中 ? '正在准备朗读，再点一次可取消'
         : 播放中 ? '停止朗读'
@@ -1244,6 +1245,8 @@ select.fish-select option:checked {
     }
 
     async function 开始录音(props) {
+      // 语音识别总开关关掉时录音功能不可用（按钮已隐藏，这里再兜一次）。
+      if (!界面开关开(偏好.get().config, '语音识别')) return
       const 当前 = 语音.态.get().phase
       if (当前 !== 'idle' && 当前 !== 'error') return
       if (语音.关闭定时) { clearTimeout(语音.关闭定时); 语音.关闭定时 = null }
@@ -1586,6 +1589,7 @@ select.fish-select option:checked {
       const { sessionId, inputActions } = props || {}
       const 态 = useStore(语音.态)
       const 偏好态 = useStore(偏好)
+      const 语音开 = 界面开关开(偏好态.config, '语音识别')
 
       React.useEffect(() => {
         保活(true)
@@ -1612,6 +1616,17 @@ select.fish-select option:checked {
         }, 1500)
         return () => clearInterval(定时)
       }, [sessionId, inputActions])
+
+      // 总开关关掉时立刻停掉正在进行的录音并收起面板；框选朗读/翻译不受影响。
+      React.useEffect(() => {
+        if (语音开) return
+        const 现 = 语音.态.get()
+        if (现.phase === 'recording') void 停止录音()
+        else if (现.phase !== 'idle') 取消录音()
+        关闭语音面板()
+      }, [语音开])
+
+      if (!语音开) return null
 
       const 本会话 = !态.sessionId || !sessionId || 态.sessionId === sessionId
       const 录音中 = 本会话 && 态.phase === 'recording'
@@ -1674,6 +1689,22 @@ select.fish-select option:checked {
     /** 偏好里的「本地识图」是否开着（默认开）。 */
     function 本地识图开(配置) {
       return !(配置 && 配置.localDescribe === false)
+    }
+
+    // 界面注入开关：设置页「界面」分区的四个勾选；配置里明确关闭才关，旧配置缺字段按开。
+    const 界面开关键 = {
+      语音识别: 'uiVoiceInput',
+      本地识图: 'uiVision',
+      性能监控: 'uiMetrics',
+      自动朗读: 'uiAutoRead',
+    }
+
+    /** 某个界面注入功能是否开着（名称可写中文名或配置键；默认开）。 */
+    function 界面开关开(配置, 名称) {
+      const 键 = 界面开关键[名称] || 名称
+      const 值 = 配置 && typeof 配置 === 'object' ? 配置[键] : undefined
+      if (值 === false || 值 === 'false' || 值 === 0 || 值 === '0') return false
+      return true
     }
 
     // 识图档位：与服务端 lib/vision-presets.js 对齐；客户端只用它做下拉和参数兜底。
@@ -1780,6 +1811,7 @@ select.fish-select option:checked {
     function 本地识图按钮(props) {
       const { sessionId } = props || {}
       const 偏好态 = useStore(偏好)
+      const 识图开 = 界面开关开(偏好态.config, '本地识图')
       const 提示态 = useStore(识图提示)
       const [忙, 设忙] = React.useState(false)
       const [说, 设说] = React.useState('')
@@ -1790,6 +1822,8 @@ select.fish-select option:checked {
         载入偏好()
         return () => { if (计时.current) clearTimeout(计时.current) }
       }, [])
+
+      if (!识图开) return null
 
       const 告诉 = (文案) => {
         设说(文案)
@@ -1892,6 +1926,7 @@ select.fish-select option:checked {
       const { sessionId, inputActions } = props || {}
       const 态 = useStore(语音.态)
       const 偏好态 = useStore(偏好)
+      const 语音开 = 界面开关开(偏好态.config, '语音识别')
 
       React.useEffect(() => {
         保活(true)
@@ -1902,6 +1937,16 @@ select.fish-select option:checked {
           if (现.phase === 'recording' && (!sessionId || 现.sessionId === sessionId)) 取消录音()
         }
       }, [sessionId])
+
+      // 总开关关掉时面板不再出现，正在录的音也一并停掉。
+      React.useEffect(() => {
+        if (语音开) return
+        const 现 = 语音.态.get()
+        if (现.phase === 'recording') void 停止录音()
+        关闭语音面板()
+      }, [语音开])
+
+      if (!语音开) return null
 
       // 录音中没有 sessionId 也要显示（会话说变就变），面板只服务当前会话。
       if (态.phase === 'idle') return null
@@ -2029,6 +2074,7 @@ select.fish-select option:checked {
 
     function 自动朗读开关(props) {
       const 偏好态 = useStore(偏好)
+      const 自动朗读开 = 界面开关开(偏好态.config, '自动朗读')
       const [忙, 设忙] = React.useState(false)
       const 会话键 = String(props?.sessionId || '')
       const 可设置 = 会话键合法(会话键)
@@ -2038,6 +2084,8 @@ select.fish-select option:checked {
         if (!偏好.get().载入) void 载入偏好()
         return () => 保活(false)
       }, [])
+
+      if (!自动朗读开) return null
 
       const 开 = 读会话自动朗读(偏好态.config, 会话键)
       // 偏好还没读回来时不写：否则空表会把其它会话已有的设置覆盖掉。
@@ -2268,6 +2316,10 @@ select.fish-select option:checked {
       installDir: '安装目录',
       logLevel: '日志级别',
       token: '访问令牌',
+      uiAutoRead: '自动朗读',
+      uiMetrics: '性能监控',
+      uiVision: '本地识图',
+      uiVoiceInput: '语音识别',
     }
 
     // 多行提示词输入框：和单行输入同一套边框，只是允许拉高。
@@ -2721,6 +2773,23 @@ select.fish-select option:checked {
         h('div', { style: { ...S.dim, marginTop: 4 } },
           '没指定目标语言时按上面的规则自动选择。'))
 
+      // 界面：四个注入开关放一个可折叠分区，避免设置页一上来就很长。
+      const 界面块 = h('div', { style: S.card },
+        h('div', { style: S.h2 }, '界面'),
+        h(折叠块, {
+          摘要: '输入框里的按钮与状态',
+          展开字样: '查看开关',
+          收起字样: '收起',
+        },
+          行('语音识别', 勾(配置.uiVoiceInput !== false, (v) => 改('uiVoiceInput', v)),
+            '关闭后输入框不再显示麦克风按钮。'),
+          行('本地识图', 勾(配置.uiVision !== false, (v) => 改('uiVision', v)),
+            '关闭后输入框不再显示识图按钮。'),
+          行('性能监控', 勾(配置.uiMetrics !== false, (v) => 改('uiMetrics', v)),
+            '关闭后输入框不再显示显存与任务状态。'),
+          行('自动朗读', 勾(配置.uiAutoRead !== false, (v) => 改('uiAutoRead', v)),
+            '关闭后所有会话都不再自动朗读，手动朗读不受影响。')))
+
       // 吸顶操作条：标题、在线状态和页面级按钮都在这里，内容在它下面滚动。
       const 操作条 = h('div', { style: S.bar },
         h('div', { style: S.barRow },
@@ -2774,6 +2843,7 @@ select.fish-select option:checked {
       return h('div', { className: 'fish-service-settings', style: S.wrap },
         操作条,
         状态块,
+        界面块,
         能力块,
         识图块,
         朗读块,
@@ -2864,6 +2934,8 @@ select.fish-select option:checked {
     }
 
     function 指标胶囊() {
+      const 偏好态 = useStore(偏好)
+      const 指标开 = 界面开关开(偏好态.config, '性能监控')
       const [态, 设态] = React.useState({ 载入: false, 数据: null })
       const [展开, 设展开] = React.useState(false)
       const [提示, 设提示] = React.useState('')
@@ -2878,6 +2950,10 @@ select.fish-select option:checked {
       }, [])
 
       React.useEffect(() => {
+        if (!指标开) {
+          设态({ 载入: false, 数据: null })
+          return undefined
+        }
         let 定时器 = 0
         void 拉()
         定时器 = setInterval(() => { void 拉() }, 指标轮询毫秒)
@@ -2887,7 +2963,7 @@ select.fish-select option:checked {
           clearInterval(定时器)
           if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', 页面可见)
         }
-      }, [拉])
+      }, [拉, 指标开])
 
       React.useEffect(() => {
         if (!展开 || typeof document === 'undefined') return undefined
@@ -2904,6 +2980,8 @@ select.fish-select option:checked {
           document.removeEventListener('keydown', 按Esc, true)
         }
       }, [展开])
+
+      if (!指标开) return null
 
       const 打开管理 = async (事件) => {
         事件?.stopPropagation?.()
@@ -4460,6 +4538,14 @@ select.fish-select option:checked {
       识图扩展,
       是图片文件,
       本地识图开,
+      界面开关开,
+      界面开关键,
+      偏好,
+      麦克风按钮,
+      本地识图按钮,
+      语音面板,
+      自动朗读开关,
+      指标胶囊,
       识图档位们,
       识图档位选项,
       规范识图档位,

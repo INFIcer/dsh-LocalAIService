@@ -236,6 +236,38 @@ test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 本地识�
   assert.equal(测试.规范识图档位(null), '')
   // 表情包档已经挪到鱼讯插件，这里不再有。
   assert.equal(测试.识图档位们.some((档) => 档.id === 'sticker'), false)
+
+  // ---- 界面注入开关：纯函数按中文名或配置键判断；旧配置缺字段按开 ----
+  const { 界面开关开, 界面开关键, 偏好 } = 测试
+  for (const 名 of ['语音识别', '本地识图', '性能监控', '自动朗读']) {
+    assert.equal(界面开关开({}, 名), true)
+    assert.equal(界面开关开(null, 名), true)
+    assert.equal(界面开关开({ [界面开关键[名]]: false }, 名), false)
+    assert.equal(界面开关开({ [界面开关键[名]]: 'false' }, 名), false)
+    assert.equal(界面开关开({ [界面开关键[名]]: 0 }, 名), false)
+    assert.equal(界面开关开({ [界面开关键[名]]: true }, 名), true)
+  }
+  assert.equal(界面开关开({ uiMetrics: false }, 'uiMetrics'), false)
+  assert.equal(界面开关开({ uiMetrics: '乱写' }, 'uiMetrics'), true)
+
+  // 关掉后对应注入组件返回 null（组件仍挂载，hooks 照常跑，才能即时停掉副作用）。
+  for (const [配置键, 组件ID] of [
+    ['uiVoiceInput', 'fish-mic'],
+    ['uiVision', 'fish-vision'],
+    ['uiMetrics', 'fish-metrics'],
+    ['uiAutoRead', 'fish-auto-read'],
+  ]) {
+    const 原配置 = 偏好.get().config
+    try {
+      assert.notEqual(组件们[组件ID]({ sessionId: 's1' }), null)
+      偏好.set((旧) => ({ ...旧, config: { ...(旧.config || {}), [配置键]: false } }))
+      assert.equal(组件们[组件ID]({ sessionId: 's1' }), null)
+    } finally {
+      偏好.set((旧) => ({ ...旧, config: 原配置 }))
+    }
+    // 恢复后重新可见。
+    assert.notEqual(组件们[组件ID]({ sessionId: 's1' }), null)
+  }
 })
 
 test('client.js：slots 还没就绪时会重试，而不是直接抛错', async () => {
