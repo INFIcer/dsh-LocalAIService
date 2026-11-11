@@ -184,45 +184,47 @@ test('批次：满 20 段或满 8000 字就另起一批', () => {
   assert.deepEqual(直(测试.规划批次([])), [])
 })
 
-test('状态机：改一边锁另一边；翻译中都不能改；完成后回到都可编辑', () => {
+test('状态机：同步 → 修改中 → 翻译中 → 同步，三态全路径', () => {
   const { 测试 } = 载入()
   let 状态 = 测试.翻译空状态()
-  assert.equal(状态.阶段, '空闲')
-  assert.equal(测试.翻译可执行(状态), false)
+  assert.equal(状态.阶段, '同步', '空状态是同步态')
+  assert.equal(状态.原文侧, null)
+  assert.equal(测试.翻译锁定侧(状态), null, '同步态两边都可编辑')
+  assert.equal(测试.翻译可执行(状态), false, '同步态没定原文，按钮禁用')
   assert.equal(测试.翻译按钮文字(状态), '翻译')
-  assert.equal(测试.翻译锁定侧(状态), null)
 
+  // 同步态任一框写入非空内容 → 修改中，这侧是原文，另一侧锁定。
   状态 = 测试.翻译编辑(状态, '上', '你好')
+  assert.equal(状态.阶段, '修改中')
   assert.equal(状态.原文侧, '上')
-  assert.equal(状态.阶段, '待翻译')
   assert.equal(测试.翻译锁定侧(状态), '下')
   assert.equal(测试.翻译可执行(状态), true)
 
-  // 锁住的一边写不进去。
+  // 修改中继续改原文：还是修改中。
+  const 再改 = 测试.翻译编辑(状态, '上', '你好呀')
+  assert.equal(再改.阶段, '修改中')
+  assert.equal(再改.上, '你好呀')
+
+  // 修改中改译文侧：纯函数直接拒绝。
   assert.equal(测试.翻译编辑(状态, '下', '偷偷改'), 状态)
 
-  // 翻译中两个框都不能改，按钮显示进度文案。
-  const 翻译中 = { ...状态, 阶段: '翻译中' }
-  assert.equal(测试.翻译编辑(翻译中, '上', '改'), 翻译中)
-  assert.equal(测试.翻译可执行(翻译中), false)
-  assert.equal(测试.翻译按钮文字(翻译中), '正在翻译…')
+  // 翻译中两侧都不能改，按钮变进度文案。
+  const 翻译中状态 = { ...状态, 阶段: '翻译中' }
+  assert.equal(测试.翻译编辑(翻译中状态, '上', '改'), 翻译中状态)
+  assert.equal(测试.翻译编辑(翻译中状态, '下', '改'), 翻译中状态)
+  assert.equal(测试.翻译可执行(翻译中状态), false)
+  assert.equal(测试.翻译按钮文字(翻译中状态), '正在翻译…')
+  assert.equal(测试.翻译锁定侧(翻译中状态), null, '翻译中两侧都只读，不归「锁定侧」管')
 
-  // 完成后回空闲：两边都能改，改另一边就换方向。
-  const 完成 = { ...状态, 阶段: '空闲', 提示: '', 进度: null, 方向: null, 成功: '', 下: 'hello' }
-  assert.equal(测试.翻译可执行(完成), true)
-  assert.equal(测试.翻译锁定侧(完成), null)
-  const 反向 = 测试.翻译编辑(完成, '下', 'hello world')
-  assert.equal(反向.原文侧, '下')
-  assert.equal(反向.阶段, '待翻译')
-
-  // 取消 / 失败都显示「继续翻译」。
-  assert.equal(测试.翻译按钮文字({ ...状态, 阶段: '已取消' }), '继续翻译')
-  assert.equal(测试.翻译按钮文字({ ...状态, 阶段: '失败' }), '继续翻译')
-
-  // 清空原文回空闲。
+  // 清空原文 → 回同步态，另一侧内容保留。
   const 清空 = 测试.翻译编辑(状态, '上', '   ')
-  assert.equal(清空.阶段, '空闲')
+  assert.equal(清空.阶段, '同步')
   assert.equal(清空.原文侧, null)
+  assert.equal(测试.翻译可执行(清空), false)
+
+  // 失败 / 取消都停在修改中，按钮显示继续翻译。
+  assert.equal(测试.翻译按钮文字({ ...状态, 提示: '服务暂时不可用' }), '继续翻译')
+  assert.equal(测试.翻译按钮文字({ ...状态, 提示: '已取消，已翻好的部分保留' }), '继续翻译')
 })
 
 test('面板：两个框 + 翻译按钮 + 方向规则一行；空闲时提示先输入', () => {
@@ -305,28 +307,37 @@ async function 造完成状态(测试, 原文, 记录) {
   return 测试.翻译成功状态(初始, 计划)
 }
 
-test('编辑规则：翻译完成后原文侧保留，改译文不换方向，再翻全部沿用', async () => {
+test('编辑规则：翻译完成后回同步态，两侧可编辑；谁再编辑谁就是原文', async () => {
   const { 测试 } = 载入()
   const 记录 = []
   const 完成 = await 造完成状态(测试, 三段原文, 记录)
   assert.equal(记录.length, 1)
-  assert.equal(完成.原文侧, '上', '翻译成功后不能再把两边都当新输入')
+  assert.equal(完成.阶段, '同步')
+  assert.equal(完成.原文侧, null, '翻译成功后原文侧清空')
   assert.equal(完成.下, 三段译文)
+  assert.equal(测试.翻译锁定侧(完成), null, '同步态两侧都可编辑')
+  assert.equal(测试.映射有效(完成), true, '同步态分段映射仍然可用')
+  assert.equal(测试.翻译可执行(完成), false, '同步态还没定原文，按钮先禁用')
+  assert.equal(测试.建翻译计划(完成, 翻译配置), null)
 
-  // 用户去改译文里的小错：原文侧和方向都不许动。
+  // 用户去改译文里的小错：被编辑的这侧成为新的原文，另一侧锁成译文输出。
   测试.清空翻译缓存()
   const 改译 = 测试.翻译编辑(完成, '下', 完成.下.replace(译(段文[1]), 译(段文[1]) + '（手改）'))
-  assert.equal(改译.原文侧, '上')
-  assert.equal(改译.阶段, '空闲')
-  assert.deepEqual(直(改译.方向), 直(完成.方向), '改译文不能把方向翻过来')
+  assert.equal(改译.阶段, '修改中')
+  assert.equal(改译.原文侧, '下', '谁再编辑谁就是新的原文')
+  assert.equal(测试.翻译锁定侧(改译), '上')
+  assert.equal(测试.映射有效(改译), true, '切换原文侧后映射要跟着翻')
+  assert.equal(改译.上, 完成.上, '只改被编辑的那侧，另一侧文本不动')
 
+  // 修改中改译文侧：纯函数直接拒绝。
+  assert.equal(测试.翻译编辑(改译, '上', '偷偷改'), 改译)
+
+  // 按新的原文侧重新分段；没改过的段沿用 state 里的旧译文。
   const 计划 = 测试.建翻译计划(改译, 翻译配置)
-  assert.equal(计划.侧, '上', '点翻译仍然只把原文侧当原文')
-  assert.deepEqual(直(计划.方向), 直(完成.方向))
-  assert.equal(计划.待翻.length, 0, '没改过原文，一段都不该重翻')
-  const 结果 = await 测试.执行翻译(计划, 假网络(记录))
-  assert.equal(结果.已取消, false)
-  assert.equal(记录.length, 1, '不该发任何新请求')
+  assert.ok(计划)
+  assert.equal(计划.侧, '下')
+  assert.deepEqual(直(计划.待翻.map((项) => 项.文本)), [译(段文[1]) + '（手改）'])
+  assert.equal(计划.沿用数, 2)
 })
 
 test('改局部重翻：只发改过的段，未改段沿用 state 里的旧译文', async () => {
@@ -337,7 +348,7 @@ test('改局部重翻：只发改过的段，未改段沿用 state 里的旧译�
 
   const 改后 = 测试.翻译编辑(完成, '上', 段文[0] + '\n\n' + 段文[1] + '改\n\n' + 段文[2])
   assert.equal(改后.原文侧, '上')
-  assert.equal(改后.阶段, '待翻译')
+  assert.equal(改后.阶段, '修改中')
 
   const 计划 = 测试.建翻译计划(改后, 翻译配置)
   assert.deepEqual(直(计划.待翻.map((项) => 项.文本)), [段文[1] + '改'])
@@ -353,10 +364,14 @@ test('改局部重翻：只发改过的段，未改段沿用 state 里的旧译�
   assert.equal(记录[1].体.target, 计划.方向.target)
 
   const 成功 = 测试.翻译成功状态(改后, 计划)
+  assert.equal(成功.阶段, '同步')
+  assert.equal(成功.原文侧, null)
+  assert.equal(成功.映射侧, '上')
   assert.equal(成功.下, [译(段文[0]), 译(段文[1] + '改'), 译(段文[2])].join('\n\n'))
   assert.match(成功.成功, /2 段沿用上次/)
   // 开始翻译时也不整段清空：未改段的旧译文先在框里。
   const 开始 = 测试.翻译开始状态(改后, 计划)
+  assert.equal(开始.阶段, '翻译中')
   assert.equal(开始.原文侧, '上')
   assert.match(开始.下, /译:第一段内容刚好十个字/)
   assert.match(开始.下, /译:第三段内容同样十个字/)
@@ -370,8 +385,8 @@ test('分段删除 / 上移 / 下移：只改文本和分段映射，不调用�
 
   const 删 = 测试.分段操作(完成, '删除', 1)
   assert.equal(记录.length, 请求数, '删除分段不许发请求')
-  assert.equal(删.原文侧, '上')
-  assert.equal(删.阶段, '空闲')
+  assert.equal(删.原文侧, '上', '同步态里动分段：映射锚定的一侧定为原文')
+  assert.equal(删.阶段, '修改中')
   assert.equal(删.上, 段文[0] + '\n\n' + 段文[2])
   assert.equal(删.下, [译(段文[0]), 译(段文[2])].join('\n\n'), '其余分段译文保持不动')
   assert.equal(测试.映射有效(删), true)
@@ -414,7 +429,7 @@ test('分段删除 / 上移 / 下移：只改文本和分段映射，不调用�
   let 空 = 完成
   for (let i = 0; i < 3; i += 1) 空 = 测试.分段操作(空, '删除', 0)
   assert.equal(空.原文侧, null)
-  assert.equal(空.阶段, '空闲')
+  assert.equal(空.阶段, '同步')
 })
 
 test('映射偏移：改段内文字只动这一段，切片段能还原两侧分段', () => {
@@ -468,7 +483,8 @@ test('中止：失败时保留已翻好的段和未改段的旧译文', async ()
   })
   assert.equal(结果.失败, '服务暂时不可用')
   const 中断 = 测试.翻译中断状态(改后, 计划, '失败', 结果.失败)
-  assert.equal(中断.阶段, '失败')
+  assert.equal(中断.阶段, '修改中', '失败回修改中，可直接点继续翻译')
+  assert.equal(中断.原文侧, '上')
   assert.equal(中断.提示, '服务暂时不可用')
   assert.match(中断.下, /译:第一段内容刚好十个字/, '没翻成的段沿用旧译文，不整段清空')
 })
@@ -481,8 +497,9 @@ test('面板：有分段映射才渲染镜像分段层和分段条', () => {
     ...测试.翻译空状态(),
     上: 拼.原文文本,
     下: 拼.译文文本,
-    原文侧: '上',
-    阶段: '空闲',
+    原文侧: null,
+    映射侧: '上',
+    阶段: '同步',
     方向: { source: 'zh', target: 'en', detected: 'zh' },
     分段们: 拼.分段们,
     成功: '中文 → 英文 · 已翻译 2 段',
@@ -501,7 +518,21 @@ test('面板：有分段映射才渲染镜像分段层和分段条', () => {
   assert.deepEqual(直(段节点们.map((节点) => 节点.属性['data-seg'])), [0, 1, 0, 1])
   assert.match(收文字(树), /点一下分段，可上移 \/ 下移 \/ 删除/)
   assert.equal(找类(树, 'fish-tr-segbar').length, 1)
-  assert.equal(找元素(树, 'textarea').length, 2)
+
+  // 顶部固定操作区：操作行 / 提示 / 规则 / 分段条都在两个输入框上方。
+  const 根子们 = 树.参数.slice(2)
+  assert.equal(根子们.length, 2, '卡片根只有顶部操作区和输入框两段')
+  assert.equal(根子们[0].参数[1].className, 'fish-tr-top')
+  const 顶类们 = 根子们[0].参数.slice(2).filter(Boolean).map((项) => 项.参数[1] && 项.参数[1].className)
+  assert.ok(顶类们.includes('fish-tr-actions'), '操作行在顶部')
+  assert.ok(顶类们.includes('fish-tr-segbar'), '分段工具条在输入框上方')
+  assert.ok(顶类们.some((类名) => typeof 类名 === 'string' && 类名.includes('fish-tr-note')), '规则说明在顶部')
+  assert.equal(根子们[1].参数[1].className, 'fish-tr-grid')
+  const 框们 = 找元素(树, 'textarea')
+  assert.equal(框们.length, 2)
+  assert.equal(框们[0].属性.readOnly, false, '同步态两侧都可编辑')
+  assert.equal(框们[1].属性.readOnly, false)
+  assert.equal(找元素(树, 'button').some((项) => 收文字(项.子) === '改这一侧'), false, '同步态没有锁定侧')
 
   // 还没翻译过：没有分段映射，不渲染镜像层和分段条。
   测试.翻译草稿.delete('s2')
@@ -555,6 +586,89 @@ test('分段工具条：固定显示；没选中给提示，选中后按首尾�
   assert.equal(找按钮(测试.分段工具条(3, 2), '上移').属性.disabled, false)
   // 段数变少后越界的旧选中视为未选。
   assert.equal(找元素(测试.分段工具条(2, 2), 'button').length, 0)
+})
+
+test('改这一侧：只换原文 / 译文角色，文本不动，映射坐标跟着翻', () => {
+  const { 测试 } = 载入()
+  const 段们 = 测试.切段(三段原文)
+  const 拼 = 测试.拼接分段(段们, 三段译文.split('\n\n'), [true, true, true])
+  const 改中 = {
+    ...测试.翻译空状态(),
+    上: 拼.原文文本,
+    下: 拼.译文文本,
+    阶段: '修改中',
+    原文侧: '上',
+    映射侧: '上',
+    分段们: 拼.分段们,
+  }
+  const 换 = 测试.切换原文侧(改中)
+  assert.equal(换.阶段, '修改中')
+  assert.equal(换.原文侧, '下')
+  assert.equal(换.上, 改中.上, '切换不动文本')
+  assert.equal(换.下, 改中.下)
+  assert.equal(测试.翻译锁定侧(换), '上')
+  assert.equal(测试.映射有效(换), true)
+  assert.deepEqual(直(测试.取侧片段(换, '下').内容们), [译(段文[0]), 译(段文[1]), 译(段文[2])])
+  // 再切回去，坐标与原来一致。
+  const 回 = 测试.切换原文侧(换)
+  assert.deepEqual(
+    直(回.分段们.map((项) => [项.原文起, 项.原文止, 项.译文起, 项.译文止])),
+    直(拼.分段们.map((项) => [项.原文起, 项.原文止, 项.译文起, 项.译文止])),
+  )
+  // 翻译中不允许换角色。
+  assert.equal(测试.切换原文侧({ ...改中, 阶段: '翻译中' }).原文侧, '上')
+})
+
+test('分段映射：同步 ↔ 修改中不丢，译文侧编辑被拒', async () => {
+  const { 测试 } = 载入()
+  const 记录 = []
+  const 完成 = await 造完成状态(测试, 三段原文, 记录)
+  assert.equal(测试.映射有效(完成), true)
+  assert.equal(测试.取侧片段(完成, '上').内容们.length, 3)
+
+  const 改 = 测试.翻译编辑(完成, '上', 段文[0] + '\n\n' + 段文[1] + '改\n\n' + 段文[2])
+  assert.equal(改.阶段, '修改中')
+  assert.equal(测试.映射有效(改), true)
+  assert.equal(测试.取侧片段(改, '上').内容们.length, 3)
+  assert.equal(测试.取侧片段(改, '下').内容们.length, 3)
+  assert.equal(测试.翻译编辑(改, '下', '动译文'), 改, '修改中译文侧只读')
+
+  // 换成另一侧当原文，映射仍然有效。
+  const 换 = 测试.切换原文侧(改)
+  assert.equal(换.原文侧, '下')
+  assert.equal(测试.映射有效(换), true)
+  assert.equal(测试.取侧片段(换, '下').内容们.length, 3)
+})
+
+test('面板：修改中译文侧只读并给「改这一侧」；翻译中两侧只读', () => {
+  const { 测试 } = 载入()
+  const 改中 = { ...测试.翻译编辑(测试.翻译空状态(), '上', 三段原文), 阶段: '修改中' }
+  测试.翻译草稿.set('s4', 改中)
+  const 树 = 测试.翻译面板({ sessionId: 's4' })
+  const 框们 = 找元素(树, 'textarea')
+  assert.equal(框们[0].属性.readOnly, false, '原文侧可编辑')
+  assert.equal(框们[1].属性.readOnly, true, '译文侧只读')
+  assert.equal(框们[1].属性.disabled, false, '只读但不用 disabled，避免丢焦点')
+
+  const 按钮们 = 找元素(树, 'button')
+  assert.ok(按钮们.some((项) => 收文字(项.子) === '改这一侧'), '锁定侧要有「改这一侧」入口')
+  const 改侧 = 按钮们.find((项) => 收文字(项.子) === '改这一侧')
+  assert.match(改侧.属性.title, /原文/)
+  const 翻译按钮 = 按钮们.find((项) => 收文字(项.子).trim() === '翻译')
+  assert.ok(翻译按钮, '修改中显示「翻译」按钮')
+  assert.equal(翻译按钮.属性.disabled, false)
+
+  // 翻译中：两侧都只读，翻译按钮禁用。
+  测试.翻译草稿.set('s5', { ...改中, 阶段: '翻译中' })
+  const 跑树 = 测试.翻译面板({ sessionId: 's5' })
+  const 跑框们 = 找元素(跑树, 'textarea')
+  assert.equal(跑框们[0].属性.readOnly, true)
+  assert.equal(跑框们[1].属性.readOnly, true)
+  const 跑按钮 = 找元素(跑树, 'button').find((项) => 收文字(项.子).includes('正在翻译'))
+  assert.ok(跑按钮)
+  assert.equal(跑按钮.属性.disabled, true)
+  测试.翻译草稿.delete('s4')
+  测试.翻译草稿.delete('s5')
 })
 
 // ---------------- 后台任务队列（传输层） ----------------

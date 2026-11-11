@@ -646,9 +646,12 @@ select.fish-select option:checked {
 /* 右栏「双语翻译」：原文/译文左右并排对着翻，窄容器自动改上下；长文本在框内滚动。 */
 .fish-tr { display: flex; flex-direction: column; gap: 6px; height: 100%; min-height: 380px; padding: 10px 12px; box-sizing: border-box; container-type: inline-size; container-name: fish-tr; }
 .fish-tr-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-auto-rows: minmax(0, 1fr); gap: 8px; flex: 1 1 0; min-height: 0; }
+.fish-tr-top { display: flex; flex-direction: column; gap: 6px; flex: none; }
 .fish-tr-pane { display: flex; flex-direction: column; gap: 4px; min-width: 0; min-height: 0; }
 .fish-tr-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-height: 16px; font-size: 11.5px; line-height: 1.4; }
 .fish-tr-role { flex: none; font-weight: 600; color: var(--dsw-alias-label-secondary, #666); }
+.fish-tr-switch { flex: none; margin-left: auto; padding: 0 2px; border: 0; background: none; color: var(--dsw-alias-state-business-primary, #2f6fed); font: inherit; font-size: 11.5px; line-height: 1.4; cursor: pointer; }
+.fish-tr-switch:hover { text-decoration: underline; }
 .fish-tr-edit { position: relative; flex: 1 1 0; min-height: 96px; border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.14)); border-radius: 8px; background: var(--dsw-alias-bg-layer-1, #fff); overflow: hidden; }
 .fish-tr-edit:focus-within { border-color: var(--dsw-alias-state-business-primary, #2f6fed); }
 .fish-tr-mirror, .fish-tr-textarea { position: absolute; inset: 0; box-sizing: border-box; margin: 0; padding: 8px 10px; border: 0; font: inherit; font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: break-word; word-break: normal; }
@@ -3287,20 +3290,23 @@ select.fish-select option:checked {
     }
 
     // 取某一侧的渲染片段；没有有效映射时返回 null（此时不显示分段高亮）。
+    // 原文坐标记在 映射侧：同步态下 原文侧 为 null，但映射仍然可用。
     function 取侧片段(状态, 侧) {
       const 分段们 = 状态 && 状态.分段们
-      if (!Array.isArray(分段们) || !分段们.length || !状态.原文侧) return null
+      const 映射侧 = 状态 && (状态.映射侧 || 状态.原文侧)
+      if (!Array.isArray(分段们) || !分段们.length || !映射侧) return null
       const 文本 = String(状态[侧] || '')
-      if (侧 === 状态.原文侧) return 切片段(文本, 分段们, '原文起', '原文止')
+      if (侧 === 映射侧) return 切片段(文本, 分段们, '原文起', '原文止')
       return 切片段(文本, 分段们, '译文起', '译文止')
     }
 
     function 映射有效(状态) {
-      if (!状态 || !状态.原文侧) return false
+      const 映射侧 = 状态 && (状态.映射侧 || 状态.原文侧)
+      if (!映射侧) return false
       const 分段们 = 状态.分段们
       if (!Array.isArray(分段们) || !分段们.length) return false
-      const 另一侧 = 状态.原文侧 === '上' ? '下' : '上'
-      const 原文文本 = String(状态[状态.原文侧] || '')
+      const 另一侧 = 映射侧 === '上' ? '下' : '上'
+      const 原文文本 = String(状态[映射侧] || '')
       const 译文文本 = String(状态[另一侧] || '')
       for (const 项 of 分段们) {
         if (!项 || 项.原文起 > 项.原文止 || 项.译文起 > 项.译文止) return false
@@ -3417,6 +3423,8 @@ select.fish-select option:checked {
         提示: '',
         成功: '',
         方向: 计划.方向,
+        原文侧: 计划.侧,
+        映射侧: 计划.侧,
         进度: { 完成: 0, 总数: 计划.待翻.length },
         [计划.侧]: 计划.原文,
         [计划.另一侧]: 结果.译文文本,
@@ -3429,7 +3437,10 @@ select.fish-select option:checked {
       const 沿用文案 = 计划.沿用数 ? `（${计划.沿用数} 段沿用上次）` : ''
       return {
         ...旧,
-        阶段: '空闲',
+        // 翻完回同步态：两框对应且都可编辑，原文侧清空，谁再编辑谁就是新的原文。
+        阶段: '同步',
+        原文侧: null,
+        映射侧: 计划.侧,
         提示: '',
         进度: null,
         方向: 计划.方向,
@@ -3440,11 +3451,14 @@ select.fish-select option:checked {
       }
     }
 
-    function 翻译中断状态(旧, 计划, 阶段, 提示) {
+    function 翻译中断状态(旧, 计划, _阶段, 提示) {
       const 结果 = 计划映射(计划)
       return {
         ...旧,
-        阶段,
+        // 失败 / 取消都退回「修改中」：原文侧保留，已翻好的段留在框里，按钮显示继续翻译。
+        阶段: '修改中',
+        原文侧: 计划.侧,
+        映射侧: 计划.侧,
         提示: 提示 || '',
         成功: '',
         进度: null,
@@ -3736,9 +3750,10 @@ select.fish-select option:checked {
       const 分段们 = 状态.分段们
       const 位置 = Number(索引)
       if (!Number.isInteger(位置) || 位置 < 0 || 位置 >= 分段们.length) return 状态
-      const 原文侧 = 状态.原文侧
-      const 另一侧 = 原文侧 === '上' ? '下' : '上'
-      const 原文片段 = 切片段(状态[原文侧], 分段们, '原文起', '原文止')
+      const 映射侧 = 状态.映射侧 || 状态.原文侧
+      if (!映射侧) return 状态
+      const 另一侧 = 映射侧 === '上' ? '下' : '上'
+      const 原文片段 = 切片段(状态[映射侧], 分段们, '原文起', '原文止')
       const 译文片段 = 切片段(状态[另一侧], 分段们, '译文起', '译文止')
       const 来源 = 分段们.map((_, i) => i)
       if (操作 === '删除') {
@@ -3764,71 +3779,120 @@ select.fish-select option:checked {
       if (!映射.原文文本.trim() && !映射.译文文本.trim()) return 翻译空状态()
       return {
         ...状态,
-        [原文侧]: 映射.原文文本,
+        [映射侧]: 映射.原文文本,
         [另一侧]: 映射.译文文本,
         分段们: 映射.分段们,
         成功: '',
+        // 同步态里做结构编辑：把映射锚定的一侧定为原文，之后可以直接点翻译。
+        ...(状态.阶段 === '同步' ? { 阶段: '修改中', 原文侧: 映射侧 } : {}),
       }
     }
 
     // ---------------- 状态机 ----------------
 
+    // 三态（只有三档，旧的「空闲 / 待翻译 / 失败 / 已取消」不再使用）：
+    //   同步：两框内容互相对应，都可编辑；此时没有「原文侧」。
+    //   修改中：被编辑的那侧是原文，另一侧只读；原文清空回同步。
+    //   翻译中：两侧都只读。
+    // 映射的原文坐标记在 映射侧：同步态下 原文侧 为 null，但映射侧保留，
+    // 所以分段高亮 / 上移 / 下移 / 删除在同步态仍然可用。
+
     function 翻译空状态() {
-      return { 上: '', 下: '', 原文侧: null, 阶段: '空闲', 提示: '', 进度: null, 方向: null, 成功: '', 分段们: null }
+      return { 上: '', 下: '', 原文侧: null, 阶段: '同步', 提示: '', 进度: null, 方向: null, 成功: '', 分段们: null, 映射侧: null }
+    }
+
+    // 把映射的原文侧换到另一侧：文本一个字都不动，只交换每段的坐标。
+    function 翻转映射(状态, 新原文侧) {
+      const 分段们 = 状态 && 状态.分段们
+      if (!Array.isArray(分段们) || !分段们.length) return 分段们 || null
+      const 旧原文侧 = 状态.映射侧 || 状态.原文侧
+      if (!旧原文侧 || 旧原文侧 === 新原文侧) return 分段们
+      const 新原文文本 = String(状态[新原文侧] || '')
+      return 分段们.map((项) => ({
+        ...项,
+        原文起: 项.译文起,
+        原文止: 项.译文止,
+        译文起: 项.原文起,
+        译文止: 项.原文止,
+        原文快照: 新原文文本.slice(项.译文起, 项.译文止),
+      }))
+    }
+
+    // 「改这一侧」：只换原文 / 译文的角色，两边文本都不动。
+    function 切换原文侧(状态) {
+      if (!状态 || 状态.阶段 !== '修改中' || !状态.原文侧) return 状态
+      const 新侧 = 状态.原文侧 === '上' ? '下' : '上'
+      return {
+        ...状态,
+        原文侧: 新侧,
+        映射侧: 新侧,
+        分段们: 翻转映射(状态, 新侧),
+        方向: null,
+        进度: null,
+        提示: '',
+        成功: '',
+      }
     }
 
     // 编辑规则：
     //   - 翻译中谁都不能改；
-    //   - 翻译完成后角色固定（原文侧不变），改译文只改译文，不换方向；
-    //   - 还没翻译过时谁先写谁当原文，另一边先锁着。
+    //   - 同步态写入非空内容的那一侧成为原文，另一侧锁成译文输出；
+    //   - 修改中只认原文侧，改译文侧直接拒绝；原文清空回到同步；
+    //   - 分段映射跟着改动折偏移，没改过的段留给下次沿用。
     function 翻译编辑(状态, 侧, 值) {
-      if (状态.阶段 === '翻译中') return 状态
+      if (!状态 || 状态.阶段 === '翻译中') return 状态
       const 文本 = String(值 == null ? '' : 值)
-      const 下个 = { ...状态, [侧]: 文本, 提示: '', 成功: '' }
       const 另一侧 = 侧 === '上' ? '下' : '上'
-      const 有映射 = Array.isArray(状态.分段们) && 状态.分段们.length > 0
-      if (状态.阶段 === '空闲' && !有映射) {
-        if (!文本.trim()) {
-          if (状态.原文侧 !== 侧) return 下个
-          return { ...下个, 原文侧: null, 方向: null, 进度: null, 分段们: null }
+      const 下个 = { ...状态, [侧]: 文本, 提示: '', 成功: '' }
+      const 清空 = !文本.trim()
+
+      if (状态.阶段 === '修改中') {
+        if (侧 !== 状态.原文侧) return 状态
+        if (清空) {
+          return { ...下个, 阶段: '同步', 原文侧: null, 映射侧: null, 分段们: null, 方向: null, 进度: null }
         }
-        return { ...下个, 原文侧: 侧, 阶段: '待翻译', 方向: null, 进度: null, 分段们: null }
-      }
-      if (有映射) {
-        if (侧 === 状态.原文侧) {
-          if (!文本.trim()) {
-            return { ...翻译空状态(), [侧]: 文本, [另一侧]: 状态[另一侧] }
-          }
-          return {
-            ...下个,
-            阶段: '待翻译',
-            分段们: 调整分段偏移(状态.分段们, '原文', 状态[侧], 文本),
-          }
+        return {
+          ...下个,
+          阶段: '修改中',
+          映射侧: 侧,
+          分段们: 调整分段偏移(状态.分段们, '原文', 状态[侧], 文本),
         }
-        return { ...下个, 分段们: 调整分段偏移(状态.分段们, '译文', 状态[侧], 文本) }
       }
-      if (侧 !== 状态.原文侧) return 状态
-      if (!文本.trim()) return { ...下个, 阶段: '空闲', 原文侧: null, 方向: null, 进度: null }
-      return { ...下个, 阶段: '待翻译' }
+
+      // 同步态：空编辑保持同步；写入非空内容的那侧成为原文。
+      if (清空) {
+        return { ...下个, 阶段: '同步', 原文侧: null, 映射侧: null, 分段们: null, 方向: null, 进度: null }
+      }
+      let 分段们 = 状态.分段们
+      let 旧文本 = 状态[侧]
+      if (Array.isArray(分段们) && 分段们.length && 状态.映射侧 && 状态.映射侧 !== 侧) {
+        分段们 = 翻转映射(状态, 侧)
+        旧文本 = String(状态[侧] || '')
+      }
+      return {
+        ...下个,
+        阶段: '修改中',
+        原文侧: 侧,
+        映射侧: 侧,
+        分段们: Array.isArray(分段们) && 分段们.length ? 调整分段偏移(分段们, '原文', 旧文本, 文本) : null,
+        进度: null,
+      }
     }
 
     function 翻译锁定侧(状态) {
-      if (状态.阶段 === '空闲' || !状态.原文侧) return null
-      const 有映射 = Array.isArray(状态.分段们) && 状态.分段们.length > 0
-      // 已经有分段映射：两侧都能改；原文侧不动，译文侧改了也能直接重翻。
-      if (有映射) return null
+      if (!状态 || 状态.阶段 !== '修改中' || !状态.原文侧) return null
       return 状态.原文侧 === '上' ? '下' : '上'
     }
 
     function 翻译可执行(状态) {
-      if (状态.阶段 === '翻译中') return false
-      if (!状态.原文侧) return false
+      if (!状态 || 状态.阶段 !== '修改中' || !状态.原文侧) return false
       return Boolean(String(状态[状态.原文侧] || '').trim())
     }
 
     function 翻译按钮文字(状态) {
+      if (!状态) return '翻译'
       if (状态.阶段 === '翻译中') return '正在翻译…'
-      if (状态.阶段 === '已取消' || 状态.阶段 === '失败') return '继续翻译'
+      if (状态.阶段 === '修改中' && 状态.提示) return '继续翻译'
       return '翻译'
     }
 
@@ -3957,6 +4021,14 @@ select.fish-select option:checked {
         设交互((旧) => (操作 === '删除' ? 分段空交互() : { 悬停: null, 选中: 操作 === '上移' ? 索引 - 1 : 索引 + 1 }))
       }
 
+      // 「改这一侧」：把锁定侧换成原文，只换角色、不动文本。
+      const 切换侧 = () => {
+        const 当前 = 状态引用.current
+        if (当前.阶段 === '翻译中' || !当前.原文侧) return
+        设状态((旧) => 切换原文侧(旧))
+        设交互((旧) => ({ ...旧, 悬停: null }))
+      }
+
       const 翻译 = async () => {
         const 当前 = 状态引用.current
         const 计划 = 建翻译计划(当前, 配置)
@@ -4060,13 +4132,14 @@ select.fish-select option:checked {
       }
 
       const 侧标签 = (侧) => {
-        if (!状态.原文侧) return '可输入'
+        if (状态.阶段 === '同步' || !状态.原文侧) return '可输入'
         return 侧 === 状态.原文侧 ? '原文' : '译文'
       }
       const 侧说明 = (侧) => {
-        if (!状态.原文侧) return ''
         if (翻译中) return '正在翻译，暂时不能编辑'
-        return 侧 === 状态.原文侧 ? '这边是原文' : '译文输出，翻译后可编辑'
+        if (!状态.原文侧) return ''
+        if (侧 === 状态.原文侧) return '这边是原文'
+        return '译文输出，翻译完成前不可编辑'
       }
       const 占位 = (侧) => {
         if (!状态.原文侧 || 侧 === 状态.原文侧) return '输入或粘贴要翻译的文字'
@@ -4074,7 +4147,15 @@ select.fish-select option:checked {
       }
 
       const 可执行 = 翻译可执行(状态)
-      const 禁用原因 = 可执行 || 翻译中 ? '' : '先输入要翻译的文字'
+      const 空文本 = !String(状态.上 || '').trim() && !String(状态.下 || '').trim()
+      const 禁用原因 = 可执行 || 翻译中 || !空文本 ? '' : '先输入要翻译的文字'
+      const 按钮标题 = 翻译中
+        ? '正在翻译，请稍候'
+        : 可执行
+          ? undefined
+          : 状态.阶段 === '同步' && !空文本
+            ? '先在一个框里改点内容，改过的那一侧会成为原文'
+            : '先输入要翻译的文字'
       const 进度 = (翻译中 && 状态.进度) || null
       const 进度阶段 = 进度 && 进度.阶段 && 进度.阶段 !== '翻译中' ? 进度.阶段 : ''
       const 已用秒 = 进度 && 进度.已用 >= 1000 ? Math.round(进度.已用 / 1000) : 0
@@ -4097,6 +4178,18 @@ select.fish-select option:checked {
             { className: 'fish-tr-head' },
             h('span', { className: 'fish-tr-role' }, 侧标签(侧)),
             h('span', { className: 'fish-panel-dim' }, 侧说明(侧)),
+            锁定 === 侧
+              ? h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'fish-tr-switch',
+                    title: '把这侧改成原文，另一侧作为译文输出',
+                    onClick: 切换侧,
+                  },
+                  '改这一侧',
+                )
+              : null,
           ),
           h(
             'div',
@@ -4106,7 +4199,7 @@ select.fish-select option:checked {
               className: 'fish-tr-textarea',
               value: 状态[侧],
               readOnly: 翻译中 || 锁定 === 侧,
-              disabled: 翻译中,
+              disabled: false,
               placeholder: 占位(侧),
               'aria-label': `${侧标签(侧)}框`,
               ref: (节点) => { 框引用.current[侧] = 节点 },
@@ -4128,8 +4221,9 @@ select.fish-select option:checked {
             )
           : null
 
+      const 提示是错误 = Boolean(状态.提示) && !String(状态.提示).startsWith('已取消')
       const 提示 = 状态.提示
-        ? h('div', { className: 状态.阶段 === '失败' ? 'fish-err fish-tr-note' : 'fish-panel-dim fish-tr-note', role: 'status' }, 状态.提示)
+        ? h('div', { className: 提示是错误 ? 'fish-err fish-tr-note' : 'fish-panel-dim fish-tr-note', role: 'status' }, 状态.提示)
         : 状态.成功
           ? h('div', { className: 'fish-ok fish-tr-note', role: 'status' }, 状态.成功)
           : 禁用原因
@@ -4146,29 +4240,35 @@ select.fish-select option:checked {
             if (事件 && 事件.key === 'Escape') 交互事件({ 类型: '取消' })
           },
         },
-        h('div', { className: 'fish-tr-grid' }, 一栏('上'), 一栏('下')),
-        分段条,
+        // 顶部固定操作区：操作行 / 提示 / 规则 / 分段工具条，不随输入框滚动。
         h(
           'div',
-          { className: 'fish-tr-actions' },
+          { className: 'fish-tr-top' },
           h(
-            'button',
-            {
-              type: 'button',
-              className: 'fish-btn',
-              'data-primary': '1',
-              disabled: !可执行,
-              'aria-busy': 翻译中 ? 'true' : undefined,
-              onClick: () => void 翻译(),
-            },
-            翻译中 ? 图标转圈(13) : null,
-            翻译按钮文字(状态),
+            'div',
+            { className: 'fish-tr-actions' },
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'fish-btn',
+                'data-primary': '1',
+                disabled: !可执行,
+                title: 按钮标题,
+                'aria-busy': 翻译中 ? 'true' : undefined,
+                onClick: () => void 翻译(),
+              },
+              翻译中 ? 图标转圈(13) : null,
+              翻译按钮文字(状态),
+            ),
+            翻译中 ? h('button', { type: 'button', className: 'fish-btn', onClick: 取消 }, '取消') : null,
+            进度线 ? h('span', { className: 'fish-panel-dim', role: 'status' }, 进度线) : null,
           ),
-          翻译中 ? h('button', { type: 'button', className: 'fish-btn', onClick: 取消 }, '取消') : null,
-          进度线 ? h('span', { className: 'fish-panel-dim', role: 'status' }, 进度线) : null,
+          提示,
+          h('div', { className: 'fish-panel-dim fish-tr-note' }, 翻译规则文案(配置)),
+          分段条,
         ),
-        提示,
-        h('div', { className: 'fish-panel-dim fish-tr-note' }, 翻译规则文案(配置)),
+        h('div', { className: 'fish-tr-grid' }, 一栏('上'), 一栏('下')),
       )
     }
 
@@ -4399,6 +4499,8 @@ select.fish-select option:checked {
       取侧片段,
       映射有效,
       拼接分段,
+      翻转映射,
+      切换原文侧,
       同方向,
       建翻译计划,
       执行翻译,
