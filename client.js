@@ -657,6 +657,8 @@ select.fish-select option:checked {
 .fish-tr-textarea::placeholder { color: var(--dsw-alias-label-secondary, #888); opacity: 1; }
 .fish-tr-seg { border-radius: 3px; background: transparent; }
 .fish-tr-seg[data-active="1"] { background: var(--dsw-alias-state-business-primary-subtle, rgba(47,111,237,.16)); box-shadow: 0 0 0 2px var(--dsw-alias-state-business-primary-subtle, rgba(47,111,237,.16)); }
+.fish-tr-seg[data-selected="1"] { background: var(--dsw-alias-state-business-primary-subtle, rgba(47,111,237,.26)); box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary, #2f6fed); }
+.fish-tr-seg[data-selected="1"][data-active="1"] { background: var(--dsw-alias-state-business-primary-subtle, rgba(47,111,237,.34)); }
 .fish-tr-segbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: none; min-height: 24px; font-size: 12px; }
 .fish-tr-segbar[data-idle="1"] { opacity: .85; }
 .fish-tr-segbar .fish-btn { padding: 2px 8px; font-size: 12px; }
@@ -3054,89 +3056,91 @@ select.fish-select option:checked {
 
     const 句末标点 = '。！？!?；;…'
     const 收尾字符 = '」』"”’）)】]'
+    const 最短短语 = 10
 
-    // 把一段文字按句末标点/换行切开；尾是句末空白，重组时原样贴回。
-    function 切句(文本) {
-      const 原文 = String(文本 || '')
-      const 段们 = []
-      let 起 = 0
-      for (let i = 0; i < 原文.length; i += 1) {
-        const 字 = 原文[i]
-        const 换行 = 字 === '\n'
-        const 句末 = !换行 && (句末标点.includes(字) || (字 === '.' && (i + 1 >= 原文.length || /\s/.test(原文[i + 1]))))
-        if (!换行 && !句末) continue
-        let 内容末 = 换行 ? i : i + 1
-        while (!换行 && 内容末 < 原文.length && 收尾字符.includes(原文[内容末])) 内容末 += 1
-        let 尾起 = 内容末
-        while (尾起 < 原文.length && /\s/.test(原文[尾起])) 尾起 += 1
-        const 内容 = 原文.slice(起, 内容末)
-        if (!内容) {
-          const 空白 = 原文.slice(起, 尾起)
-          if (段们.length) 段们[段们.length - 1].尾 += 空白
-          else if (空白) 段们.push({ 前导: '', 文本: '', 尾: 空白 })
-        } else {
-          段们.push({ 前导: '', 文本: 内容, 尾: 原文.slice(内容末, 尾起) })
-        }
-        起 = 尾起
-        i = 尾起 - 1
-      }
-      if (起 < 原文.length) 段们.push({ 前导: '', 文本: 原文.slice(起), 尾: '' })
-      return 段们
-    }
-
-    // 单句超过段上限：尽量在空格处切，实在没有就硬切。
-    function 硬切(文本, 上限 = 段字数上限) {
-      const 原文 = String(文本 || '')
-      const 段们 = []
-      let 起 = 0
-      while (原文.length - 起 > 上限) {
-        const 窗口 = 原文.slice(起, 起 + 上限)
-        const 候选 = Math.max(窗口.lastIndexOf(' '), 窗口.lastIndexOf('\t'), 窗口.lastIndexOf('\n'))
-        const 切 = 起 + (候选 > 上限 * 0.5 ? 候选 : 上限)
-        let 尾起 = 切
-        while (尾起 < 原文.length && /\s/.test(原文[尾起])) 尾起 += 1
-        段们.push({ 前导: '', 文本: 原文.slice(起, 切), 尾: 原文.slice(切, 尾起) })
-        起 = 尾起
-      }
-      if (起 < 原文.length) 段们.push({ 前导: '', 文本: 原文.slice(起), 尾: '' })
-      return 段们
-    }
-
-    // 切段：先按空行切块（整块优先，保住上下文），块太长再切句/硬切。
+    // 分段语义与 TTS 的 splitForSpeech 一致：单换行、句末标点都是边界，
+    // 标点跟着前一句；不足最短短语的碎片并到相邻段；单片超上限才硬切。
+    // 与 TTS 的区别：这里不能改字——不补标点、不吞空白，拼回去必须与原文逐字一致。
+    // 返回 [{前导, 文本, 尾}]，组装译文把「前导 + 译文 + 尾」贴回即为原文。
     function 切段(文本) {
       const 原文 = String(文本 || '')
-      const 段们 = []
-      const 块们 = 原文.split(/(\r?\n[ \t]*\r?\n+)/)
-      for (let i = 0; i < 块们.length; i += 2) {
-        const 块原文 = 块们[i]
-        const 块尾 = 块们[i + 1] || ''
-        if (!块原文) {
-          if (段们.length) 段们[段们.length - 1].尾 += 块尾
-          else if (块尾) 段们.push({ 前导: '', 文本: '', 尾: 块尾 })
-          continue
+      if (!原文) return []
+
+      // 1) 基础片段：单换行与句末标点都切开，两侧空白留给前导/尾。
+      const 原始 = []
+      let 片段起 = 0
+      for (let i = 0; i <= 原文.length; i += 1) {
+        const 到末尾 = i === 原文.length
+        const 换行 = !到末尾 && 原文[i] === '\n'
+        const 句末 = !到末尾 && !换行 && 句末标点.includes(原文[i])
+        if (!到末尾 && !换行 && !句末) continue
+        let 止 = i
+        if (句末) {
+          止 = i + 1
+          while (止 < 原文.length && 收尾字符.includes(原文[止])) 止 += 1
         }
-        const 前导 = (块原文.match(/^[ \t]*/) || [''])[0]
-        const 块内容 = 块原文.slice(前导.length)
-        if (块内容.length <= 段字数上限) {
-          段们.push({ 前导, 文本: 块内容, 尾: 块尾 })
-          continue
-        }
-        const 句们 = 切句(块内容)
-        const 拆开 = []
-        for (const 句 of 句们) {
-          if (句.文本.length <= 段字数上限) {
-            拆开.push(句)
-            continue
-          }
-          const 片们 = 硬切(句.文本, 段字数上限)
-          if (片们.length) 片们[片们.length - 1].尾 += 句.尾
-          拆开.push(...片们)
-        }
-        if (!拆开.length) 拆开.push({ 前导: '', 文本: 块内容, 尾: '' })
-        拆开[0].前导 = 前导
-        拆开[拆开.length - 1].尾 += 块尾
-        段们.push(...拆开)
+        // 只保留非空白内容：两端的空白归前导/尾，中间的空白（含换行）留在文本里。
+        let 内容起 = 片段起
+        while (内容起 < 止 && /\s/.test(原文[内容起])) 内容起 += 1
+        let 内容止 = 止
+        while (内容止 > 内容起 && /\s/.test(原文[内容止 - 1])) 内容止 -= 1
+        if (内容起 < 内容止) 原始.push({ 起: 内容起, 止: 内容止 })
+        片段起 = 换行 ? i + 1 : 止
+        if (句末) i = 止 - 1
       }
+      if (!原始.length) return [{ 前导: 原文, 文本: '', 尾: '' }]
+
+      // 2) 太短的碎片不单独成段：优先并下一段，最后一段并到上一段。
+      const 合并 = []
+      let i = 0
+      while (i < 原始.length) {
+        let 区间 = 原始[i]
+        i += 1
+        while (区间.止 - 区间.起 < 最短短语 && i < 原始.length) {
+          区间 = { 起: 区间.起, 止: 原始[i].止 }
+          i += 1
+        }
+        合并.push(区间)
+      }
+      if (合并.length >= 2 && 合并[合并.length - 1].止 - 合并[合并.length - 1].起 < 最短短语) {
+        const 末 = 合并.pop()
+        合并[合并.length - 1].止 = 末.止
+      }
+
+      // 3) 只有单片超过上限才硬切：尽量在逗号/顿号/空格后断开，实在没有就按字数切。
+      const 区间们 = []
+      for (const 区间 of 合并) {
+        if (区间.止 - 区间.起 <= 段字数上限) {
+          区间们.push(区间)
+          continue
+        }
+        let 起 = 区间.起
+        while (区间.止 - 起 > 段字数上限) {
+          const 窗口 = 原文.slice(起, 起 + 段字数上限)
+          const 逗号 = Math.max(
+            窗口.lastIndexOf('，'),
+            窗口.lastIndexOf(','),
+            窗口.lastIndexOf('、'),
+            窗口.lastIndexOf(' '),
+            窗口.lastIndexOf('\t'),
+            窗口.lastIndexOf('\n'),
+          )
+          let 切 = 起 + 段字数上限
+          if (逗号 > 段字数上限 * 0.6) 切 = 起 + 逗号 + 1
+          if (切 > 起 && 切 < 区间.止 && /[\uDC00-\uDFFF]/.test(原文[切]) && /[\uD800-\uDBFF]/.test(原文[切 - 1])) 切 -= 1
+          区间们.push({ 起, 止: 切 })
+          起 = 切
+        }
+        if (起 < 区间.止) 区间们.push({ 起, 止: 区间.止 })
+      }
+
+      // 4) 区间还原成「前导/文本/尾」：段间空白归前一段的尾，首段前导是最前面的空白。
+      const 段们 = []
+      区间们.forEach((区间, 索引) => {
+        const 前导 = 索引 === 0 ? 原文.slice(0, 区间.起) : ''
+        const 尾 = 索引 + 1 < 区间们.length ? 原文.slice(区间.止, 区间们[索引 + 1].起) : 原文.slice(区间.止)
+        段们.push({ 前导, 文本: 原文.slice(区间.起, 区间.止), 尾 })
+      })
       return 段们
     }
 
@@ -3676,34 +3680,59 @@ select.fish-select option:checked {
     // 每个会话留一份草稿：切走再切回来，原文和已翻好的译文都还在。
     const 翻译草稿 = new Map()
 
+    // 悬停只做预览高亮，点击才选中；选中状态不因鼠标移开而消失。
+    function 分段空交互() {
+      return { 悬停: null, 选中: null }
+    }
+
+    function 分段交互(交互, 事件) {
+      const 当前 = 交互 || 分段空交互()
+      const 类型 = 事件 && 事件.类型
+      const 索引 = 事件 && Number.isInteger(事件.索引) ? 事件.索引 : null
+      if (类型 === '悬停') return { ...当前, 悬停: 索引 }
+      if (类型 === '点击') return { ...当前, 悬停: 索引, 选中: 索引 == null || 当前.选中 === 索引 ? null : 索引 }
+      return { ...当前, 选中: null }
+    }
+
+    // 固定工具条：无选中时只给提示，选中后按钮按首尾边界禁用。
+    function 分段工具条(分段数, 选中, 处理, 取消选中) {
+      const 总 = Math.max(0, Math.trunc(Number(分段数) || 0))
+      const 有效 = 选中 != null && 选中 >= 0 && 选中 < 总 ? 选中 : null
+      if (有效 == null) {
+        return [h('span', { key: '提示', className: 'fish-panel-dim' }, '点一下分段，可上移 / 下移 / 删除')]
+      }
+      const 按钮 = (键, 文字, 可用, 标题, 操作) =>
+        h(
+          'button',
+          {
+            key: 键,
+            type: 'button',
+            className: 操作 === '删除' ? 'fish-btn fish-tr-del' : 'fish-btn',
+            disabled: !可用,
+            title: 标题,
+            onClick: 可用 && 处理 ? () => 处理(操作, 有效) : undefined,
+          },
+          文字,
+        )
+      return [
+        h('span', { key: '位置', className: 'fish-panel-dim' }, `第 ${有效 + 1}/${总} 段`),
+        按钮('上移', '上移', 有效 > 0, '与上一段交换位置', '上移'),
+        按钮('下移', '下移', 有效 < 总 - 1, '与下一段交换位置', '下移'),
+        按钮('删除', '删除', true, '删除这一段，两侧一起删除', '删除'),
+        h('button', { key: '取消选择', type: 'button', className: 'fish-btn', onClick: 取消选中 || undefined }, '取消选择'),
+      ]
+    }
+
     function 翻译面板(props) {
       const 会话键 = String((props && props.sessionId) || '')
       const 偏好态 = useStore(偏好)
       const [状态, 设状态] = React.useState(() => 翻译草稿.get(会话键) || 翻译空状态())
-      const [悬停段, 设悬停段] = React.useState(null)
+      const [交互, 设交互] = React.useState(分段空交互)
       const 状态引用 = React.useRef(状态)
       状态引用.current = 状态
       const 运行 = React.useRef(null)
       const 框引用 = React.useRef({ 上: null, 下: null })
       const 镜引用 = React.useRef({ 上: null, 下: null })
-      const 清除计时 = React.useRef(null)
-
-      const 取消清除计时 = () => {
-        const 计时 = 清除计时.current
-        if (计时) {
-          clearTimeout(计时)
-          清除计时.current = null
-        }
-      }
-      // 鼠标挪到分段操作条上时不要把悬停状态清掉，否则按钮点不到。
-      // 留一点余量：从文本框移到下面按钮的这段路不算「移出」。
-      const 安排清除 = () => {
-        取消清除计时()
-        清除计时.current = setTimeout(() => {
-          清除计时.current = null
-          设悬停段(null)
-        }, 400)
-      }
 
       React.useEffect(() => {
         翻译草稿.set(会话键, 状态)
@@ -3722,22 +3751,24 @@ select.fish-select option:checked {
             if (在跑.控制器) 在跑.控制器.abort()
           }
           运行.current = null
-          取消清除计时()
         }
       }, [])
 
       const 配置 = (偏好态 && 偏好态.config) || {}
-      const 原文侧 = 状态.原文侧
-      const 另一侧 = 原文侧 === '上' ? '下' : '上'
       const 翻译中 = 状态.阶段 === '翻译中'
       const 锁定 = 翻译锁定侧(状态)
       const 有映射 = 映射有效(状态)
       const 分段数 = Array.isArray(状态.分段们) ? 状态.分段们.length : 0
-      const 当前段 = 有映射 && 悬停段 != null && 悬停段 >= 0 && 悬停段 < 分段数 ? 悬停段 : null
+      const 悬停段 = 有映射 && 交互.悬停 != null && 交互.悬停 >= 0 && 交互.悬停 < 分段数 ? 交互.悬停 : null
+      const 选中段 = 有映射 && 交互.选中 != null && 交互.选中 >= 0 && 交互.选中 < 分段数 ? 交互.选中 : null
+
+      // 段数可能随编辑/翻译变化，派发前先把越界的旧选中清掉。
+      const 交互事件 = (事件) => {
+        设交互((旧) => 分段交互({ ...旧, 选中: 旧.选中 != null && 旧.选中 < 分段数 ? 旧.选中 : null }, 事件))
+      }
 
       const 编辑 = (侧, 值) => {
-        取消清除计时()
-        设悬停段(null)
+        设交互((旧) => ({ ...旧, 悬停: null }))
         设状态((旧) => 翻译编辑(旧, 侧, 值))
       }
 
@@ -3749,19 +3780,26 @@ select.fish-select option:checked {
       }
 
       const 处理分段 = (操作, 索引) => {
+        if (操作 === '取消选中') {
+          设交互((旧) => ({ ...旧, 选中: null }))
+          return
+        }
         const 当前 = 状态引用.current
         if (当前.阶段 === '翻译中') return
-        取消清除计时()
-        设悬停段(null)
+        if (操作 === '删除') {
+          const 问 = typeof window !== 'undefined' && typeof window.confirm === 'function'
+          if (问 && !window.confirm('删除这一段？两侧对应内容会一起删除，无法撤销。')) return
+        }
         设状态((旧) => 分段操作(旧, 操作, 索引))
+        // 移动后选中跟着这段走；删除后回到未选。
+        设交互((旧) => (操作 === '删除' ? 分段空交互() : { 悬停: null, 选中: 操作 === '上移' ? 索引 - 1 : 索引 + 1 }))
       }
 
       const 翻译 = async () => {
         const 当前 = 状态引用.current
         const 计划 = 建翻译计划(当前, 配置)
         if (!计划) return
-        取消清除计时()
-        设悬停段(null)
+        设交互(分段空交互())
         const 运行对象 = {
           已取消: false,
           控制器: typeof AbortController === 'function' ? new AbortController() : null,
@@ -3787,32 +3825,27 @@ select.fish-select option:checked {
         设状态((旧) => 翻译成功状态(旧, 计划))
       }
 
-      // 悬浮定位：textarea 在上面收事件，背后的 mirror 负责量出每段的位置。
-      const 悬停测量 = (侧, 事件) => {
+      // 鼠标坐标落在哪一段：textarea 收事件，背后的 mirror 负责量出每段的位置。
+      const 命中分段 = (侧, 事件) => {
         const 当前 = 状态引用.current
-        if (!映射有效(当前)) return
+        if (!事件 || !映射有效(当前)) return null
         const 框 = 框引用.current[侧]
         const 镜 = 镜引用.current[侧]
-        if (!框 || !镜 || typeof 镜.querySelectorAll !== 'function') return
-        取消清除计时()
+        if (!框 || !镜 || typeof 镜.querySelectorAll !== 'function') return null
         const 宽 = 框.clientWidth
         if (宽 > 0 && 镜.style.width !== `${宽}px`) 镜.style.width = `${宽}px`
         if (镜.scrollTop !== 框.scrollTop) 镜.scrollTop = 框.scrollTop
         if (镜.scrollLeft !== 框.scrollLeft) 镜.scrollLeft = 框.scrollLeft
         const 点X = 事件.clientX
         const 点Y = 事件.clientY
-        let 命中 = null
         for (const 节点 of 镜.querySelectorAll('[data-seg]')) {
-          const 矩形们 = 节点.getClientRects()
-          for (const 矩形 of 矩形们) {
+          for (const 矩形 of 节点.getClientRects()) {
             if (点X >= 矩形.left && 点X <= 矩形.right && 点Y >= 矩形.top && 点Y <= 矩形.bottom) {
-              命中 = Number(节点.getAttribute('data-seg'))
-              break
+              return Number(节点.getAttribute('data-seg'))
             }
           }
-          if (命中 !== null) break
         }
-        设悬停段(命中)
+        return null
       }
 
       const 同步滚动 = (侧) => {
@@ -3821,6 +3854,16 @@ select.fish-select option:checked {
         if (!框 || !镜) return
         镜.scrollTop = 框.scrollTop
         镜.scrollLeft = 框.scrollLeft
+      }
+
+      // 点两个框和工具条以外的空白：取消选中。
+      const 点空白 = (事件) => {
+        const 目标 = 事件 && 事件.target
+        if (!目标) return
+        const 类 = typeof 目标.className === 'string' ? 目标.className : ''
+        if (类.includes('fish-tr-textarea')) return
+        if (目标.closest && 目标.closest('.fish-tr-edit, .fish-tr-segbar, .fish-tr-actions')) return
+        设交互((旧) => ({ ...旧, 悬停: null, 选中: null }))
       }
 
       const 渲染镜像 = (侧) => {
@@ -3836,7 +3879,8 @@ select.fish-select option:checked {
                 key: `段${i}`,
                 className: 'fish-tr-seg',
                 'data-seg': i,
-                'data-active': 当前段 === i ? '1' : undefined,
+                'data-active': 悬停段 === i ? '1' : undefined,
+                'data-selected': 选中段 === i ? '1' : undefined,
               },
               片段.内容们[i] || '',
             ),
@@ -3890,8 +3934,9 @@ select.fish-select option:checked {
               placeholder: 占位(侧),
               'aria-label': `${侧标签(侧)}框`,
               ref: (节点) => { 框引用.current[侧] = 节点 },
-              onMouseMove: (事件) => 悬停测量(侧, 事件),
-              onMouseLeave: 安排清除,
+              onMouseMove: (事件) => 交互事件({ 类型: '悬停', 索引: 命中分段(侧, 事件) }),
+              onMouseLeave: () => 交互事件({ 类型: '悬停', 索引: null }),
+              onClick: (事件) => 交互事件({ 类型: '点击', 索引: 命中分段(侧, 事件) }),
               onScroll: () => 同步滚动(侧),
               onChange: (事件) => 编辑(侧, 事件.target.value),
             }),
@@ -3902,44 +3947,8 @@ select.fish-select option:checked {
         有映射 && !翻译中
           ? h(
               'div',
-              {
-                className: 'fish-tr-segbar',
-                'data-idle': 当前段 == null ? '1' : undefined,
-                onMouseEnter: 取消清除计时,
-                onMouseLeave: 安排清除,
-              },
-              当前段 == null
-                ? h('span', { className: 'fish-panel-dim' }, `共 ${分段数} 段，悬浮分段可单独处理`)
-                : [
-                    h('span', { key: '位置', className: 'fish-panel-dim' }, `第 ${当前段 + 1}/${分段数} 段`),
-                    h('button', {
-                      key: '上移',
-                      type: 'button',
-                      className: 'fish-btn',
-                      disabled: 当前段 === 0,
-                      title: '与上一段交换位置',
-                      onClick: () => 处理分段('上移', 当前段),
-                    }, '上移'),
-                    h('button', {
-                      key: '下移',
-                      type: 'button',
-                      className: 'fish-btn',
-                      disabled: 当前段 === 分段数 - 1,
-                      title: '与下一段交换位置',
-                      onClick: () => 处理分段('下移', 当前段),
-                    }, '下移'),
-                    h('button', {
-                      key: '删除',
-                      type: 'button',
-                      className: 'fish-btn fish-tr-del',
-                      title: '删除这一段，两侧一起删除',
-                      onClick: () => {
-                        const 问 = typeof window !== 'undefined' && typeof window.confirm === 'function'
-                        if (问 && !window.confirm('删除这一段？两侧对应内容会一起删除，无法撤销。')) return
-                        处理分段('删除', 当前段)
-                      },
-                    }, '删除'),
-                  ],
+              { className: 'fish-tr-segbar', 'data-idle': 选中段 == null ? '1' : undefined },
+              分段工具条(分段数, 选中段, 处理分段, () => 处理分段('取消选中', null)),
             )
           : null
 
@@ -3953,7 +3962,14 @@ select.fish-select option:checked {
 
       return h(
         'div',
-        { className: 'fish-tr' },
+        {
+          className: 'fish-tr',
+          onMouseDown: 点空白,
+          // Esc 取消选中：焦点可能在文本框、按钮或工具条上，统一在卡片根上接。
+          onKeyDown: (事件) => {
+            if (事件 && 事件.key === 'Escape') 交互事件({ 类型: '取消' })
+          },
+        },
         h('div', { className: 'fish-tr-grid' }, 一栏('上'), 一栏('下')),
         分段条,
         h(
@@ -4196,8 +4212,6 @@ select.fish-select option:checked {
       翻译规则文案,
       翻译语言标签,
       切段,
-      切句,
-      硬切,
       组装译文,
       规划翻译,
       规划批次,
@@ -4216,6 +4230,9 @@ select.fish-select option:checked {
       翻译成功状态,
       翻译中断状态,
       分段操作,
+      分段空交互,
+      分段交互,
+      分段工具条,
       翻译草稿,
       缓存键,
       读缓存,
