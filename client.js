@@ -2055,6 +2055,22 @@ select.fish-select option:checked {
         border: '1px solid var(--dsw-alias-border-l1, rgba(0,0,0,.08))',
         borderRadius: 12,
       },
+      // 页面级操作条：吸在设置面板滚动区顶部，滚到运行日志时也能保存或测试。
+      bar: {
+        position: 'sticky',
+        top: 0,
+        zIndex: 5,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6,
+        padding: '10px 14px',
+        margin: '-12px -14px 10px',
+        background: 'var(--dsw-alias-bg-layer-1, #fff)',
+        borderBottom: '1px solid var(--dsw-alias-border-l1, rgba(0,0,0,.08))',
+        borderRadius: '12px 12px 0 0',
+      },
+      barRow: { display: 'flex', gap: 10, alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap' },
+      barActions: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
       h1: { fontSize: 17, fontWeight: 700, margin: '0 0 4px' },
       h: { fontSize: 15, fontWeight: 650, margin: '16px 0 8px' },
       h2: { fontSize: 13.5, fontWeight: 650, margin: '0 0 8px' },
@@ -2314,6 +2330,8 @@ select.fish-select option:checked {
       const [态, 设态] = React.useState(null)
       const [脏, 设脏] = React.useState(false)
       const [忙, 设忙] = React.useState(false)
+      // 当前正在执行的动作，让吸顶按钮显示「正在保存…」这类状态。
+      const [动作, 设动作] = React.useState('')
       const [说, 设说] = React.useState('')
       const [日志, 设日志] = React.useState(null)
       const [缓存统计, 设缓存统计] = React.useState(null)
@@ -2355,9 +2373,9 @@ select.fish-select option:checked {
       }
 
       const 存 = async () => {
-        设忙(true); 设说('保存中…')
+        设忙(true); 设动作('保存'); 设说('正在保存…')
         const r = await post('/save', { config: 配置 })
-        设忙(false)
+        设忙(false); 设动作('')
         if (r && r.ok) {
           设脏(false)
           设说((r.warnings && r.warnings.length) ? `已保存（${r.warnings.join('；')}）` : '已保存。')
@@ -2371,12 +2389,20 @@ select.fish-select option:checked {
       }
 
       const 测试 = async () => {
-        设忙(true); 设说('正在测试连接…')
+        设忙(true); 设动作('测试'); 设说('正在测试连接…')
         const r = await post('/test', { timeoutMs: 4000 })
-        设忙(false)
+        设忙(false); 设动作('')
         if (r && r.ok) 设说(`连接正常，延迟 ${r.latencyMs || 0} 毫秒。`)
         else 设说(`连接失败：${(r && r.hint) || '本地 AI 未启动，请先启动。'}`)
         await 拉()
+      }
+
+      // 重新读取：把服务状态和缓存统计重新取一遍，按钮上显示正在读取。
+      const 重读 = async () => {
+        设忙(true); 设动作('读取'); 设说('正在重新读取…')
+        await 拉()
+        await 拉缓存统计()
+        设忙(false); 设动作(''); 设说('')
       }
 
       const 看日志 = async () => {
@@ -2662,25 +2688,25 @@ select.fish-select option:checked {
         h('div', { style: { ...S.dim, marginTop: 4 } },
           '没指定目标语言时按上面的规则自动选择。'))
 
-      const 动作块 = h('div', { style: S.card },
-        h('div', { style: { display: 'flex', gap: 8, marginTop: 2, flexWrap: 'wrap' } },
-          h('button', { type: 'button', style: S.btnOn, onClick: 存, disabled: 忙 }, 忙 ? '处理中…' : '保存设置'),
-          h('button', { type: 'button', style: S.btn, onClick: 测试, disabled: 忙 }, '测试连接'),
-          h('button', {
-            type: 'button',
-            style: S.btn,
-            onClick: () => { void 拉(); void 拉缓存统计() },
-            disabled: 忙,
-          }, '重新读取')),
-        h('div', { style: { ...S.dim, marginTop: 6 } },
-          '保存后立即生效，不用重启。'))
+      // 吸顶操作条：标题、在线状态和页面级按钮都在这里，内容在它下面滚动。
+      const 操作条 = h('div', { style: S.bar },
+        h('div', { style: S.barRow },
+          h('div', { style: { display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap', minWidth: 0 } },
+            h('div', { style: { ...S.h1, margin: 0 } }, '本地 AI'),
+            h('span', { style: { ...S.badge, ...(在线 ? S.ok : S.danger) } },
+              在线 ? `在线${兼容 ? '' : '（版本不兼容）'} · v${健康.serviceVersion || '?'}` : '未启动'),
+            h('span', { style: S.dim }, `插件 v${(态.plugin && 态.plugin.version) || '?'}`)),
+          h('div', { style: S.barActions },
+            h('button', { type: 'button', style: S.btnOn, onClick: 存, disabled: 忙 },
+              忙 && 动作 === '保存' ? '正在保存…' : '保存设置'),
+            h('button', { type: 'button', style: S.btn, onClick: 测试, disabled: 忙 },
+              忙 && 动作 === '测试' ? '正在测试…' : '测试连接'),
+            h('button', { type: 'button', style: S.btn, onClick: 重读, disabled: 忙 },
+              忙 && 动作 === '读取' ? '正在读取…' : '重新读取'))),
+        h('div', { style: S.dim }, '保存后立即生效，不用重启。'),
+        说 ? h('div', { style: { ...(/失败|无法|错误|不可用|不能/.test(String(说)) ? S.danger : S.ok), marginTop: 2 } }, 说) : null)
 
       const 状态块 = h('div', { style: S.card },
-        h('div', { style: { display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' } },
-          h('div', { style: S.h1 }, '本地 AI'),
-          h('span', { style: { ...S.badge, ...(在线 ? S.ok : S.danger) } },
-            在线 ? `在线${兼容 ? '' : '（版本不兼容）'} · v${健康.serviceVersion || '?'}` : '未启动'),
-          h('span', { style: S.dim }, `插件 v${(态.plugin && 态.plugin.version) || '?'}`)),
         h('div', { style: S.dim },
           `延迟 ${健康.latencyMs || 0} 毫秒`
           + (健康.vram ? `｜显存 ${健康.vram.freeMb || 0}/${健康.vram.totalMb || 0} MB` : '')
@@ -2713,6 +2739,7 @@ select.fish-select option:checked {
           '遇到问题时读取并复制给维护者。'))
 
       return h('div', { className: 'fish-service-settings', style: S.wrap },
+        操作条,
         状态块,
         能力块,
         识图块,
@@ -2721,8 +2748,6 @@ select.fish-select option:checked {
         语音块,
         服务块,
         缓存块,
-        动作块,
-        (说 ? h('div', { style: { ...(说.includes('失败') ? S.danger : S.ok), marginTop: 6 } }, 说) : null),
         日志块)
     }
 
