@@ -3003,7 +3003,14 @@ select.fish-select option:checked {
     const 每批段数上限 = 20
     const 每批字数上限 = 8000
     const 翻译缓存上限 = 2000
-    const 可取译文 = 2
+    // 后台任务每批更小：模型冷启动时单批耗时可控，串行提交不叠并发。
+    const 任务每批段数 = 6
+    const 任务每批字数 = 1500
+    const 任务轮询毫秒 = 1000
+    const 任务冷启动毫秒 = 8000
+    const 任务总时长上限 = 10 * 60 * 1000
+    // 一次只跑一批：冷启动时多批并发会把模型加载挤在一起。
+    const 可取译文 = 1
 
     // 与 lib/lang.js 的 检测语言 同规则（本地字符范围判断，不请求模型）。
     function 检测语言(文本) {
@@ -3448,26 +3455,64 @@ select.fish-select option:checked {
     }
 
     const 翻译重试码 = ['service_down', 'model_loading', 'busy', 'timeout', 'upstream_error']
+    // 服务端任务状态 -> 面板阶段。done 后还要取一次结果，所以叫「整理译文」。
+    const 任务阶段文案 = {
+      queued: '排队中',
+      running: '翻译中',
+      done: '整理译文',
+      failed: '翻译失败',
+      canceled: '已取消',
+    }
+    const 冷启动提示 = '正在加载翻译模型，第一次会慢一点（约 40 秒）'
 
-    // 只跑待翻的批；每翻完一批就把结果写回计划并推给界面。
-    // post / 等待 / 运行 都由调用方注入，单元测试可以完全不走网络。
+    // 只跑待翻的批，一次一批（可取译文=1），每批走异步任务：提交 → 轮询 → 取结果。
+    // post / get / 等待 / 运行 / 现在 都由调用方注入，单元测试可以完全不走网络。
     async function 执行翻译(计划, 依赖 = {}) {
       const 发送 =
         typeof 依赖.post === 'function'
           ? 依赖.post
           : (路径, 体, 选项) => post(路径, 体, 选项 || {})
+      const 取状态 =
+        typeof 依赖.get === 'function'
+          ? 依赖.get
+          : (路径) => get(路径)
       const 运行 = 依赖.运行 || { 已取消: false, 控制器: null }
       const 推送 = typeof 依赖.推送 === 'function' ? 依赖.推送 : () => {}
       const 等待 = typeof 依赖.等待 === 'function' ? 依赖.等待 : (毫秒) => new Promise((好) => setTimeout(好, 毫秒))
-      const 批们 = 规划批次(计划.待翻)
+      const 现在 = typeof 依赖.现在 === 'function' ? 依赖.现在 : () => Date.now()
+      const 轮询毫秒 = Number.isFinite(依赖.轮询毫秒) ? Math.max(0, 依赖.轮询毫秒) : 任务轮询毫秒
+      const 冷启动毫秒 = Number.isFinite(依赖.冷启动毫秒) ? Math.max(0, 依赖.冷启动毫秒) : 任务冷启动毫秒
+      const 总时长上限 = Number.isFinite(依赖.总时长上限) ? Math.max(0, 依赖.总时长上限) : 任务总时长上限
+      // 任务批比同步批小：冷启动时单批耗时可控。
+      const 批们 = 规划批次(计划.待翻, 任务每批段数, 任务每批字数)
       let 完成 = 0
       let 失败 = ''
+      let 回退 = false
+      const 开始 = 现在()
 
-      const 请求一批 = async (批) => {
+      const 通知 = (阶段, 提示 = '') => {
+        推送(完成, { 阶段, 提示, 已用: Math.max(0, 现在() - 开始), 总数: 计划.待翻.length })
+      }
+
+      const 写回一段 = (项, 译文) => {
+        if (typeof 译文 === 'string' && 译文) {
+          计划.译文表[项.索引] = 译文
+          计划.已译[项.索引] = true
+          写缓存(计划.方向, 项.文本, 译文)
+          完成 += 1
+          return true
+        }
+        失败 = '这次没翻完，可以点继续翻译重试'
+        return false
+      }
+
+      // 回退分支：旧版服务的同步批量接口，超时放宽到 3 分钟。
+      const 同步一批 = async (批) => {
         const 体 = {
           texts: 批.map((项) => ({ id: 项.索引, text: 项.文本 })),
           source: 计划.方向.source,
           target: 计划.方向.target,
+          timeoutMs: 180000,
         }
         const 选项 = 运行.控制器 ? { signal: 运行.控制器.signal } : undefined
         let 结果
@@ -3476,59 +3521,169 @@ select.fish-select option:checked {
         } catch {
           结果 = null
         }
-        if (运行.已取消) return null
-        const 可重试 = 结果 && !结果.ok && 翻译重试码.includes(结果.code)
-        if (可重试) {
-          await 等待(800)
-          if (运行.已取消) return null
-          try {
-            结果 = await 发送('/translate/batch', 体, 选项)
-          } catch {
-            结果 = null
-          }
-        }
-        return 结果
-      }
-
-      const 跑一批 = async (批) => {
-        const 结果 = await 请求一批(批)
-        if (运行.已取消 || !结果) return
-        if (!结果.ok) {
-          失败 = 结果.hint || '这次没翻完，可以点继续翻译重试'
+        if (运行.已取消) return
+        if (!结果) {
+          失败 = '连接本地 AI 失败，可以点继续翻译重试'
           return
         }
-        const 按索引 = new Map()
-        for (const 条 of 结果.results || []) 按索引.set(String(条 && 条.id), 条)
-        for (const 项 of 批) {
-          const 条 = 按索引.get(String(项.索引))
-          if (条 && !条.error && typeof 条.translated === 'string') {
-            计划.译文表[项.索引] = 条.translated
-            计划.已译[项.索引] = true
-            写缓存(计划.方向, 项.文本, 条.translated)
-            完成 += 1
-          } else {
-            失败 = (条 && 条.error && 条.error.hint) || '这次没翻完，可以点继续翻译重试'
+        if (结果.ok && Array.isArray(结果.results)) {
+          const 按索引 = new Map()
+          for (const 条 of 结果.results) 按索引.set(String(条 && 条.id), 条)
+          for (const 项 of 批) {
+            const 条 = 按索引.get(String(项.索引))
+            if (条 && !条.error && typeof 条.translated === 'string') 写回一段(项, 条.translated)
+            else 失败 = (条 && 条.error && 条.error.hint) || '这次没翻完，可以点继续翻译重试'
           }
+          通知('翻译中')
+          return
         }
-        推送(完成)
+        失败 = (结果.ok ? '' : 结果.hint) || '这次没翻完，可以点继续翻译重试'
       }
 
-      let 下一个 = 0
-      const 工人 = async () => {
-        for (;;) {
-          if (运行.已取消 || 失败) return
-          const 序号 = 下一个
-          下一个 += 1
-          if (序号 >= 批们.length) return
-          await 跑一批(批们[序号])
+      const 提交一批 = async (批) => {
+        const 体 = {
+          texts: 批.map((项) => 项.文本),
+          source: 计划.方向.source,
+          target: 计划.方向.target,
+        }
+        const 选项 = 运行.控制器 ? { signal: 运行.控制器.signal } : undefined
+        const 发一次 = async () => {
+          try {
+            return await 发送('/translate/jobs', 体, 选项)
+          } catch {
+            return null
+          }
+        }
+        let 结果 = await 发一次()
+        if (运行.已取消) return { 已取消: true }
+        if (结果 && !结果.ok && 翻译重试码.includes(结果.code)) {
+          await 等待(800)
+          if (运行.已取消) return { 已取消: true }
+          结果 = await 发一次()
+        }
+        if (!结果) return { ok: false, hint: '提交翻译任务失败，可以点继续翻译重试' }
+        if (结果.ok && 结果.id) return { ok: true, id: String(结果.id) }
+        // 旧版服务没有任务接口：整轮改用同步批量。
+        if (结果.code === 'not_supported') return { 回退: true }
+        return { ok: false, hint: 结果.hint || '提交翻译任务失败，可以点继续翻译重试', code: 结果.code }
+      }
+
+      const 尽力取消 = async (任务id) => {
+        if (!任务id) return
+        try {
+          await 发送('/translate/jobs/cancel', { id: 任务id })
+        } catch {
+          // 取消失败不阻塞面板停止。
         }
       }
-      if (批们.length) {
-        const 工人们 = []
-        for (let i = 0; i < Math.min(可取译文, 批们.length); i += 1) 工人们.push(工人())
-        await Promise.all(工人们)
+
+      // 轮询一个任务直到终态；返回 { done } / { 失败 } / { 已取消 }。
+      const 等任务 = async (任务id) => {
+        运行.任务id = 任务id
+        let 阶段 = 'queued'
+        let 连不上 = 0
+        for (;;) {
+          if (运行.已取消) {
+            运行.任务id = null
+            await 尽力取消(任务id)
+            return { 已取消: true }
+          }
+          const 已用 = Math.max(0, 现在() - 开始)
+          if (已用 > 总时长上限) {
+            运行.任务id = null
+            失败 = '翻译等太久了，已停下；翻好的段落都保留着'
+            await 尽力取消(任务id)
+            return { 失败: true }
+          }
+          // 冷启动（模型加载 + 首次编译）超过 8 秒给明确提示，别让人以为卡死。
+          if (已用 >= 冷启动毫秒 && (阶段 === 'queued' || 阶段 === 'running')) {
+            通知('准备模型', 冷启动提示)
+          } else {
+            通知(任务阶段文案[阶段] || '排队中')
+          }
+          let 状态
+          try {
+            状态 = await 取状态(`/translate/jobs/status?id=${encodeURIComponent(任务id)}`)
+          } catch {
+            状态 = null
+          }
+          if (运行.已取消) {
+            运行.任务id = null
+            await 尽力取消(任务id)
+            return { 已取消: true }
+          }
+          if (状态 && 状态.ok) {
+            连不上 = 0
+            阶段 = String(状态.state || 'running')
+            if (阶段 === 'done') return { done: true }
+            if (阶段 === 'failed') {
+              失败 = (状态.error && typeof 状态.error === 'string' && 状态.error) || '翻译任务失败了，可以点继续翻译重试'
+              return { 失败: true }
+            }
+            if (阶段 === 'canceled') return { 已取消: true }
+          } else {
+            连不上 += 1
+            const 确定性错误 = 状态 && 状态.code && 状态.code !== 'upstream_error'
+            if (确定性错误) {
+              失败 = 状态.hint || '翻译任务中断了，可以点继续翻译重试'
+              return { 失败: true }
+            }
+            if (连不上 >= 5) {
+              失败 = '与本地 AI 的连接中断了，翻好的段落都保留着'
+              return { 失败: true }
+            }
+          }
+          await 等待(轮询毫秒)
+        }
       }
-      return { 完成, 失败, 已取消: Boolean(运行.已取消), 请求批次: 批们.length }
+
+      const 取译文 = async (任务id) => {
+        try {
+          const 结果 = await 取状态(`/translate/jobs/result?id=${encodeURIComponent(任务id)}`)
+          if (结果 && 结果.ok && Array.isArray(结果.texts)) return 结果.texts
+          return null
+        } catch {
+          return null
+        }
+      }
+
+      for (const 批 of 批们) {
+        if (运行.已取消 || 失败) break
+        if (回退) {
+          await 同步一批(批)
+          continue
+        }
+        通知('提交中')
+        const 提交 = await 提交一批(批)
+        if (提交.已取消 || 运行.已取消) {
+          运行.任务id = null
+          break
+        }
+        if (提交.回退) {
+          // 第一批复用同一份文本走同步接口，后续批也留在同步路径。
+          回退 = true
+          await 同步一批(批)
+          continue
+        }
+        if (!提交.ok) {
+          失败 = 提交.hint
+          break
+        }
+        const 状态 = await 等任务(提交.id)
+        if (状态.已取消) break
+        if (状态.失败) break
+        const 译文们 = await 取译文(提交.id)
+        运行.任务id = null
+        if (!译文们) {
+          失败 = '没取到译文，可以点继续翻译重试'
+          break
+        }
+        for (let i = 0; i < 批.length; i += 1) 写回一段(批[i], 译文们[i])
+        通知('翻译中')
+      }
+
+      if (运行.已取消) await 尽力取消(运行.任务id)
+      return { 完成, 失败, 已取消: Boolean(运行.已取消), 请求批次: 批们.length, 回退 }
     }
 
     // ---------------- 分段删除 / 移动（只改文本和映射，不请求翻译） ----------------
@@ -3749,6 +3904,7 @@ select.fish-select option:checked {
           if (在跑) {
             在跑.已取消 = true
             if (在跑.控制器) 在跑.控制器.abort()
+            if (在跑.任务id) void post('/translate/jobs/cancel', { id: 在跑.任务id })
           }
           运行.current = null
         }
@@ -3777,6 +3933,12 @@ select.fish-select option:checked {
         if (!在跑) return
         在跑.已取消 = true
         if (在跑.控制器) 在跑.控制器.abort()
+        // 只停本地轮询不够，顺手让服务端别继续占着队列。
+        if (在跑.任务id) {
+          const 任务id = 在跑.任务id
+          在跑.任务id = null
+          void post('/translate/jobs/cancel', { id: 任务id })
+        }
       }
 
       const 处理分段 = (操作, 索引) => {
@@ -3803,13 +3965,20 @@ select.fish-select option:checked {
         const 运行对象 = {
           已取消: false,
           控制器: typeof AbortController === 'function' ? new AbortController() : null,
+          任务id: null,
         }
         运行.current = 运行对象
         设状态((旧) => 翻译开始状态(旧, 计划))
-        const 推送 = (完成) => {
+        const 推送 = (完成, 信息 = {}) => {
           设状态((旧) => ({
             ...翻译开始状态(旧, 计划),
-            进度: { 完成, 总数: 计划.待翻.length },
+            提示: 信息.提示 || '',
+            进度: {
+              完成,
+              总数: 计划.待翻.length,
+              阶段: 信息.阶段 || '翻译中',
+              已用: 信息.已用 || 0,
+            },
           }))
         }
         const 结果 = await 执行翻译(计划, { 运行: 运行对象, 推送 })
@@ -3906,7 +4075,14 @@ select.fish-select option:checked {
 
       const 可执行 = 翻译可执行(状态)
       const 禁用原因 = 可执行 || 翻译中 ? '' : '先输入要翻译的文字'
-      const 进度线 = 翻译中 ? `正在翻译 ${状态.进度 ? 状态.进度.完成 : 0}/${状态.进度 ? 状态.进度.总数 : 0} 段` : ''
+      const 进度 = (翻译中 && 状态.进度) || null
+      const 进度阶段 = 进度 && 进度.阶段 && 进度.阶段 !== '翻译中' ? 进度.阶段 : ''
+      const 已用秒 = 进度 && 进度.已用 >= 1000 ? Math.round(进度.已用 / 1000) : 0
+      const 进度线 = 进度
+        ? [`正在翻译 ${进度.完成 || 0}/${进度.总数 || 0} 段`, 进度阶段, 已用秒 ? `已用 ${已用秒} 秒` : '']
+            .filter(Boolean)
+            .join(' · ')
+        : ''
 
       const 一栏 = (侧) =>
         h(
@@ -4226,6 +4402,8 @@ select.fish-select option:checked {
       同方向,
       建翻译计划,
       执行翻译,
+      任务阶段文案,
+      冷启动提示,
       翻译开始状态,
       翻译成功状态,
       翻译中断状态,

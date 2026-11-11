@@ -135,7 +135,7 @@ function 搭环境({ apiOverrides = {}, 初始快照 = 快照(), refreshImpl = n
   return { routes, api, 配置, configStore, capabilities, 调用, dispose, call }
 }
 
-test('注册 21 条约定路由；全部 kind=exact', () => {
+test('注册 25 条约定路由；全部 kind=exact', () => {
   const env = 搭环境()
   assert.deepEqual([...env.routes.keys()].sort(), [
     '/dsh-fish-service/audio',
@@ -157,6 +157,10 @@ test('注册 21 条约定路由；全部 kind=exact', () => {
     '/dsh-fish-service/transcribe-upload',
     '/dsh-fish-service/translate',
     '/dsh-fish-service/translate/batch',
+    '/dsh-fish-service/translate/jobs',
+    '/dsh-fish-service/translate/jobs/cancel',
+    '/dsh-fish-service/translate/jobs/result',
+    '/dsh-fish-service/translate/jobs/status',
     '/dsh-fish-service/voice-upload',
     '/dsh-fish-service/voices',
   ])

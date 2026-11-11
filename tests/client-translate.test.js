@@ -263,18 +263,44 @@ function 找类(节点, 类名, 结果 = []) {
   return 结果
 }
 
-function 假post(记录, 处理) {
-  return async (路径, 体) => {
+// 假网络：任务队列是「提交一批 → 轮询状态 → 按 id 取结果」。
+// 记录里只放 post（提交/回退/取消），get 的状态与结果按批次自动回。
+function 假网络(记录, 选项 = {}) {
+  const 批次 = new Map()
+  let 序号 = 0
+  const post = async (路径, 体) => {
     记录.push({ 路径, 体: 直(体) })
-    if (处理) return 处理(体)
-    return { ok: true, results: 体.texts.map((项) => ({ id: 项.id, translated: `译:${项.text}` })) }
+    if (路径 === '/translate/jobs' && 选项.提交) return 选项.提交(体)
+    if (路径 === '/translate/jobs') {
+      const id = `任务${(序号 += 1)}`
+      批次.set(id, Array.isArray(体.texts) ? 体.texts : [])
+      return { ok: true, id, state: 'queued' }
+    }
+    if (路径 === '/translate/batch') {
+      return { ok: true, results: 体.texts.map((项) => ({ id: 项.id, translated: `译:${项.text}` })) }
+    }
+    if (路径 === '/translate/jobs/cancel') return { ok: true, id: 体.id, state: 'canceled' }
+    return { ok: false, code: 'bad_request' }
   }
+  const get = async (路径) => {
+    if (选项.get) return 选项.get(路径)
+    if (路径.startsWith('/translate/jobs/status')) {
+      return { ok: true, id: '任务1', state: 选项.状态 || 'done' }
+    }
+    if (路径.startsWith('/translate/jobs/result')) {
+      const id = decodeURIComponent(路径.split('id=')[1] || '')
+      const 文本们 = 批次.get(id) || []
+      return { ok: true, id, state: 'done', texts: 文本们.map((文本) => `译:${文本}`) }
+    }
+    return null
+  }
+  return { post, get }
 }
 
 async function 造完成状态(测试, 原文, 记录) {
   const 初始 = 测试.翻译编辑(测试.翻译空状态(), '上', 原文)
   const 计划 = 测试.建翻译计划(初始, 翻译配置)
-  const 结果 = await 测试.执行翻译(计划, { post: 假post(记录) })
+  const 结果 = await 测试.执行翻译(计划, 假网络(记录))
   assert.equal(结果.失败, '')
   return 测试.翻译成功状态(初始, 计划)
 }
@@ -298,7 +324,7 @@ test('编辑规则：翻译完成后原文侧保留，改译文不换方向，�
   assert.equal(计划.侧, '上', '点翻译仍然只把原文侧当原文')
   assert.deepEqual(直(计划.方向), 直(完成.方向))
   assert.equal(计划.待翻.length, 0, '没改过原文，一段都不该重翻')
-  const 结果 = await 测试.执行翻译(计划, { post: 假post(记录) })
+  const 结果 = await 测试.执行翻译(计划, 假网络(记录))
   assert.equal(结果.已取消, false)
   assert.equal(记录.length, 1, '不该发任何新请求')
 })
@@ -319,10 +345,10 @@ test('改局部重翻：只发改过的段，未改段沿用 state 里的旧译�
   assert.equal(计划.译文表[0], 译(段文[0]))
   assert.equal(计划.译文表[2], 译(段文[2]))
 
-  const 结果 = await 测试.执行翻译(计划, { post: 假post(记录) })
+  const 结果 = await 测试.执行翻译(计划, 假网络(记录))
   assert.equal(结果.失败, '')
   assert.equal(记录.length, 2)
-  assert.deepEqual(直(记录[1].体.texts.map((项) => 项.text)), [段文[1] + '改'], '只发改过的段')
+  assert.deepEqual(直(记录[1].体.texts), [段文[1] + '改'], '只发改过的段')
   assert.equal(记录[1].体.source, 计划.方向.source)
   assert.equal(记录[1].体.target, 计划.方向.target)
 
@@ -355,7 +381,7 @@ test('分段删除 / 上移 / 下移：只改文本和分段映射，不调用�
   测试.清空翻译缓存()
   const 计划 = 测试.建翻译计划(删, 翻译配置)
   assert.equal(计划.待翻.length, 0)
-  const 结果 = await 测试.执行翻译(计划, { post: 假post(记录) })
+  const 结果 = await 测试.执行翻译(计划, 假网络(记录))
   assert.equal(结果.请求批次, 0)
   assert.equal(记录.length, 请求数)
 
@@ -369,7 +395,7 @@ test('分段删除 / 上移 / 下移：只改文本和分段映射，不调用�
   测试.清空翻译缓存()
   const 移后计划 = 测试.建翻译计划(上移, 翻译配置)
   assert.equal(移后计划.待翻.length, 0, '移动不改原文快照，旧译文都能沿用')
-  const 移后结果 = await 测试.执行翻译(移后计划, { post: 假post(记录) })
+  const 移后结果 = await 测试.执行翻译(移后计划, 假网络(记录))
   assert.equal(移后结果.请求批次, 0)
   assert.equal(记录.length, 请求数)
 
@@ -437,7 +463,8 @@ test('中止：失败时保留已翻好的段和未改段的旧译文', async ()
   const 改后 = 测试.翻译编辑(完成, '上', [段文[0], 段文[1] + '改'].join('\n\n'))
   const 计划 = 测试.建翻译计划(改后, 翻译配置)
   const 结果 = await 测试.执行翻译(计划, {
-    post: 假post(记录, () => ({ ok: false, code: 'upstream_error', hint: '服务暂时不可用' })),
+    ...假网络(记录, { 提交: () => ({ ok: false, code: 'upstream_error', hint: '服务暂时不可用' }) }),
+    等待: async () => {},
   })
   assert.equal(结果.失败, '服务暂时不可用')
   const 中断 = 测试.翻译中断状态(改后, 计划, '失败', 结果.失败)
@@ -528,4 +555,184 @@ test('分段工具条：固定显示；没选中给提示，选中后按首尾�
   assert.equal(找按钮(测试.分段工具条(3, 2), '上移').属性.disabled, false)
   // 段数变少后越界的旧选中视为未选。
   assert.equal(找元素(测试.分段工具条(2, 2), 'button').length, 0)
+})
+
+// ---------------- 后台任务队列（传输层） ----------------
+
+function 造计划(文本们) {
+  return {
+    侧: '上',
+    另一侧: '下',
+    原文: 文本们.join('\n\n'),
+    方向: { source: 'zh', target: 'en', detected: 'zh' },
+    段们: [],
+    译文表: {},
+    已译: {},
+    待翻: 文本们.map((文本, 索引) => ({ 索引, 文本 })),
+    总段数: 文本们.length,
+    沿用数: 0,
+  }
+}
+
+test('任务队列：每批 6 段 / 1500 字，串行提交，按任务 id 取回译文', async () => {
+  const { 测试 } = 载入()
+  const 记录 = []
+  const 事件 = []
+  const 文本们 = Array.from({ length: 13 }, (_, i) => `第${i}段${'字'.repeat(100)}`)
+  const 计划 = 造计划(文本们)
+  const 网络 = 假网络(记录)
+  const 结果 = await 测试.执行翻译(计划, {
+    post: async (路径, 体) => {
+      事件.push(['post', 路径])
+      return 网络.post(路径, 体)
+    },
+    get: async (路径) => {
+      事件.push(['get', 路径])
+      return 网络.get(路径)
+    },
+  })
+
+  assert.equal(结果.完成, 13)
+  assert.equal(结果.请求批次, 3, '13 段按 6 段一批切成 6 / 6 / 1')
+  assert.equal(结果.失败, '')
+  assert.equal(结果.回退, false)
+  const 提交们 = 记录.filter((项) => 项.路径 === '/translate/jobs')
+  assert.deepEqual(提交们.map((项) => 项.体.texts.length), [6, 6, 1])
+  assert.deepEqual(直(提交们[0].体.texts), 文本们.slice(0, 6), '任务接口收字符串数组')
+  assert.equal(提交们[0].体.source, 'zh')
+  assert.equal(提交们[0].体.target, 'en')
+
+  // 串行：每次提交都发生在上一批取回结果之后，不会叠并发。
+  let 提交数 = 0
+  let 取回数 = 0
+  for (const [类, 路径] of 事件) {
+    if (类 === 'post' && 路径 === '/translate/jobs') {
+      提交数 += 1
+      assert.equal(提交数, 取回数 + 1, '一次只跑一批')
+    }
+    if (类 === 'get' && 路径.includes('/result')) 取回数 += 1
+  }
+  assert.equal(计划.已译[12], true)
+  assert.equal(计划.译文表[0], '译:' + 文本们[0])
+  assert.equal(计划.译文表[12], '译:' + 文本们[12])
+})
+
+test('任务进度：排队中 / 翻译中；超过 8 秒提示准备模型并带上已用时间', async () => {
+  const { 测试 } = 载入()
+  let 时钟 = 0
+  const 推送 = []
+  const 计划 = 造计划(段文)
+  const 网络 = 假网络([])
+  const 结果 = await 测试.执行翻译(计划, {
+    post: 网络.post,
+    get: async (路径) => {
+      if (路径.includes('/status')) {
+        if (时钟 >= 8000) return { ok: true, state: 'done' }
+        return { ok: true, state: 时钟 >= 2000 ? 'running' : 'queued' }
+      }
+      return 网络.get(路径)
+    },
+    now: undefined,
+    现在: () => 时钟,
+    等待: async (毫秒) => {
+      时钟 += 毫秒
+    },
+    轮询毫秒: 1000,
+    推送: (完成, 信息) => 推送.push([完成, 信息]),
+  })
+
+  assert.equal(结果.完成, 3)
+  assert.equal(结果.失败, '')
+  const 阶段们 = 推送.map((项) => 项[1].阶段)
+  assert.ok(阶段们.includes('排队中'), `阶段：${阶段们.join('/')}`)
+  assert.ok(阶段们.includes('翻译中'), `阶段：${阶段们.join('/')}`)
+  const 冷启动 = 推送.find((项) => 项[1].阶段 === '准备模型')
+  assert.ok(冷启动, '超过 8 秒要给冷启动提示')
+  assert.equal(冷启动[1].提示, 测试.冷启动提示)
+  assert.match(测试.冷启动提示, /正在加载翻译模型，第一次会慢一点（约 40 秒）/)
+  assert.ok(冷启动[1].已用 >= 8000)
+  assert.equal(冷启动[1].总数, 3)
+})
+
+test('任务超时：超过总时长上限就停轮询、尽力取消，已翻好的段保留', async () => {
+  const { 测试 } = 载入()
+  const 记录 = []
+  let 时钟 = 0
+  const 计划 = 造计划(段文)
+  const 网络 = 假网络(记录)
+  const 结果 = await 测试.执行翻译(计划, {
+    post: 网络.post,
+    get: async (路径) => (路径.includes('/status') ? { ok: true, state: 'queued' } : 网络.get(路径)),
+    现在: () => 时钟,
+    等待: async (毫秒) => {
+      时钟 += 毫秒
+    },
+    总时长上限: 5000,
+    轮询毫秒: 1000,
+  })
+  assert.match(结果.失败, /等太久/)
+  assert.equal(结果.已取消, false)
+  assert.deepEqual(记录.map((项) => 项.路径), ['/translate/jobs', '/translate/jobs/cancel'])
+})
+
+test('取消：停止轮询并调用任务取消接口，不把半途结果当成功', async () => {
+  const { 测试 } = 载入()
+  const 记录 = []
+  const 计划 = 造计划(段文)
+  const 网络 = 假网络(记录)
+  const 运行 = { 已取消: false, 控制器: null, 任务id: null }
+  const 结果 = await 测试.执行翻译(计划, {
+    post: 网络.post,
+    get: async (路径) => {
+      if (路径.includes('/status')) {
+        运行.已取消 = true
+        return { ok: true, state: 'running' }
+      }
+      return 网络.get(路径)
+    },
+    运行,
+    等待: async () => {},
+  })
+  assert.equal(结果.已取消, true)
+  assert.equal(结果.完成, 0)
+  assert.ok(记录.some((项) => 项.路径 === '/translate/jobs/cancel'), '要尽力取消服务端任务')
+  assert.equal(记录.filter((项) => 项.路径 === '/translate/jobs/result').length, 0)
+})
+
+test('回退：服务不支持任务接口时改走同步批量，超时放宽到 3 分钟', async () => {
+  const { 测试 } = 载入()
+  const 记录 = []
+  const 计划 = 造计划(段文)
+  const 结果 = await 测试.执行翻译(
+    计划,
+    假网络(记录, { 提交: () => ({ ok: false, code: 'not_supported' }) }),
+  )
+  assert.equal(结果.回退, true)
+  assert.equal(结果.完成, 3)
+  assert.equal(结果.失败, '')
+  assert.deepEqual(记录.map((项) => 项.路径), ['/translate/jobs', '/translate/batch'])
+  assert.equal(记录[1].体.timeoutMs, 180000)
+  assert.deepEqual(直(记录[1].体.texts.map((项) => 项.id)), [0, 1, 2])
+  assert.equal(记录[1].体.source, 'zh')
+  assert.equal(记录[1].体.target, 'en')
+  assert.equal(计划.译文表[1], 译(段文[1]))
+})
+
+test('任务结果缺段：已翻好的段保留，提示可以继续翻译', async () => {
+  const { 测试 } = 载入()
+  const 计划 = 造计划(段文)
+  const 网络 = 假网络([])
+  const 结果 = await 测试.执行翻译(计划, {
+    post: 网络.post,
+    get: async (路径) => {
+      if (路径.includes('/status')) return { ok: true, state: 'done' }
+      if (路径.includes('/result')) return { ok: true, state: 'done', texts: [译(段文[0]), 译(段文[1])] }
+      return null
+    },
+  })
+  assert.equal(结果.完成, 2)
+  assert.match(结果.失败, /继续翻译/)
+  assert.equal(计划.已译[0], true)
+  assert.equal(计划.已译[1], true)
+  assert.equal(计划.已译[2], undefined)
 })

@@ -713,6 +713,117 @@ test('jobs：enqueue/status/list/cancel/wait 与 payload 精简', async (t) => {
   await assert.rejects(stack.api.jobs.enqueue('tts', {}, { files: ['C:\\a.wav'] }), (e) => e.code === 'not_implemented')
 })
 
+test('jobs.result：取任务结果；未完成时回 not_ready 而不是抛错', async (t) => {
+  const stack = await makeStack({
+    handler: basicHandler({
+      '/jobs/j1/result': (req, res) => sendJson(res, 200, {
+        ok: true,
+        id: 'j1',
+        state: 'done',
+        result: { texts: ['译:甲', '译:乙'], source: 'zh', target: 'en', engine: 'nllb', elapsed_ms: 1234 },
+      }),
+      '/jobs/j2/result': (req, res) => sendJson(res, 409, { ok: false, id: 'j2', state: 'running', error: 'job_not_done' }),
+    }),
+  })
+  t.after(() => stack.close())
+
+  const 完 = await stack.api.jobs.result('j1')
+  assert.equal(完.ok, true)
+  assert.equal(完.state, 'done')
+  assert.deepEqual(完.result.texts, ['译:甲', '译:乙'])
+  assert.equal(完.result.elapsed_ms, 1234)
+
+  const 未完 = await stack.api.jobs.result('j2')
+  assert.equal(未完.ok, false)
+  assert.equal(未完.id, 'j2')
+  assert.equal(未完.state, 'not_done')
+  assert.equal(未完.code, 'not_ready')
+
+  await assert.rejects(stack.api.jobs.result(''), (e) => e.code === 'bad_request')
+})
+
+test('translateJobs：提交 / 查状态 / 取译文 / 取消，旧版服务抛 not_supported', async (t) => {
+  const 收 = []
+  const stack = await makeStack({
+    handler: basicHandler({
+      '/jobs/translate': (req, res, rec) => {
+        const body = 解析体(rec)
+        收.push(body)
+        sendJson(res, 200, { ok: true, id: 'j1', state: 'queued', count: body.texts.length, source: body.source, target: body.target })
+      },
+      '/jobs/j1': (req, res) => sendJson(res, 200, { id: 'j1', kind: 'translate', state: 'running', meta: { progress: { done: 1, total: 2 } } }),
+      '/jobs/j1/result': (req, res) => sendJson(res, 200, {
+        ok: true,
+        id: 'j1',
+        state: 'done',
+        result: { texts: ['译:a', '译:b'], source: 'zh', target: 'en', engine: 'nllb', elapsed_ms: 900 },
+      }),
+      '/jobs/j1/cancel': (req, res) => sendJson(res, 200, { ok: true, id: 'j1', state: 'canceled', cancel_requested: true }),
+    }),
+  })
+  t.after(() => stack.close())
+
+  const 提交 = await stack.api.translateJobs.submit(['a', 'b'], { source: 'zh', target: 'en' })
+  assert.deepEqual(提交, { ok: true, id: 'j1', state: 'queued', source: 'zh', target: 'en', count: 2 })
+  assert.deepEqual(收[0], { texts: ['a', 'b'], source: 'zh', target: 'en' })
+
+  const 状态 = await stack.api.translateJobs.status('j1')
+  assert.equal(状态.ok, true)
+  assert.equal(状态.state, 'running')
+  assert.deepEqual(状态.progress, { done: 1, total: 2 })
+  assert.equal('payload' in 状态, false)
+
+  const 译文 = await stack.api.translateJobs.result('j1')
+  assert.equal(译文.ok, true)
+  assert.deepEqual(译文.texts, ['译:a', '译:b'])
+  assert.equal(译文.source, 'zh')
+  assert.equal(译文.target, 'en')
+  assert.equal(译文.engine, 'nllb')
+  assert.equal(译文.ms, 900)
+
+  const 取消 = await stack.api.translateJobs.cancel('j1')
+  assert.equal(取消.ok, true)
+  assert.equal(取消.state, 'canceled')
+  assert.equal(取消.cancelRequested, true)
+
+  // 参数校验沿用同步接口：target 不能 auto、条数与总字数有上限。
+  await assert.rejects(stack.api.translateJobs.submit(['a'], { target: 'auto' }), (e) => e.code === 'bad_request')
+  await assert.rejects(stack.api.translateJobs.submit(Array.from({ length: 501 }, () => 'x'), { target: 'en' }), (e) => e.code === 'bad_request')
+  await assert.rejects(stack.api.translateJobs.submit(Array.from({ length: 41 }, () => 'x'.repeat(5000)), { target: 'en' }), (e) => e.code === 'bad_request')
+  await assert.rejects(stack.api.translateJobs.status(''), (e) => e.code === 'bad_request')
+})
+
+test('translateJobs：旧版服务 404 抛 not_supported；未完成取结果回 not_ready；取消失败不阻塞', async (t) => {
+  const 旧版 = await makeStack({
+    handler: basicHandler({
+      '/jobs/translate': (req, res) => sendJson(res, 404, { ok: false, error: 'not_found' }),
+    }),
+  })
+  t.after(() => 旧版.close())
+  await assert.rejects(旧版.api.translateJobs.submit(['a'], { target: 'en' }), (e) => e.code === 'not_implemented' && /版本较旧/.test(e.hint))
+
+  const stack = await makeStack({
+    handler: basicHandler({
+      '/jobs/translate': (req, res) => sendJson(res, 200, { ok: true, state: 'queued' }),
+      '/jobs/j9/result': (req, res) => sendJson(res, 409, { ok: false, id: 'j9', state: 'running', error: 'job_not_done' }),
+      '/jobs/j9/cancel': (req, res) => sendJson(res, 409, { ok: false, error: 'canceled' }),
+    }),
+  })
+  t.after(() => stack.close())
+
+  await assert.rejects(stack.api.translateJobs.submit(['a'], { target: 'en' }), (e) => e.code === 'upstream_error')
+
+  const 未完 = await stack.api.translateJobs.result('j9')
+  assert.equal(未完.ok, false)
+  assert.equal(未完.code, 'not_ready')
+  assert.equal(未完.state, 'not_done')
+
+  const 已结束 = await stack.api.translateJobs.cancel('j9')
+  assert.equal(已结束.ok, true)
+  assert.equal(已结束.state, 'canceled')
+  assert.equal(已结束.cancelRequested, false)
+})
+
 test('voices：直接映射 /voices，30 秒内不重复请求', async (t) => {
   const stack = await makeStack()
   t.after(() => stack.close())
