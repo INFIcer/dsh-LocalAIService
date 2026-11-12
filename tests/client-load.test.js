@@ -56,28 +56,31 @@ test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 本地识�
   const 注册们 = []
   const 交互们 = []
   const 右栏定义 = []
+  let 释放 = 0
   const 服务 = {
-    inject: (_槽位, 回调) => 回调(),
+    inject: (_槽位, 回调) => { 回调(); return () => { 释放 += 1 } },
     register: (配置, 组件) => {
       注册们.push({ 配置, 组件 })
-      return () => {}
+      return () => { 释放 += 1 }
     },
   }
   const 右栏 = {
     register: (定义) => {
       右栏定义.push(定义)
-      return () => {}
+      return () => { 释放 += 1 }
     },
   }
   const ui = {
     interactions: {
       register: (定义, 标签) => {
         交互们.push({ 定义, 标签 })
-        return () => {}
+        return () => { 释放 += 1 }
       },
     },
   }
+  let 卸载 = null
   const ctx = {
+    effect: (安装) => { 卸载 = 安装() },
     get: (名字) =>
       名字 === 'slots' ? 服务 : 名字 === 'uiConversation' ? ui : 名字 === 'sidebarRightTabs' ? 右栏 : undefined,
   }
@@ -268,6 +271,33 @@ test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 本地识�
     // 恢复后重新可见。
     assert.notEqual(组件们[组件ID]({ sessionId: 's1' }), null)
   }
+
+  // 录音上限：到点自动停止时 stop() 收尾会略超 300 秒；按上限截断，不能整段丢弃。
+  const { 规整录音时长 } = 测试
+  const 正常 = 规整录音时长(299000)
+  assert.equal(正常.ok, true)
+  assert.equal(正常.durationMs, 299000)
+  assert.equal(正常.capped, false)
+  const 略超 = 规整录音时长(300150)
+  assert.equal(略超.ok, true, '自动停止时略超上限不能判失败')
+  assert.equal(略超.durationMs, 300000, '时长要按上限截断')
+  assert.equal(略超.capped, true)
+  assert.equal(规整录音时长(303000).ok, true)
+  assert.equal(规整录音时长(310000).ok, false)
+
+  // 卸载：apply 交给 ctx.effect 的清理函数要反注册槽位/交互/右栏，可重复调用。
+  assert.equal(typeof 卸载, 'function')
+  assert.equal(释放, 0)
+  卸载()
+  assert.equal(释放, 11)
+  卸载()
+  assert.equal(释放, 11)
+
+  // 两轮 apply（热重载）各自可卸载。
+  导出.apply(ctx)
+  assert.equal(注册们.length, 18)
+  卸载()
+  assert.equal(释放, 22)
 })
 
 test('client.js：slots 还没就绪时会重试，而不是直接抛错', async () => {

@@ -679,15 +679,30 @@ select.fish-select option:checked {
 
     // 样式只注入一次：每个消息都渲染一份 <style> 会把 DOM 撑爆。
     // DSH 自己的客户端包也是这么做的（在客户端模块里往 head 里插一段 CSS）。
+    // 借用一个计数：apply 可能被重放（热重载），最后一个卸载者才移除节点。
+    let 样式借用 = 0
     function 注入样式() {
       try {
-        if (typeof document === 'undefined') return
-        if (document.querySelector('style[data-fish-service="p2"]')) return
-        const 节点 = document.createElement('style')
-        节点.dataset.fishService = 'p2'
-        节点.textContent = 样式文本
-        document.head.appendChild(节点)
-      } catch { /* 注入失败只影响外观，不影响功能 */ }
+        if (typeof document === 'undefined') return () => {}
+        let 节点 = document.querySelector('style[data-fish-service="p2"]')
+        const 新建 = !节点
+        if (!节点) {
+          节点 = document.createElement('style')
+          节点.dataset.fishService = 'p2'
+          节点.textContent = 样式文本
+          document.head.appendChild(节点)
+        }
+        样式借用 += 1
+        return () => {
+          样式借用 = Math.max(0, 样式借用 - 1)
+          if (新建 && 样式借用 === 0) {
+            try { 节点.remove() } catch { /* 已从文档移除 */ }
+          }
+        }
+      } catch {
+        // 注入失败只影响外观，不影响功能。
+        return () => {}
+      }
     }
 
     // ---------------- 朗读按钮 ----------------
@@ -1244,6 +1259,16 @@ select.fish-select option:checked {
       }, 毫秒)
     }
 
+    // 录音上限：计时器到 300 秒就自动停，stop() 收尾还会多出几十毫秒。
+    // 略超上限是正常的，按上限截断；只有明显超出（用户拿着录音没停）才判超限。
+    const 录音上限毫秒 = 5 * 60 * 1000
+    const 录音上限容差毫秒 = 3000
+    function 规整录音时长(时长, 上限 = 录音上限毫秒, 容差 = 录音上限容差毫秒) {
+      const 值 = Math.max(0, Number(时长) || 0)
+      if (值 > 上限 + 容差) return { ok: false, durationMs: 值, capped: false }
+      return { ok: true, durationMs: Math.min(值, 上限), capped: 值 >= 上限 }
+    }
+
     async function 开始录音(props) {
       // 语音识别总开关关掉时录音功能不可用（按钮已隐藏，这里再兜一次）。
       if (!界面开关开(偏好.get().config, '语音识别')) return
@@ -1356,13 +1381,14 @@ select.fish-select option:checked {
       }
       // 等待 MediaRecorder 收尾期间用户可能已经取消/关了面板。
       if (代 !== 语音.代) return
-      const 时长 = Math.max(0, Date.now() - Number(态.startedAt || Date.now()))
-      const 大小 = 结果.blob.size
-      if (时长 > 5 * 60 * 1000) {
+      const 规整 = 规整录音时长(Date.now() - Number(态.startedAt || Date.now()))
+      if (!规整.ok) {
         语音.态.set((旧) => ({ ...旧, phase: 'error', error: '录音超过 5 分钟已停止，请分段录制。' }))
         安排关闭(8000)
         return
       }
+      const 时长 = 规整.durationMs
+      const 大小 = 结果.blob.size
       if (大小 > 25 * 1024 * 1024) {
         语音.态.set((旧) => ({ ...旧, phase: 'error', error: '录音超过 25MB 已停止，请缩短录音时长。' }))
         安排关闭(8000)
@@ -4369,10 +4395,43 @@ select.fish-select option:checked {
       )
     }
 
+    // 槽位/右栏在 DSH 启动早期可能还没就绪，短轮询等待；返回的清理函数会把
+    // 已注册的东西反注册，并清掉还没触发的重试定时器。
+    const 就绪重试间隔毫秒 = 250
+    const 就绪最多次数 = 40
+    function 等就绪(尝试) {
+      let 次数 = 0
+      let 定时 = null
+      let 已取消 = false
+      let 清理 = null
+      const 跑 = () => {
+        if (已取消) return
+        const 结果 = 尝试()
+        if (结果 === null) {
+          if (次数 < 就绪最多次数) {
+            次数 += 1
+            定时 = setTimeout(跑, 就绪重试间隔毫秒)
+          } else {
+            try { console.warn('[dsh-fish-service] 服务没就绪，注册已放弃') } catch { /* 忽略 */ }
+          }
+          return
+        }
+        清理 = typeof 结果 === 'function' ? 结果 : null
+      }
+      跑()
+      return () => {
+        已取消 = true
+        if (定时) { clearTimeout(定时); 定时 = null }
+        if (清理) {
+          try { 清理() } catch { /* 已卸载 */ }
+          清理 = null
+        }
+      }
+    }
+
     // 右栏「开始」页的卡片：注册一个 tab 类型 + guide 条目，body 走 sidebar.right.pane.tab 槽。
     function 注册右栏(ctx) {
-      let 剩余 = 40
-      const 尝试 = () => {
+      return 等就绪(() => {
         let 右栏 = null
         try {
           右栏 = ctx.get('sidebarRightTabs')
@@ -4380,17 +4439,9 @@ select.fish-select option:checked {
           右栏 = null
         }
         if ((!右栏 || typeof 右栏.register !== 'function') && ctx && ctx.sidebarRightTabs) 右栏 = ctx.sidebarRightTabs
-        if (!右栏 || typeof 右栏.register !== 'function') {
-          if (剩余 > 0) {
-            剩余 -= 1
-            setTimeout(尝试, 250)
-          } else {
-            try { console.warn('[dsh-fish-service] 右栏服务没就绪，双语翻译卡片没有注册') } catch { /* 忽略 */ }
-          }
-          return
-        }
+        if (!右栏 || typeof 右栏.register !== 'function') return null
         try {
-          右栏.register({
+          const 摘 = 右栏.register({
             id: 翻译TabID,
             kind: 翻译TabKind,
             title: () => '双语翻译',
@@ -4405,45 +4456,38 @@ select.fish-select option:checked {
               },
             ],
           })
+          return typeof 摘 === 'function' ? 摘 : () => {}
         } catch (错误) {
           try { console.warn('[dsh-fish-service] 注册双语翻译卡片失败', 错误) } catch { /* 忽略 */ }
+          return () => {}
         }
-      }
-      尝试()
+      })
     }
 
     // ---------------- 注册 ----------------
 
     function 注册(ctx, 槽位, 配置项, 组件) {
       try {
-        slots注册(ctx, 槽位, 配置项, 组件)
+        return slots注册(ctx, 槽位, 配置项, 组件)
       } catch (error) {
         // 槽位在这个 DSH 版本不存在时不要让整个插件挂掉。
         try { console.warn('[dsh-fish-service] 注册槽位失败', 槽位, error) } catch { /* 忽略 */ }
+        return () => {}
       }
     }
 
     function slots注册(ctx, 槽位, 配置项, 组件) {
-      const slots = ctx.get('slots')
-      if (slots === undefined || typeof slots.register !== 'function') {
-        // 与 dsh-peak-scheduler 同样的做法：DSH 启动早期 slots 可能还没好，短重试。
-        let 次数 = 0
-        const 重试 = () => {
-          const 后到 = ctx.get('slots')
-          if (!后到 || typeof 后到.register !== 'function') {
-            if (次数 < 40) { 次数 += 1; setTimeout(重试, 250) }
-            return
-          }
-          try {
-            后到.inject(槽位, () => 后到.register({ name: 槽位, ...配置项 }, 组件))
-          } catch {
-            if (次数 < 40) { 次数 += 1; setTimeout(重试, 250) }
-          }
+      return 等就绪(() => {
+        const slots = ctx.get('slots')
+        if (!slots || typeof slots.register !== 'function' || typeof slots.inject !== 'function') return null
+        try {
+          const 摘 = slots.inject(槽位, () => slots.register({ name: 槽位, ...配置项 }, 组件))
+          return typeof 摘 === 'function' ? 摘 : () => {}
+        } catch {
+          // 槽位本身可能还没注册，等下一轮再试。
+          return null
         }
-        重试()
-        return
-      }
-      slots.inject(槽位, () => slots.register({ name: 槽位, ...配置项 }, 组件))
+      })
     }
 
     /**
@@ -4491,30 +4535,44 @@ select.fish-select option:checked {
 
     function apply(ctx) {
       插件上下文 = ctx
-      注入样式()
+      const 清理们 = []
+      const 收 = (清理) => { if (typeof 清理 === 'function') 清理们.push(清理) }
+      收(注入样式())
       // 设置页：P1 的「本地 AI」tab（P2 在同一个页面里加分区的）。
-      注册(ctx, 'settings.section', { id: 'fish-service', order: 57, label: () => '本地 AI' }, Section)
+      收(注册(ctx, 'settings.section', { id: 'fish-service', order: 57, label: () => '本地 AI' }, Section))
       // 消息级朗读按钮：助手消息操作行（复制按钮右边）。
-      注册(ctx, 'conversation.chat.assistant-actions', { id: 'fish-read', order: 21, label: () => '朗读' }, 朗读按钮)
+      收(注册(ctx, 'conversation.chat.assistant-actions', { id: 'fish-read', order: 21, label: () => '朗读' }, 朗读按钮))
       // 输入框右侧：麦克风（开始/结束录音）。
-      注册(ctx, 'conversation.input.right', { id: 'fish-mic', order: 32, label: () => '语音输入' }, 麦克风按钮)
+      收(注册(ctx, 'conversation.input.right', { id: 'fish-mic', order: 32, label: () => '语音输入' }, 麦克风按钮))
       // 输入框右侧：本地识图按钮（点选图片；图片不进草稿）。
-      注册(ctx, 'conversation.input.right', { id: 'fish-vision', order: 31, label: () => '本地识图' }, 本地识图按钮)
+      收(注册(ctx, 'conversation.input.right', { id: 'fish-vision', order: 31, label: () => '本地识图' }, 本地识图按钮))
       // 输入框上方浮层：录音状态 + 三选一面板（DSH 的 overlay 就挂在这里）。
-      注册(ctx, 'conversation.input.overlay', { id: 'fish-voice', order: 40, label: () => '语音输入面板' }, 语音面板)
+      收(注册(ctx, 'conversation.input.overlay', { id: 'fish-voice', order: 40, label: () => '语音输入面板' }, 语音面板))
       // 输入框左侧：自动朗读开关。
-      注册(ctx, 'conversation.input.left', { id: 'fish-auto-read', order: 45, label: () => '自动朗读' }, 自动朗读开关)
+      收(注册(ctx, 'conversation.input.left', { id: 'fish-auto-read', order: 45, label: () => '自动朗读' }, 自动朗读开关))
       // 输入框左侧：本地 AI 状态胶囊（显存 / 任务，点开看详情）。
-      注册(ctx, 'conversation.input.left', { id: 'fish-metrics', order: 40, label: () => '本地 AI 状态' }, 指标胶囊)
+      收(注册(ctx, 'conversation.input.left', { id: 'fish-metrics', order: 40, label: () => '本地 AI 状态' }, 指标胶囊))
       // 框选文字：朗读 / 翻译（需要同时注册 interaction 与 keyed 槽位）。
-      注册选中交互(ctx)
+      收(注册选中交互(ctx))
       // 右栏「开始」页：双语翻译卡片（guide 入口 + 面板 body）。
       // inject 拿到当前会话 id，面板据此给每个会话留一份草稿。
-      注册(ctx, 'sidebar.right.pane.tab', { key: 翻译TabID, inject: (会话) => ({ sessionId: 会话 }) }, 翻译面板)
-      注册右栏(ctx)
+      收(注册(ctx, 'sidebar.right.pane.tab', { key: 翻译TabID, inject: (会话) => ({ sessionId: 会话 }) }, 翻译面板))
+      收(注册右栏(ctx))
 
       // 预热一次偏好（不阻塞）；失败也无所谓，组件挂载时会再拉。
       void 载入偏好()
+
+      // 按注册的反序释放：槽位/交互/右栏 tab、未触发的重试定时器、样式节点。
+      const 卸载 = () => {
+        for (const 清理 of 清理们.splice(0).reverse()) {
+          try { 清理() } catch { /* 已卸载 */ }
+        }
+      }
+      try {
+        ctx.effect?.(() => 卸载)
+      } catch {
+        // 老宿主没有 effect 时只能靠页面整体销毁；不影响注册本身。
+      }
     }
 
     exports.apply = apply
@@ -4528,6 +4586,7 @@ select.fish-select option:checked {
       会话自动朗读上限,
       会话键合法,
       构建录音约束,
+      规整录音时长,
       打开麦克风,
       设备不可用错误,
       是虚拟设备名称,

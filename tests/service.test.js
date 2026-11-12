@@ -523,6 +523,7 @@ test('visionPrefs：默认开、随配置变、可经 config.set 写入；不探
     localDescribe: true,
     visionSessionReady: true,
     visionSessionPrompt: 默认会话识图提示,
+    visionDefaultPreset: 'detailed',
   })
   assert.equal(stack.api.config.get().localDescribe, true)
 
@@ -533,6 +534,7 @@ test('visionPrefs：默认开、随配置变、可经 config.set 写入；不探
     localDescribe: false,
     visionSessionReady: false,
     visionSessionPrompt: '',
+    visionDefaultPreset: 'detailed',
   })
 
   // 只认明确的开：其它值一律按关（与其它布尔字段一致）。
@@ -542,6 +544,7 @@ test('visionPrefs：默认开、随配置变、可经 config.set 写入；不探
     localDescribe: false,
     visionSessionReady: false,
     visionSessionPrompt: '',
+    visionDefaultPreset: 'detailed',
   })
 
   await stack.api.config.set({ localDescribe: 1 })

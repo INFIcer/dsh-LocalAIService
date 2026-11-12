@@ -19,8 +19,8 @@ import {
 test('错误码表覆盖契约第 3 节', () => {
   assert.deepEqual([...ERROR_CODES].sort(), [
     'api_incompatible', 'bad_request', 'busy', 'canceled', 'model_loading',
-    'model_missing', 'not_implemented', 'service_down', 'service_not_installed',
-    'timeout', 'upstream_error', 'vram_exhausted',
+    'model_missing', 'not_implemented', 'not_supported', 'service_down',
+    'service_not_installed', 'timeout', 'upstream_error', 'vram_exhausted',
   ])
   assert.match(defaultHint('service_down'), /未启动/)
 })

@@ -192,7 +192,7 @@ interface ReadyResult {
 
 ```ts
 interface TtsOptions {
-  voice?: string              // 默认 config.defaultVoice
+  voice?: string              // 默认 config.ttsVoice
   speed?: number              // 0.5~2.0，默认 1.0
   emotion?: string            // 服务端支持的情感文本/8 维向量；不校验内容
   language?: 'auto' | 'zh' | 'en' | 'ja' | 'es' | 'ar'
@@ -433,24 +433,37 @@ interface JobRecord {
 
 | 字段 | 可写 | 校验 |
 | --- | --- | --- |
-| `baseUrl` | ✅ | `http://` / `https://`，保存前 `GET /health`（可在 UI 里跳过） |
-| `token` | ✅ | 字符串；只写，不回显 |
+| `baseUrl` | ✅ | `http://` / `https://`；设置页「测试连接」走 `POST /test` |
+| `apiVersion` | ✅ | 数字（如 `1`、`1.0`） |
+| `token` | ✅ | 字符串 ≤512；只写，不回显 |
 | `enabled` | ✅ | boolean |
-| `defaultVoice` | ✅ | 必须存在于 `/voices`（离线时允许先保存，状态页标红） |
-| `autoRead` | ✅ | boolean |
-| `maxCharsPerChunk` | ✅ | 200~5000 |
+| `ttsVoice` | ✅ | 字符串；不强制存在于 `/voices`（离线也能保存） |
+| `ttsSpeed` | ✅ | 0.5~2 |
+| `autoRead` / `autoReadInBackground` / `rememberVoiceChoice` | ✅ | boolean |
+| `autoReadSessions` | ✅ | 对象；键以 `session-` 开头，最多 200 条 |
+| `readMaxChars` | ✅ | 200~5000 |
+| `readSkipCode` / `readConcurrency` | ✅ | boolean / 1~4 |
+| `recordMime` | ✅ | `auto/webm/wav` |
+| `recordDeviceId` | ✅ | 字符串 ≤200 |
+| `asrLanguage` | ✅ | `auto/zh/en/ja` |
+| `primaryLanguage` / `secondaryLanguage` | ✅ | `zh/en/ja/ko/yue` |
 | `requestTimeoutMs` / `asrTimeoutMs` / `visionTimeoutMs` | ✅ | 1000~1800000 |
-| `healthIntervalMs` | ✅ | 5000~120000 |
-| `busyAfterMs` | ✅ | 5000~300000 |
+| `localDescribe` | ✅ | boolean |
+| `uiVoiceInput` / `uiVision` / `uiMetrics` / `uiAutoRead` | ✅ | boolean（界面注入开关） |
+| `visionPresets` | ✅ | 对象，`brief/standard/detailed/text` 四键各 ≤4000 字 |
+| `visionDefaultPreset` | ✅ | `brief/standard/detailed/text` |
+| `visionSessionPrompt` | ✅ | 字符串 ≤4000 字 |
+| `cacheDir` | ✅ | 绝对路径 |
 | `cacheTtlHours` / `cacheMaxMb` | ✅ | 1~720 / 256~10240 |
-| `modelMirror` / `pypiIndex` / `torchIndex` | ✅ | 枚举/URL |
-| `installDir` | ✅（仅未安装时） | 绝对路径 |
-| `installMode` / `version` | ❌ | 由安装器维护 |
+| `healthIntervalMs` | ✅ | 5000~120000 |
+| `enabledCapabilities` | ✅ | 字符串数组（服务端能力名子集；空 = 全开） |
+| `logLevel` | ✅ | `debug/info/warn/error` |
+| `installDir` / `installMode` / `version` | ❌ | 由安装器维护 |
 
 返回：
 
 ```json
-{ "ok": true, "applied": ["defaultVoice"], "requiresRestart": false, "warnings": [] }
+{ "ok": true, "applied": ["ttsVoice"], "requiresRestart": false, "warnings": [] }
 ```
 
 ### 1.14 `events`
@@ -531,15 +544,18 @@ interface VisionPrefs {
   localDescribe: boolean      // 设置页「本地识图」开关；未配置时为 true
   visionSessionReady: boolean // 会话识图是否可用（当前与 localDescribe 同值）
   visionSessionPrompt: string // 会话识图实际用的提示词；关闭时为空串
+  visionDefaultPreset: VisionPresetName // 工具识图默认档位，缺省 'detailed'
 }
 ```
 
 - 只读本地配置：`localDescribe: config.localDescribe !== false`，因此旧配置文件（没有该字段）返回 `true`；
 - `visionSessionPrompt`：配置里留空时返回内置「详细」档文本（关闭时返回空串），调用方可直接展示或转发；
+- `visionDefaultPreset`：工具识图（`scope='tool'`）未显式指定 `preset` 时用的档位，取值 `brief/standard/detailed/text`，配置非法时回落 `detailed`；
 - 同步返回，不抛异常；设置页改完立即生效，无需重启；
 - 调用方做「继承 / 开 / 关」三态时：读 `visionPrefs().localDescribe` 作为「继承」时的值，
   自己的开关覆盖它即可；
-- 本插件内部也用它：`POST /describe-upload` 在关闭时直接 400，工具提示段在关闭时输出空串。
+- 本插件内部也用它：`POST /describe-upload` 在关闭时直接 400，并从这里取默认档位；
+  `fish_describe_image` 在关闭时工具层直接返回 `not_supported`；工具提示段在关闭时输出空串。
 
 ---
 
@@ -820,13 +836,14 @@ interface VisionPrefs {
 | `model_missing` | 服务+插件 | `cap.ready=false`；或 `/admin/models` `present=false`；或 503 + 缺权重 | false | 缺少 {model} 模型（约 {size}）。到『模型管理』勾选下载。 |
 | `model_loading` | 服务+插件 | 503 detail 含“加载/loading”；或冷加载 in-flight 超 3s 再次请求 | true | 模型正在加载，通常 10~60 秒；稍后再试。 |
 | `vram_exhausted` | 服务 | 507 `insufficient_vram` | false | 显存不够（需要约 {need}，当前空闲 {free}）。关掉占显存的程序，或在服务 WebUI 里卸载其它模型。 |
-| `busy` | 插件 | 队列等待 > `busyAfterMs`；或 503 含“队列/busy” | true | 服务正在忙（队列还有 {n} 个任务），已经排队；可用 fish_job 查进度。 |
+| `busy` | 插件 | 队列等待中；或 503 含“队列/busy” | true | 服务正在忙（队列还有 {n} 个任务），已经排队；可用 fish_job 查进度。 |
 | `timeout` | 插件 | 504 `job_timeout`/`comfy_error`；fetch AbortError | true（一次） | 等太久了（>{timeout} 秒），模型可能正在加载。稍后重试；长文本请分段。 |
 | `bad_request` | 服务 | 400/401/403/404/413/422 | false | 参数不对：{detail}。修正后重试，不要原样重试。 |
 | `upstream_error` | 服务 | 500/502/503（能力 ready 但失败） | true（一次） | 服务内部报错：{detail}。可重试一次；仍失败看 logs\service.err.log。 |
 | `api_incompatible` | 插件 | `api_version` 主版本 ≠ 1 | false | 服务契约版本不匹配（服务 {v}，插件支持 1.x）。请升级插件或服务。 |
 | `canceled` | 服务+插件 | 409 `job_canceled`；或用户取消 | false | 任务已取消。 |
 | `not_implemented` | 插件 | 契约保留、本版未做 | false | 这个功能还没实现（{feature}）。 |
+| `not_supported` | 插件 | 插件配置把能力显式关闭（如 `localDescribe=false`） | false | 该能力未启用，请到「设置 → 插件 → 本地 AI」中打开后再试。 |
 
 ### 3.2 HTTP 映射细节
 
@@ -864,13 +881,18 @@ interface VisionPrefs {
 
 | 方法 | 路径 | 请求 | 返回 |
 | --- | --- | --- | --- |
-| GET | `/health` | — | `{ok, serviceDown, lastCheckAt, latencyMs}`（宿主自身健康，不是 localai 的） |
-| GET | `/status` | — | 脱敏配置 + `fish.service.health()` + capabilities + install 状态 |
-| GET | `/state` | — | 设置页聚合状态：`plugin/config/health/capabilities/voices(名字数组)/voicesDirectory/cache/errors/envOverrides`（v0.3 新增 `voicesDirectory`，服务离线时为空字符串） |
-| POST | `/config` | `{patch: {...}}` | 同 `fish.service.config.set` |
-| GET | `/voices` | — | `{ok, voices:[...]}` |
-| POST | `/translate` | `{text, source?, target?}` | `{ok, text, source, target, ms}`；框选翻译用，走与 `fish.service.translate` 相同的自动语言规则（P2.2） |
-| POST | `/tts` | `{text, voice?, speed?, language?, seed?}` | `audio/wav`（默认）或 `{ok, wavPath, id}`（`?mode=json`） |
+| GET | `/health` | — | `{ok, pluginOk, serviceDown, enabled, pluginVersion, baseUrl, lastCheckAt, latencyMs, consecutiveFailures, serviceVersion?, apiVersion?, lastError?}`（宿主自身健康，不是 localai 的） |
+| GET | `/state` | — | 设置页聚合状态：`plugin{version,configFile,logFile,enabled,baseUrl}/config/health/capabilities/voices(名字数组)/voicesDirectory/visionDefaults{presets,session}/cache/errors/envOverrides`（服务离线时 `voicesDirectory` 为空字符串） |
+| POST | `/save` | `{config}`、`{patch}` 或裸补丁 | `{ok, applied, requiresRestart, warnings, config}` |
+| POST | `/test` | `{timeoutMs?}` | `{ok, reachable, compatible, baseUrl, latencyMs, checkedAt, serviceVersion?, apiVersion?, capabilities?, lastError?, code?, hint?}` |
+| GET | `/logs` | `?lines=1~1000` | `{ok, lines:[]}`（本插件日志文件，不含服务日志） |
+| GET | `/voices` | — | `{ok, voices:[...]}`；服务失败仍 200 + `ok:false` |
+| POST | `/translate` | `{text, source?, target?}` | `{ok, text, source, target, ms}`；参数错 400、服务错 502 |
+| POST | `/translate/batch` | `{texts:[{id,text}], source?, target?, batchSize?, timeoutMs?}`（≤500 段、总 ≤20 万字） | `{ok, source, target, engine, ms, results:[{id, translated, detectedLang?, error?}]}` |
+| POST | `/translate/jobs` | `{texts:[string], source?, target?}` | `{ok, id, state, source, target, count}`；旧服务 200 + `{ok:false, code:"not_supported"}` |
+| GET | `/translate/jobs/status` | `?id=` | `{ok, id, state, progress?, error?}` |
+| GET | `/translate/jobs/result` | `?id=` | `{ok, id, state, texts, source, target, engine, ms?}`；未完成 200 + `{ok:false, code:"not_ready"}` |
+| POST | `/translate/jobs/cancel` | `{id}` | 取消结果；失败也 200 |
 | POST | `/read` | `{text, voice?, speed?, maxChars?, skipCodeBlocks?}` | `{ok, wavPath, ms, items[{wavPath,url,ms,voice,bytes,chars,cached}], chunks, chars, codeBlocks, truncated, concurrency, cachedChunks, cacheHits, degraded?}`（P2，一次全合成） |
 | POST | `/read/plan` | `{text, maxChars?, voice?, speed?, skipCodeBlocks?}` | `{ok, segments:[{index,text,chars}], chars, codeBlocks, codeLines, truncated, voice, speed, maxChars}`（P2.1，不合成） |
 | POST | `/read/segment` | `{index, total?, text, voice?, speed?}` | `{ok, index, wavPath, url, ms, cached, bytes, voice?, speed?, total?}`（P2.1，单段合成、自动命中缓存） |
@@ -878,26 +900,11 @@ interface VisionPrefs {
 | POST | `/cache/clear` | `{kind?}` | `{ok, kind, files, bytes, kinds}`；省略 kind 清产物但保留 `voice`（P2.1） |
 | POST | `/cache/cleanup` | — | `{ok, expired, lru, bytesFreed, scanned}`（P2.1，调 `CacheStore.cleanup()`） |
 | POST | `/open-folder` | `{path}` | `{ok, path}`；在文件管理器里打开目录，只接受 `cacheDir` 或**服务当前音色目录**本身/子目录（realpath 校验，非 Windows 返回「暂不支持」） |
-| GET | `/audio?path=` | — | `audio/*`；只允许 `cacheDir` 内的 `.wav/.webm/.ogg/.opus/.mp3/.m4a`（P2） |
-| POST | `/transcribe-upload` | multipart `file` + `durationMs?` + `language?` | `{ok, text, ms, elapsedMs?, language?}`（P2，临时文件请求结束即删） |
+| POST | `/open-webui` | — | `{ok:true}`；先探测服务可达，只拼 `/ui`，Windows 用 `cmd start` 打开；非 Windows 200 + `not_supported` |
+| GET | `/audio?path=` | — | `audio/*`；只允许 `cacheDir` 内的 `.wav/.webm/.ogg/.opus/.mp3/.m4a`，≤128MB（P2） |
+| POST | `/transcribe-upload` | multipart `file` + `durationMs?` + `language?` | `{ok, text, ms, elapsedMs?, language?}`；≥1500 字节、≥300ms、≤5 分钟；临时文件请求结束删除（识别异常短文本时会短时保留排查） |
 | POST | `/voice-upload` | multipart `file` + `durationMs?` | `{ok, path, bytes, mime}`（P2，存 `cacheDir/voice`） |
-| POST | `/describe-upload` | multipart `file`（`image/*`）+ `mode?` + `scope?` + `preset?` | `{ok, text, mode, scope, preset?, ms, bytes}`（v0.4；v0.5 加 `scope`/`preset`。`scope=session` 用会话识图提示词、不传 `preset`；图片只存临时文件、请求结束即删） |
-| GET | `/audio/:id` | — | `audio/wav` 流；id 映射到缓存文件，防目录穿越 |
-| POST | `/asr` | multipart `file` + `language?` | `{ok, text, segments?}` |
-| GET | `/logs` | `?lines=200&file=service` | `{ok, lines:[]}`（代理 `/admin/logs`） |
-| POST | `/service/:action` | `action=start\|stop\|restart` | `{ok, state}`；start 等待 `/health` **HTTP 200**（不等 `ok:true`）或 120s 超时 |
-| GET | `/install/status` | — | `InstallStatus` |
-| POST | `/install/preflight` | `{installDir?, port?}` | `PreflightResult` |
-| POST | `/install/start` | `{installDir, models[], installEngine, autoStart}` | `{ok, taskId}` |
-| POST | `/install/cancel` | — | `{ok}` |
-| GET | `/install/events` | SSE | `event: progress\ndata: {...}`；断线可重连 |
-| POST | `/install/adopt` | `{baseUrl?}` | `{ok, installMode}` |
-| POST | `/install/uninstall` | `{removeModels?, keepConfig?}` | `{ok, removed[], kept[]}` |
-| GET | `/models` | — | 代理 `/admin/models` |
-| POST | `/models/download` | `{capability, name}` | `{ok, taskId}` |
-| GET | `/models/tasks/:id` | — | 代理下载进度 |
-| POST | `/models/activate` | `{capability, name}` | `{ok}` |
-| GET | `/webui` | — | `{ok, url, embedUrl}`（`/ui?embed=1`） |
+| POST | `/describe-upload` | multipart `file`（`image/*`）+ `mode?` + `scope?` + `preset?` | `{ok, text, mode, scope, preset?, ms, bytes}`（v0.4；v0.5 加 `scope`/`preset`。`scope=session` 用会话识图提示词、不传 `preset`；工具档位缺省取 `visionPrefs().visionDefaultPreset`；图片只存临时文件、请求结束即删） |
 | GET | `/metrics` | — | `{ok:true, ms, gpu:{name,usedMb,totalMb,freeMb,percent}, modelsLoaded:[], queue:{queued,running,queuedByKind,runningByKind}, scheduler:{currentKind,loadedModel}, service:{version,uptimeSeconds}, vision:{loaded,ready}}`；宿主并行抓 localai 的 `/admin/system` 与 `/jobs/stats?limit=1`（各 1500ms 超时），结果缓存 1 秒。两侧都失败时仍返回 200 + `{ok:false, code:"service_down", hint:"本地 AI 未启动"}`（服务未启动的常规分支，不是错误）；只有一侧成功时另一侧给中性默认值。`percent` 为整数，缺字段不报错 |
 
 `/describe-upload` 的客户端用途：输入框旁的「本地识图」按钮调用它（`scope=session`、`mode=caption`，不传 `preset`）；
@@ -905,13 +912,17 @@ interface VisionPrefs {
 `scope` 缺省时按 `tool` 处理，传 `preset` 或 `mode=ocr` 时仍可走工具档位；非法 `preset` 回配置默认档。
 消息发出后的旧「图片下方按钮」与草稿附件栏入口均已移除。
 
+安装器、模型下载/激活、服务启停、管理界面嵌入等安装/模型管理类 HTTP 路由**不在本插件内**（P1/P3 未实现）；
+本插件只在 `/state`、`/health` 里暴露安装/服务状态相关字段，安装动作由安装器（`install` 相关工具）承担。
+
 安全：
 
-- 所有 POST 要求同源（检查 `Origin`/`Referer` 为 DSH 页面）；`GET /metrics` 也做同样检查（其它 GET 仍只做只读查询）；
+- 写操作（POST，以及 `GET /metrics`）检查同源：`Origin` 的 host 必须与请求 Host 一致；没有 `Origin` 的本机脚本/测试放行；不看 `Referer`；
 - `/open-folder` 只打开 `cacheDir` 或服务音色目录本身/子目录：缓存根每次从配置取，音色目录每次实时 `GET /voices` 取（不落配置、不缓存成任意路径）；路径须为绝对路径、已存在、是目录，两边 realpath 后再判包含关系，防符号链接穿越；服务离线时只允许 `cacheDir`；
-- `/audio/:id` 只接受 `[a-f0-9-]+`，映射表里查不到就 404；
-- `/logs` 不接受任意 `file` 路径，只接受 `service`/`err` 枚举；
+- `/audio?path=` 只读 `cacheDir` 内、扩展名白名单、≤128MB 的音频文件；用 `isPathInside` 按解析后的路径字符串前缀判断（不 realpath）；
+- `/logs` 只读本插件自己的日志文件，`lines` 限 1~1000，不接受任意路径；
 - `/describe-upload` 只收 `image/jpeg|png|webp|gif|bmp`，单张 ≤15MB；`localDescribe` 关闭时直接 400；图片落 `cacheDir/tmp`，请求结束（含失败）立即删除；
+- `/transcribe-upload`、`/voice-upload` 走 multipart，音频 ≤25MB、图片 ≤15MB，临时文件请求结束删除（识别异常短文本时短时保留排查）；
 - 不返回 token、不返回 localai 的绝对 `outputs/` 路径。
 
 ---
@@ -924,14 +935,13 @@ interface VisionPrefs {
 {
   "version": 1,
   "enabled": true,
+  "uiVoiceInput": true,
+  "uiVision": true,
+  "uiMetrics": true,
+  "uiAutoRead": true,
   "baseUrl": "http://127.0.0.1:7880",
+  "apiVersion": "1",
   "token": "",
-  "installDir": "C:\\Users\\Administrator\\AppData\\Local\\localai-service",
-  "installMode": "unknown",
-  "autoStart": true,
-  "defaultVoice": "default",
-  "autoRead": false,
-  "maxCharsPerChunk": 800,
   "requestTimeoutMs": 180000,
   "asrTimeoutMs": 300000,
   "visionTimeoutMs": 600000,
@@ -944,15 +954,28 @@ interface VisionPrefs {
   },
   "visionDefaultPreset": "detailed",
   "visionSessionPrompt": "",
-  "healthIntervalMs": 15000,
-  "busyAfterMs": 30000,
+  "ttsVoice": "dafeiyu",
+  "ttsSpeed": 1,
+  "autoRead": false,
+  "autoReadSessions": {},
+  "autoReadInBackground": true,
+  "readMaxChars": 2000,
+  "readConcurrency": 2,
+  "readSkipCode": true,
+  "recordMime": "auto",
+  "recordDeviceId": "",
+  "rememberVoiceChoice": true,
+  "asrLanguage": "auto",
+  "primaryLanguage": "zh",
+  "secondaryLanguage": "en",
+  "cacheDir": "%DSH_HOME%/fish-service-cache",
   "cacheTtlHours": 72,
   "cacheMaxMb": 2048,
-  "modelMirror": "modelscope",
-  "pypiIndex": "",
-  "torchIndex": "",
-  "embedWebUI": true,
-  "logLevel": "info"
+  "healthIntervalMs": 15000,
+  "enabledCapabilities": [],
+  "logLevel": "info",
+  "installMode": "unknown",
+  "installDir": ""
 }
 ```
 
@@ -962,59 +985,78 @@ interface VisionPrefs {
 | --- | --- | --- | --- | --- |
 | `version` | int | 1 | 只读 | schema 版本；迁移用 |
 | `enabled` | bool | true | — | 总开关 |
+| `uiVoiceInput` | bool | true | — | 界面注入：语音输入按钮 |
+| `uiVision` | bool | true | — | 界面注入：本地识图按钮 |
+| `uiMetrics` | bool | true | — | 界面注入：性能监控 |
+| `uiAutoRead` | bool | true | — | 界面注入：自动朗读按钮 |
 | `baseUrl` | string | `http://127.0.0.1:7880` | `http(s)://` | 唯一服务地址 |
+| `apiVersion` | string | `"1"` | — | 期望的服务契约主版本 |
 | `token` | string | `""` | ≤512 | 只写不回显 |
-| `installDir` | string | `%LOCALAPPDATA%\localai-service` | 绝对路径 | managed 模式 |
-| `installMode` | enum | `unknown` | `unknown/managed/adopted` | 安装器维护 |
-| `autoStart` | bool | true | — | 安装后启用计划任务 |
-| `defaultVoice` | string | `default` | 存在于 `/voices` | 新装用服务端默认；迁移时若 `dafeiyu` 存在则导入 |
-| `autoRead` | bool | false | — | 默认关，避免迁移后突然出声 |
-| `maxCharsPerChunk` | int | 800 | 200~5000 | 长文分段（ops 用） |
-| `ttsSpeed` | number | 1.0 | 0.5~2.0 | 朗读语速（P2） |
-| `autoRead` | bool | false | — | 自动朗读最终回复（P2） |
+| `requestTimeoutMs` | int | 180000 | 1000~1800000 | TTS/一般 |
+| `asrTimeoutMs` | int | 300000 | 1000~1800000 | ASR/分离 |
+| `visionTimeoutMs` | int | 600000 | 1000~1800000 | 视觉 |
+| `localDescribe` | bool | true | — | 本地识图总开关（v0.4）；关闭时工具层直接 `not_supported`；旧配置缺字段按 true |
+| `visionPresets` | object | 四档内置提示词 | 只认 `brief/standard/detailed/text` 四个字符串键，每个 ≤4000 字 | 工具识图四档提示词；空串表示用内置默认，缺字段自动补默认（v0.5） |
+| `visionDefaultPreset` | enum | `detailed` | `brief/standard/detailed/text` | 工具识图默认档；非法值回退 `detailed`（v0.5） |
+| `visionSessionPrompt` | string | `""` | ≤4000 字 | 会话识图（输入框旁按钮）单独用的提示词；留空时与「详细」档一致（v0.5） |
+| `ttsVoice` | string | `dafeiyu` | 存在于 `/voices` | 默认音色 |
+| `ttsSpeed` | number | 1 | 0.5~2.0 | 朗读语速（P2） |
+| `autoRead` | bool | false | — | 自动朗读最终回复（P2）；默认关，避免迁移后突然出声 |
+| `autoReadSessions` | object | `{}` | 键以 `session-` 开头，最多 200 条 | 记住哪些会话开自动朗读（P2） |
+| `autoReadInBackground` | bool | true | — | 会话在后台时也朗读（P2） |
 | `readMaxChars` | int | 2000 | 200~5000 | 朗读单段最大字数（P2） |
 | `readConcurrency` | int | 2 | 1~4 | 朗读分段合成的批间并发度（P2.1；1 = 完全串行） |
 | `readSkipCode` | bool | true | — | 朗读时去掉代码块（P2） |
 | `recordMime` | enum | auto | auto/webm/wav | 语音输入录音格式（P2） |
+| `recordDeviceId` | string | `""` | ≤200 | 指定录音设备；空 = 系统默认（P2） |
 | `rememberVoiceChoice` | bool | true | — | 记住三选一上次选择（P2，只做高亮） |
 | `asrLanguage` | enum | auto | auto/zh/en/ja | 语音输入 ASR 语言（P2） |
 | `primaryLanguage` | enum | `zh` | `zh/en/ja/ko/yue` | 翻译第一语言：原文不是它时译成它（v0.3） |
 | `secondaryLanguage` | enum | `en` | `zh/en/ja/ko/yue` | 翻译第二语言：原文就是第一语言时译成它（v0.3） |
-| `requestTimeoutMs` | int | 180000 | 1000~1800000 | TTS/一般 |
-| `asrTimeoutMs` | int | 300000 | 1000~1800000 | ASR/分离 |
-| `visionTimeoutMs` | int | 600000 | 1000~1800000 | 视觉 |
-| `localDescribe` | bool | true | — | 本地识图总开关（v0.4）；旧配置缺字段按 true |
-| `visionPresets` | object | 四档内置提示词 | 只认 `brief/standard/detailed/text` 四个字符串键，每个 ≤4000 字 | 工具识图四档提示词；空串表示用内置默认，缺字段自动补默认（v0.5） |
-| `visionDefaultPreset` | enum | `detailed` | `brief/standard/detailed/text` | 工具识图默认档；非法值回退 `detailed`（v0.5） |
-| `visionSessionPrompt` | string | `""` | ≤4000 字 | 会话识图（输入框旁按钮）单独用的提示词；留空时与「详细」档一致（v0.5） |
-| `healthIntervalMs` | int | 15000 | 5000~120000 | 健康轮询 |
-| `busyAfterMs` | int | 30000 | 5000~300000 | 队列等待阈值 |
+| `cacheDir` | string | `%DSH_HOME%/fish-service-cache` | 绝对路径 | 产物缓存目录 |
 | `cacheTtlHours` | int | 72 | 1~720 | 必须 > fish-message 出站 TTL（24h） |
 | `cacheMaxMb` | int | 2048 | 256~10240 | LRU 上限 |
-| `modelMirror` | enum | `modelscope` | `modelscope/huggingface/hf-mirror` | 模型下载源 |
-| `pypiIndex` | string | `""` | URL 或空 | pip 镜像 |
-| `torchIndex` | string | `""` | URL 或空 | torch 轮子索引 |
-| `embedWebUI` | bool | true | — | 设置页 iframe |
+| `healthIntervalMs` | int | 15000 | 5000~120000 | 健康轮询 |
+| `enabledCapabilities` | list | `[]` | 服务端能力名子集 | 空 = 按服务端能力全开；非空时只启用列出的能力（设置页勾选） |
 | `logLevel` | enum | info | `debug/info/warn/error` | 日志级别 |
+| `installMode` | enum | `unknown` | `unknown/managed/adopted` | 安装器维护 |
+| `installDir` | string | `""` | 绝对路径 | managed 模式（P1 安装器维护） |
 
 ### 5.3 环境变量
 
 | 变量 | 字段 | 优先级 |
 | --- | --- | --- |
-| `DSH_FISH_SERVICE_BASE_URL` | `baseUrl` | env > file > default |
-| `DSH_FISH_SERVICE_TOKEN` | `token` | 同上 |
-| `DSH_FISH_SERVICE_ENABLED` | `enabled` | 同上 |
-| `DSH_FISH_SERVICE_INSTALL_DIR` | `installDir` | 同上 |
-| `DSH_FISH_SERVICE_DISABLE_INSTALL` | 隐藏安装 UI | 只读 |
-| `DSH_FISH_SERVICE_HEALTH_MS` | `healthIntervalMs` | 同上 |
-| `DSH_FISH_SERVICE_LOCAL_DESCRIBE` / `FISH_SERVICE_LOCAL_DESCRIBE` | `localDescribe` | 同上 |
+每个变量都有 `DSH_FISH_SERVICE_*` 与更短的 `FISH_SERVICE_*` 两种写法，前者优先。
+
+| 变量（`DSH_FISH_SERVICE_*`） | 字段 | 类型 |
+| --- | --- | --- |
+| `BASE_URL` | `baseUrl` | string |
+| `API_VERSION` | `apiVersion` | string |
+| `TOKEN` | `token` | string |
+| `ENABLED` | `enabled` | boolean |
+| `REQUEST_TIMEOUT_MS` | `requestTimeoutMs` | number |
+| `ASR_TIMEOUT_MS` | `asrTimeoutMs` | number |
+| `VISION_TIMEOUT_MS` | `visionTimeoutMs` | number |
+| `LOCAL_DESCRIBE` | `localDescribe` | boolean |
+| `UI_VOICE_INPUT` | `uiVoiceInput` | boolean |
+| `UI_VISION` | `uiVision` | boolean |
+| `UI_METRICS` | `uiMetrics` | boolean |
+| `UI_AUTO_READ` | `uiAutoRead` | boolean |
+| `TTS_VOICE` | `ttsVoice` | string |
+| `CACHE_DIR` | `cacheDir` | string |
+| `HEALTH_MS` | `healthIntervalMs` | number |
+| `LOG_LEVEL` | `logLevel` | string |
+| `ENABLED_CAPABILITIES` | `enabledCapabilities` | 逗号分隔 list |
+| `INSTALL_DIR` | `installDir` | string |
+
+优先级：env > 配置文件 > 默认值；env 覆盖只记日志、不阻断启动。
 
 ### 5.4 迁移导入规则
 
 | 来源 | 字段 | 规则 |
 | --- | --- | --- |
 | `~/.dsh/fish-message-config.json` | `asrBaseUrl` / `ttsBaseUrl` | 两者一致且 `/capabilities` 可达 → 写入 `baseUrl`；不一致 → 不自动导入，设置页提示 |
-| 同上 | `ttsVoice` | 写入 `defaultVoice`（仅当 `/voices` 里存在） |
+| 同上 | `ttsVoice` | 写入 `ttsVoice`（仅当 `/voices` 里存在） |
 | `~/.dsh/tts-rvc/settings.json` | `index.baseUrl` | 仅作为候选；不覆盖 fish-message 的一致值 |
 | 浏览器 `localStorage['dsh-tts-settings']` | `provider` / `voice` | 宿主不读；设置页提供客户端导入按钮（P2） |
 

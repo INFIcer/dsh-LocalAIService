@@ -85,6 +85,13 @@ function 搭环境({ apiOverrides = {}, 初始快照 = 快照(), refreshImpl = n
       return [{ name: 'dafeiyu' }, { name: 'default' }]
     },
     recentErrors: () => [{ code: 'service_down', hint: '没有启动' }],
+    // 与真实 api 的 1.17 契约一致；用例只覆盖自己关心的字段，其余走这里默认值。
+    visionPrefs: () => ({
+      localDescribe: 配置.localDescribe !== false,
+      visionSessionReady: 配置.localDescribe !== false,
+      visionSessionPrompt: '',
+      visionDefaultPreset: 配置.visionDefaultPreset || 'detailed',
+    }),
     ...apiOverrides,
   }
 
@@ -936,7 +943,6 @@ test('POST /describe-upload：图片上传 → 本机视觉模型 → 文字；�
       配置补丁: { cacheDir: join(temp.dir, 'cache'), localDescribe: true },
       缓存: cache,
       apiOverrides: {
-        visionPrefs: () => ({ localDescribe: true, visionDefaultPreset: 'detailed', visionSessionReady: true }),
         visionDescribe: async (路径, opts) => {
           调用.push({ 路径, opts, 存在: existsSync(路径) })
           return { ok: true, items: [{ path: 路径, text: '一只橘猫趴在窗台上。', ms: 640 }], ms: 640 }
@@ -974,10 +980,9 @@ test('POST /describe-upload：preset 四档生效，缺省/非法回配置默认
     const cache = 真缓存(temp)
     const 档位们 = []
     const env = 搭环境({
-      配置补丁: { cacheDir: join(temp.dir, 'cache'), localDescribe: true },
+      配置补丁: { cacheDir: join(temp.dir, 'cache'), localDescribe: true, visionDefaultPreset: 'standard' },
       缓存: cache,
       apiOverrides: {
-        visionPrefs: () => ({ localDescribe: true, visionDefaultPreset: 'standard', visionSessionReady: true }),
         visionDescribe: async (路径, opts) => {
           档位们.push(opts.preset)
           return { ok: true, items: [{ path: 路径, text: '描述', ms: 1 }], ms: 1 }
@@ -1020,7 +1025,6 @@ test('POST /describe-upload：scope=session 走会话识图提示词，不再传
       配置补丁: { cacheDir: join(temp.dir, 'cache'), localDescribe: true },
       缓存: cache,
       apiOverrides: {
-        visionPrefs: () => ({ localDescribe: true, visionDefaultPreset: 'standard', visionSessionReady: true }),
         visionDescribe: async (路径, opts) => {
           调用.push(opts)
           return { ok: true, items: [{ path: 路径, text: '描述', ms: 1 }], ms: 1 }
@@ -1053,10 +1057,9 @@ test('POST /describe-upload：关闭本地识图要拒绝；非图片、无文�
   try {
     const cache = 真缓存(temp)
     const env = 搭环境({
-      配置补丁: { cacheDir: join(temp.dir, 'cache') },
+      配置补丁: { cacheDir: join(temp.dir, 'cache'), localDescribe: false },
       缓存: cache,
       apiOverrides: {
-        visionPrefs: () => ({ localDescribe: false }),
         visionDescribe: async () => { throw makeError('bad_request', { detail: 'should not run', hint: '不该被调用' }) },
       },
     })
@@ -1071,7 +1074,7 @@ test('POST /describe-upload：关闭本地识图要拒绝；非图片、无文�
     const 开 = 搭环境({
       配置补丁: { cacheDir: join(temp.dir, 'cache') },
       缓存: cache,
-      apiOverrides: { visionPrefs: () => ({ localDescribe: true }), visionDescribe: async () => ({ ok: true, items: [], ms: 1 }) },
+      apiOverrides: { visionDescribe: async () => ({ ok: true, items: [], ms: 1 }) },
     })
     const 错 = 造表单('D3', [{ name: 'file', filename: 'a.txt', type: 'text/plain', data: 图 }])
     const 错res = await 开.call('/dsh-fish-service/describe-upload', {

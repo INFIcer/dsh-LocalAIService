@@ -221,6 +221,17 @@ test('fish_describe_image：1~10 张、默认 caption、detail 选档、返回�
   assert.equal(JSON.stringify(ok).includes('base64'), false)
 })
 
+test('fish_describe_image：localDescribe=false 时工具层直接拒绝，不调用服务', async () => {
+  const { api, calls } = 造假服务()
+  const 关 = { ...api, config: { get: () => ({ localDescribe: false }) } }
+  const describe = 工具表(关).get('fish_describe_image')
+  const r = await describe.execute({ paths: ['C:\\a.png'] }, {})
+  assert.equal(r.ok, false)
+  assert.equal(r.code, 'not_supported')
+  assert.match(r.hint, /本地识图/)
+  assert.equal(calls.some(([名]) => 名 === 'visionDescribe'), false)
+})
+
 test('fish_separate：未知 stem / 空 stems 拒绝', async () => {
   const { api } = 造假服务()
   const separate = 工具表(api).get('fish_separate')
