@@ -218,7 +218,7 @@ interface TtsResult {
 ```
 
 - 单条也传数组；工具层 `texts` 必填，服务方法允许 `string`（内部归一成数组）；
-- **合成前统一朗读化**：Markdown 清洗（代码块与行内代码里的技术标识符整段丢弃）后做中文读法
+- **合成前统一朗读化**：Markdown 清洗（代码块与行内代码统一读成口播词「巴拉巴拉」，整段吞掉会让听者失去句子主干）后做中文读法
   （数字、日期、时间、地址、符号、多点版本号「2.5.0 → 二点五点零」），缓存的也是改写后的文本。
   这一步对所有调用方生效，不要在调用方自己再改写；
 - 每条文本 **朗读化后** ≤ 5000 字；超过返回 `bad_request`（不要偷偷切）；改写后为空也返回
@@ -446,7 +446,7 @@ interface JobRecord {
 | `autoRead` / `autoReadInBackground` / `rememberVoiceChoice` | ✅ | boolean |
 | `autoReadSessions` | ✅ | 对象；键以 `session-` 开头，最多 200 条 |
 | `readMaxChars` | ✅ | 200~5000 |
-| `readSkipCode` / `readConcurrency` | ✅ | boolean / 1~4 |
+| `readConcurrency` | ✅ | 1~4 |
 | `recordMime` | ✅ | `auto/webm/wav` |
 | `recordDeviceId` | ✅ | 字符串 ≤200 |
 | `asrLanguage` | ✅ | `auto/zh/en/ja` |
@@ -592,7 +592,7 @@ interface VisionPrefs {
 ```json
 {
   "name": "fish_tts",
-  "description": "把文字转换为语音，可一次合成多条。返回音频文件路径与耗时。文本会先朗读化（Markdown 标记与代码丢弃、数字/地址转中文读法），所以听到的是改写后的内容。首条可能因加载模型较慢，超时默认 180 秒。",
+  "description": "把文字转换为语音，可一次合成多条。返回音频文件路径与耗时。文本会先朗读化（代码块与行内代码读成「巴拉巴拉」、数字/地址转中文读法），所以听到的是改写后的内容。首条可能因加载模型较慢，超时默认 180 秒。",
   "parameters": {
     "type": "object",
     "additionalProperties": false,
@@ -897,8 +897,8 @@ interface VisionPrefs {
 | GET | `/translate/jobs/status` | `?id=` | `{ok, id, state, progress?, error?}` |
 | GET | `/translate/jobs/result` | `?id=` | `{ok, id, state, texts, source, target, engine, ms?}`；未完成 200 + `{ok:false, code:"not_ready"}` |
 | POST | `/translate/jobs/cancel` | `{id}` | 取消结果；失败也 200 |
-| POST | `/read` | `{text, voice?, speed?, maxChars?, skipCodeBlocks?}` | `{ok, wavPath, ms, items[{wavPath,url,ms,voice,bytes,chars,cached}], chunks, chars, codeBlocks, truncated, concurrency, cachedChunks, cacheHits, degraded?}`（P2，一次全合成） |
-| POST | `/read/plan` | `{text, maxChars?, voice?, speed?, skipCodeBlocks?}` | `{ok, segments:[{index,text,chars}], chars, codeBlocks, codeLines, truncated, voice, speed, maxChars}`（P2.1，不合成；`segments[].text` 已清洗并朗读化） |
+| POST | `/read` | `{text, voice?, speed?, maxChars?}` | `{ok, wavPath, ms, items[{wavPath,url,ms,voice,bytes,chars,cached}], chunks, chars, codeBlocks, truncated, concurrency, cachedChunks, cacheHits, degraded?}`（P2，一次全合成） |
+| POST | `/read/plan` | `{text, maxChars?, voice?, speed?}` | `{ok, segments:[{index,text,chars}], chars, codeBlocks, codeLines, truncated, voice, speed, maxChars}`（P2.1，不合成；`segments[].text` 已清洗并朗读化） |
 | POST | `/read/segment` | `{index, total?, text, voice?, speed?}` | `{ok, index, wavPath, url, ms, cached, bytes, voice?, speed?, total?}`（P2.1，单段合成、自动命中缓存） |
 | GET | `/cache/stats` | — | `{ok, kind:"tts", files, bytes, hits, misses, hitRate}`（P2.1，服务层内存计数） |
 | POST | `/cache/clear` | `{kind?}` | `{ok, kind, files, bytes, kinds}`；省略 kind 清产物但保留 `voice`（P2.1） |
@@ -965,7 +965,6 @@ interface VisionPrefs {
   "autoReadInBackground": true,
   "readMaxChars": 2000,
   "readConcurrency": 2,
-  "readSkipCode": true,
   "recordMime": "auto",
   "recordDeviceId": "",
   "rememberVoiceChoice": true,
@@ -1010,7 +1009,6 @@ interface VisionPrefs {
 | `autoReadInBackground` | bool | true | — | 会话在后台时也朗读（P2） |
 | `readMaxChars` | int | 2000 | 200~5000 | 朗读单段最大字数（P2） |
 | `readConcurrency` | int | 2 | 1~4 | 朗读分段合成的批间并发度（P2.1；1 = 完全串行） |
-| `readSkipCode` | bool | true | — | 朗读时去掉代码块（P2） |
 | `recordMime` | enum | auto | auto/webm/wav | 语音输入录音格式（P2） |
 | `recordDeviceId` | string | `""` | ≤200 | 指定录音设备；空 = 系统默认（P2） |
 | `rememberVoiceChoice` | bool | true | — | 记住三选一上次选择（P2，只做高亮） |

@@ -109,8 +109,11 @@ test('tts：合成前统一朗读化，缓存按改写后的文本命中', async
   assert.deepEqual(sent.map((body) => body.text), [
     '版本二点五点零已发布，延迟六十九毫秒。',
     '名称，版本。内核，二点五点零',
-    '不用念。',
+    '巴拉巴拉不用念。',
   ])
+  assert.ok(sent[2].text.includes('巴拉巴拉'), sent[2].text)
+  assert.ok(!sent[2].text.includes('lastBoot'), sent[2].text)
+  assert.ok(!sent[2].text.includes('`'), sent[2].text)
 
   // 同一段内容换成朗读化后的写法再合成：同样的缓存 key，不再请求服务端。
   const again = await stack.api.tts(['版本二点五点零已发布，延迟六十九毫秒。'])
@@ -938,7 +941,6 @@ test('config：P2 朗读/语音字段可写，非法值给警告且不写', asyn
     ttsSpeed: 1.25,
     readMaxChars: 3000,
     readConcurrency: 3,
-    readSkipCode: false,
     autoRead: true,
     recordMime: 'wav',
     rememberVoiceChoice: false,
@@ -946,13 +948,12 @@ test('config：P2 朗读/语音字段可写，非法值给警告且不写', asyn
   })
   assert.equal(ok.ok, true)
   assert.deepEqual(ok.applied.sort(), [
-    'asrLanguage', 'autoRead', 'readConcurrency', 'readMaxChars', 'readSkipCode',
+    'asrLanguage', 'autoRead', 'readConcurrency', 'readMaxChars',
     'recordMime', 'rememberVoiceChoice', 'ttsSpeed',
   ])
   assert.equal(stack.store.current.ttsSpeed, 1.25)
   assert.equal(stack.store.current.readMaxChars, 3000)
   assert.equal(stack.store.current.readConcurrency, 3)
-  assert.equal(stack.store.current.readSkipCode, false)
   assert.equal(stack.store.current.autoRead, true)
   assert.equal(stack.store.current.recordMime, 'wav')
   assert.equal(stack.store.current.rememberVoiceChoice, false)

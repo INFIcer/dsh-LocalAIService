@@ -46,7 +46,6 @@ test('默认配置符合 P1 契约', () => {
     assert.equal(c.autoReadInBackground, true)
     assert.equal(c.readMaxChars, 2000)
     assert.equal(c.readConcurrency, 2)
-    assert.equal(c.readSkipCode, true)
     assert.equal(c.recordMime, 'auto')
     assert.equal(c.recordDeviceId, '')
     assert.equal(c.rememberVoiceChoice, true)
@@ -219,7 +218,6 @@ test('normalizeConfig：P2 朗读/语音字段钳范围、非法枚举回退', (
       ttsSpeed: 9,
       readMaxChars: 10,
       readConcurrency: 99,
-      readSkipCode: 'false',
       autoRead: 'true',
       recordMime: 'MP3',
       rememberVoiceChoice: 0,
@@ -228,7 +226,6 @@ test('normalizeConfig：P2 朗读/语音字段钳范围、非法枚举回退', (
     assert.equal(c.ttsSpeed, 2)
     assert.equal(c.readMaxChars, 200)
     assert.equal(c.readConcurrency, 4)
-    assert.equal(c.readSkipCode, false)
     assert.equal(c.autoRead, true)
     assert.equal(c.recordMime, 'auto')
     assert.equal(c.rememberVoiceChoice, false)

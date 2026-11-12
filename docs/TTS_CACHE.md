@@ -129,7 +129,7 @@ readConcurrency = 2（默认，1~4）
 
 #### `POST /read/plan`
 
-请求：`{text, maxChars?, voice?, speed?, skipCodeBlocks?}` —— **不做 TTS，立即返回**。
+请求：`{text, maxChars?, voice?, speed?}` —— **不做 TTS，立即返回**。
 
 ```json
 {
@@ -220,7 +220,7 @@ sequenceDiagram
 | `readConcurrency` | `2` | 1~4 整数 | `/read` 的批间并发度；1 = 完全串行 |
 
 已加入 `fish.service.config.set` 的白名单与校验；非法值返回 `warnings` 且不写入。
-`readMaxChars` / `readSkipCode` 仍是分段参数，与并发度互不影响。
+`readMaxChars` 仍是分段参数，与并发度互不影响。
 
 ---
 

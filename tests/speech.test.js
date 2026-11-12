@@ -46,7 +46,7 @@ test('stripMarkdown：标题/加粗/斜体/行内代码/列表/引用/表格标�
   assert.ok(!text.includes('`'))
   assert.ok(!text.includes('> '))
   assert.ok(text.includes('标题一'))
-  assert.ok(text.includes('这是加粗和斜体，还有 行内代码。'), text)
+  assert.ok(text.includes('还有 巴拉巴拉。'), text)
   assert.ok(text.includes('引用一行'))
   assert.ok(text.includes('列表项 A'))
   assert.ok(text.includes('列表项 B'))
@@ -64,21 +64,22 @@ test('stripMarkdown：链接只读文字、图片只读 alt、裸 URL 丢掉', (
   assert.ok(!text.includes(']('))
 })
 
-test('stripMarkdown：默认去掉代码块并统计行数', () => {
+test('stripMarkdown：代码块整块读成一个占位词并统计行数', () => {
   const all = '前面\n\n```python\nprint(1)\nprint(2)\n```\n\n后面'
-  const { text, codeBlocks, codeLines } = stripMarkdown(all, { skipCodeBlocks: true })
+  const { text, codeBlocks, codeLines } = stripMarkdown(all)
   assert.equal(codeBlocks, 1)
   assert.equal(codeLines, 2)
   assert.ok(!text.includes('print(1)'))
+  assert.equal(text.split('巴拉巴拉').length - 1, 1, text)
   assert.ok(text.includes('前面'))
   assert.ok(text.includes('后面'))
 })
 
-test('stripMarkdown：关掉去代码块时念「代码块，共 N 行」而不是代码内容', () => {
-  const { text, codeBlocks } = stripMarkdown('前\n```\na\nb\nc\n```\n后', { skipCodeBlocks: false })
+test('stripMarkdown：未闭合的围栏也整块只念一个占位词', () => {
+  const { text, codeBlocks } = stripMarkdown('前\n```\ndeprecated\n')
   assert.equal(codeBlocks, 1)
-  assert.ok(text.includes('代码块，共 3 行'), text)
-  assert.ok(!text.includes('\na\n'))
+  assert.equal(text.split('巴拉巴拉').length - 1, 1, text)
+  assert.ok(!text.includes('deprecated'))
 })
 
 test('stripMarkdown：剥掉 [QQ] 标记但保留块内文字；HTML 实体还原', () => {
@@ -157,6 +158,7 @@ test('prepareSpeech：清洗 + 分段 + 统计代码块', () => {
   assert.equal(r.codeLines, 2)
   assert.equal(r.truncated, false)
   assert.ok(!r.text.includes('const a = 1'))
+  assert.ok(r.text.includes('巴拉巴拉'), r.text)
   assert.ok(r.text.includes('主人，测试一下。'))
   for (const chunk of r.chunks) assert.ok(chunk.length <= 200)
 })
@@ -164,6 +166,8 @@ test('prepareSpeech：清洗 + 分段 + 统计代码块', () => {
 test('prepareSpeech：只有代码块时没有可朗读内容', () => {
   const r = prepareSpeech('```\ncode\n```')
   assert.equal(r.chunks.length, 0)
+  assert.equal(r.text, '')
+  assert.equal(r.chars, 0)
   assert.equal(r.codeBlocks, 1)
 })
 
@@ -210,17 +214,52 @@ test('朗读化：版本号、小数、百分比、带单位数值都读成中�
   assert.equal(spoken('延迟 69ms，占用 87.5%。'), '延迟六十九毫秒，占用百分之八十七点五。')
 })
 
-test('朗读化：行内代码里的标识符整段丢弃，表格/标题/列表标记不念', () => {
+test('朗读化：行内代码统一读成占位词，表格/标题/列表标记不念', () => {
   const spoken = (input) => prepareSpeech(input).text
   const inline = spoken('\u0060lastBoot.confirmed=true\u0060 不用念，\u00604d35203\u0060 也不用。')
   assert.ok(!inline.includes('lastBoot'), inline)
   assert.ok(!inline.includes('4d35203'), inline)
-  assert.equal(inline, '不用念，也不用。')
+  assert.equal(inline, '巴拉巴拉不用念，巴拉巴拉也不用。')
   assert.equal(
     spoken('| 名称 | 版本 |\n| --- | --- |\n| 内核 | 2.5.0 |'),
     '名称，版本。内核，二点五点零',
   )
   assert.equal(spoken('## 标题\n- 第一项\n- 第二项\n---\n正文。'), '标题。第一项。第二项。正文。')
+})
+
+test('朗读化：反引号内容统一读成巴拉巴拉，保留句子位置', () => {
+  const sample = '朗读化自检：版本 2.5.0 已经发布，本地 AI 服务 69ms 响应、8 条表情，用时 1.2 秒；反引号里的 `lastBoot.confirmed=true` 和 `4d35203` 不念。'
+  assert.equal(
+    prepareSpeech(sample).text,
+    '朗读化自检：版本二点五点零已经发布，本地 AI 服务六十九毫秒响应、八条表情，用时一点二秒；反引号里的巴拉巴拉和巴拉巴拉不念。',
+  )
+
+  // 单段行内代码：占位词落在句子中间，不留反引号和原文。
+  const single = prepareSpeech('先 `lastBoot.confirmed=true` 再看结果。').text
+  assert.equal(single, '先巴拉巴拉再看结果。')
+
+  // 句中两段：各出一个占位词，不连成一串。
+  const two = prepareSpeech('先 `a` 再 `b` 然后。').text
+  assert.equal(two.split('巴拉巴拉').length - 1, 2, two)
+  assert.ok(!two.includes('`'), two)
+
+  // 含路径的行内代码：路径整段换成占位词。
+  const filePath = prepareSpeech('见 `E:/dsh-fish-service/lib/speech.js` 里的实现。').text
+  assert.ok(filePath.includes('巴拉巴拉'), filePath)
+  assert.ok(!filePath.includes('speech.js'), filePath)
+  assert.ok(!filePath.includes('`'), filePath)
+})
+
+test('stripMarkdown：代码块整块只念一个占位词，不按行重复', () => {
+  const block = '前\n```\na\nb\nc\n```\n后'
+  const { text, codeBlocks } = stripMarkdown(block)
+  assert.equal(codeBlocks, 1)
+  assert.equal(text.split('巴拉巴拉').length - 1, 1, text)
+  assert.ok(!text.includes('\na\n'))
+
+  // 相邻两段行内代码只隔顿号时合并成一个占位词。
+  const merged = stripMarkdown('先 `a`、`b` 后。').text
+  assert.equal(merged.split('巴拉巴拉').length - 1, 1, merged)
 })
 
 test('朗读化：对已朗读化的文本再跑一遍结果不变（幂等）', () => {

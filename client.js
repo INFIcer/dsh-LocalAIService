@@ -236,7 +236,6 @@ window.__ModuleLoader__.load({
           voice: config.ttsVoice,
           speed: config.ttsSpeed,
           maxChars: config.readMaxChars,
-          skipCodeBlocks: config.readSkipCode !== false,
         }, { signal: abort?.signal })
         if (generation !== this.seq) return
         if (!plan || !plan.ok) {
@@ -2327,7 +2326,6 @@ select.fish-select option:checked {
       ttsSpeed: '语速',
       readMaxChars: '单次最大字数',
       readConcurrency: '同时生成',
-      readSkipCode: '去掉代码块',
       autoRead: '新会话默认自动朗读',
       recordMime: '录音格式',
       recordDeviceId: '输入设备',
@@ -2684,8 +2682,6 @@ select.fish-select option:checked {
           value: config.ttsSpeed ?? 1,
           onChange: (e) => update('ttsSpeed', Number(e.target.value)),
         })),
-        line('去掉代码块', check(config.readSkipCode !== false, (v) => update('readSkipCode', v)),
-          '关闭后只提示「代码块，共 N 行」。'),
         line('单次最大字数', h('input', {
           style: S.small, type: 'number', min: 200, max: 5000, step: 100,
           value: config.readMaxChars ?? 2000,

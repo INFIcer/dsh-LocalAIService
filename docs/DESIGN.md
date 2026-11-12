@@ -436,7 +436,7 @@ export function apply(ctx, pluginConfig) {
 | 设置页 | `settings.plugins.tab`（`key: fish-service`, `label: '本地 AI'`） | 状态 / 安装 / 模型 / 服务设置 / 日志 / 内嵌 WebUI 六个分区 | 首屏就是安装向导，不是错误页 |
 | 全局提示 | `shell.overlay`（可选，`key: fish-service-toast`） | 安装进度、服务重启、模型下载完成的轻提示 | 不挂载 |
 
-**朗读按钮的文本提取**：优先用 slot props 的 `messageId` + `useTrajectory` 找 `blocks[kind=text].text`；取不到时向上找 DOM 气泡文本（沿用 TTS 插件的兼容策略）。**只朗读助手最终回复**，跳过工具调用/思考/代码块（可在设置里关）。
+**朗读按钮的文本提取**：优先用 slot props 的 `messageId` + `useTrajectory` 找 `blocks[kind=text].text`；取不到时向上找 DOM 气泡文本（沿用 TTS 插件的兼容策略）。**只朗读助手最终回复**，跳过工具调用/思考；代码块只读成口播词「巴拉巴拉」，不念代码内容。
 
 **语音输入的关键风险**：`conversation.input.right` 的 props 契约没有官方文档，P2 第一件事是用 `console.log` 抓一次 props，确认有没有 `insertText` / `useInput`。没有就走「复制到剪贴板 + toast：已转写，按 Ctrl+V 粘贴」的降级；**不允许**用 DOM 直接改 React 受控输入框（会丢状态）。
 
@@ -696,7 +696,7 @@ P2/P5 ─→ P6（迁移是最后一步，避免中途双入口）
 | 2 | 无重复入口 | 浏览器 Network 无 `/dsh-tts-api/*`；profile bundles 无 TTS 插件；页面只有一个朗读控件 |
 | 3 | 语音输入 | 录音 3 秒 → 文字进入输入框（或剪贴板降级提示）；不刷新页面、不丢草稿 |
 | 4 | 服务未启动 | 朗读/语音按钮显示引导，不白屏、不报 JS 异常 |
-| 5 | 自动朗读 | 默认关；开启后只读最终回复，不读工具调用/代码块 |
+| 5 | 自动朗读 | 默认关；开启后只读最终回复，不读工具调用/思考；代码块读成「巴拉巴拉」 |
 
 ### 14.3 P3
 
