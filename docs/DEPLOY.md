@@ -832,8 +832,7 @@ Get-Content "<installDir>\logs\service.err.log" -Tail 80
 ├─ tts\<sha16>-<ts>.wav
 ├─ separate\<jobid>\vocals.wav ...
 ├─ vision\<jobid>\frame_0001.jpg
-├─ tmp\                             # ASR 上传临时文件，请求结束即删
-└─ ops-idempotency.json             # 10 分钟幂等表
+└─ tmp\                             # ASR 上传临时文件，请求结束即删
 ```
 
 ### 10.3 关键环境变量（安装器设置）

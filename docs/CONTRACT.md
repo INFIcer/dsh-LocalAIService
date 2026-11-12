@@ -2,7 +2,7 @@
 
 > 版本：`v0.6`（2026-11-10）：新增 `GET /metrics`（显存 / 模型 / 队列 / 版本，1 秒缓存，服务离线也返回 200 + `ok:false`）；客户端输入框左下加本地 AI 状态胶囊（2 秒轮询，详情浮层）。向后兼容。
 > 前版：`v0.5`（识图提示词分四档）、`v0.4`（`visionPrefs` / `localDescribe` / `/describe-upload`）、`v0.3`（`visionDescribe` / `fish_describe_image` / 音色目录）、`v0.1`（P0 冻结稿）
-> 适用：`dsh-fish-service` / `dsh-fish-ops` / `localai-service 2.5.x`
+> 适用：`dsh-fish-service` / `localai-service 2.5.x`
 > 原则：**先改本文，再改代码**。P1 只实现本文已写明的字段；新增字段必须向后兼容。
 
 ---
@@ -37,7 +37,7 @@
 
 - 所有 `*Path` 都是**本机绝对路径**（Windows 用 `E:\...`；JSON 里反斜杠转义）；
 - 工具返回的路径必须存在且可读；临时文件 TTL 见配置；
-- 不接受 `file://`、URL（除 `vision_watch` 的 `url` 参数）；下载由服务端负责。
+- 不接受 `file://`、URL；下载由服务端负责。
 
 ---
 
@@ -1064,7 +1064,7 @@ interface VisionPrefs {
 
 ## 6. `fish.message` 服务（规划）
 
-> 当前 `dsh-fish-message 0.1.0` **没有**这个服务；P4 前先加最小实现（P4 前置），HTTP 路由不变。
+> 当前 `dsh-fish-message 0.1.0` **没有**这个服务；需要时补一个最小实现，HTTP 路由不变。
 
 ### 6.1 定义
 
@@ -1101,110 +1101,9 @@ interface FishMessageApi {
 - 不通过 `fish.message` 暴露原始 QQ 号/消息全文，除非调用方明确需要；
 - message 的 HTTP 路由保持现有 `/dsh-fish-message/*`，不做破坏性改动。
 
-### 6.3 降级
-
-如果 `fish.message` 不存在：
-
-- `voice_note_analyze` / `say_as_voice` 不注册；
-- `fish_ops_list` 显示 `fish.message@>=0.2` 缺失；
-- `fish-service` 的朗读/语音输入不受影响（它们不依赖 message）。
-
 ---
 
-## 7. `dsh-fish-ops` 契约
-
-### 7.1 manifest schema
-
-```json
-{
-  "id": "voice_note_analyze",
-  "version": "1.0.0",
-  "title": "语音消息分析",
-  "requires": ["fish.service@>=1.0", "fish.message@>=0.2"],
-  "tool": "voice_note_analyze",
-  "timeoutMs": 360000,
-  "sideEffect": false,
-  "idempotent": true,
-  "description": "取一条 QQ 语音 → 转写 → 返回；不改动消息。"
-}
-```
-
-规则：
-
-- `requires` 只支持 `name` 或 `name@>=x.y`；不支持范围/通配；
-- `tool` 必须与注册的工具名一致；
-- `sideEffect:true` 必须实现幂等 key；
-- manifest 是**唯一**决定工具是否注册的依据；不要在 `run` 里再判断“依赖在不在”。
-
-### 7.2 op 工具清单
-
-| 工具 | 参数 | 返回 | 依赖 |
-| --- | --- | --- | --- |
-| `voice_note_analyze` | `messageId?`、`filePath?`、`language?` | `{text,language,durationMs,engine}` | service + message |
-| `say_as_voice` | `text*`、`voice?`、`sessionId?`、`idempotencyKey?` | `{sent,wavPath,messageId?,ms,deduplicated?}` | service + message |
-| `translate_and_speak` | `text*`、`source`、`target*`、`voice?`、`sessionId?`、`idempotencyKey?` | `{sourceText,translatedText,wavPath,sent,stage?}` | service + message |
-| `long_text_read` | `text?`、`filePath?`、`maxCharsPerChunk?`、`voice?`、`sessionId?`、`idempotencyKey?` | `{chunks[],sentCount,wavPaths[]}` | service + message |
-| `vision_watch` | `videoPath?`、`url?`、`targetFrames?`、`effort?` | `{frames[],report}` | service |
-| `fish_ops_list` | 无 | `{ops[],missing[]}` | 无 |
-
-> `requires` 是**静态**的：一旦声明 `fish.message@>=0.2`，message 不存在时该 op 整个不注册。不要用运行时 `if` 去补“可选投递”；需要“只生成不发送”的场景请直接用单步工具 `fish_tts` / `fish_translate` / `fish_vision_frames`。
-
-### 7.3 `voice_note_analyze` 完整 schema
-
-```json
-{
-  "name": "voice_note_analyze",
-  "description": "分析一条 QQ 语音消息：取音频 → 本地转写。只读，不改消息。需要 fish-message 0.2+。",
-  "parameters": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {
-      "messageId": { "type": "string", "description": "QQ 消息 id；与 filePath 二选一。" },
-      "filePath": { "type": "string", "description": "本机音频绝对路径；与 messageId 二选一。" },
-      "language": { "type": "string", "enum": ["auto", "zh", "en", "ja", "ko", "yue"], "default": "auto" }
-    }
-  }
-}
-```
-
-### 7.4 `say_as_voice` 完整 schema
-
-```json
-{
-  "name": "say_as_voice",
-  "description": "把一段文字合成语音并发送到指定 DSH 会话（默认当前会话）。10 分钟内相同内容不会重复发。",
-  "parameters": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {
-      "text": { "type": "string", "minLength": 1, "maxLength": 5000 },
-      "voice": { "type": "string" },
-      "sessionId": { "type": "string", "description": "不传=当前会话。" },
-      "idempotencyKey": { "type": "string", "maxLength": 128 }
-    },
-    "required": ["text"]
-  }
-}
-```
-
-### 7.5 `fish_ops_list` 返回
-
-```json
-{
-  "ok": true,
-  "ops": [
-    { "id": "voice_note_analyze", "available": true, "tool": "voice_note_analyze", "requires": [{ "id": "fish.service", "ok": true }, { "id": "fish.message", "ok": true }] },
-    { "id": "vision_watch", "available": false, "tool": null, "requires": [{ "id": "fish.service", "ok": false, "reason": "service_down" }] }
-  ],
-  "missing": [
-    { "require": "fish.message@>=0.2", "reason": "未检测到 fish.message 服务", "hint": "升级 dsh-fish-message 到 0.2.0+" }
-  ]
-}
-```
-
----
-
-## 8. 契约测试（P1 就要有）
+## 7. 契约测试（P1 就要有）
 
 | # | 测试 | 断言 |
 | --- | --- | --- |
@@ -1219,6 +1118,5 @@ interface FishMessageApi {
 | 9 | 连接拒绝 | `service_down`，2s 内返回 |
 | 10 | 工具结果扫描 | 不含 `base64`、不含 `token`、不含 `service.err.log` 全文 |
 | 11 | 批量超限 | `fish_tts` 21 条 → `bad_request`，不截断 |
-| 12 | ops 禁用 message | 两个工具不注册；`fish_ops_list` 有 missing |
 
 测试不依赖真实模型：用 Node 内置 `http` 起 mock localai，按上表返回固定 JSON；真实模型只做 P1 手工冒烟。

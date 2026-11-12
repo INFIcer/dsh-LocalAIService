@@ -188,9 +188,9 @@ async synthesize(text, opts = {}) {
 - 返回的 `wavPath` 在 `~/.dsh/fish-service-cache`，TTL 72h > 出站队列 TTL 24h，重发不会找不到文件；
 - 如果 `useFishService=false`，完全走旧 HTTP，行为与 0.1.0 一致。
 
-### 3.4 暴露 `fish.message` 服务（P4 前置）
+### 3.4 暴露 `fish.message` 服务
 
-当前 0.1.0 **没有**这个服务；`fish-ops` 的 `voice_note_analyze`/`say_as_voice`/`translate_and_speak`/`long_text_read` 依赖它（`vision_watch` 只依赖 `fish.service`）。最小实现：
+当前 0.1.0 **没有**这个服务；需要时补一个最小实现：
 
 ```js
 // lib/host.js，apply 内
@@ -358,7 +358,6 @@ ctx.provide('fish.message', {
 | 插件配置 | `~\.dsh\fish-service-config.json` | `baseUrl`、`defaultVoice`、超时、缓存 |
 | 安装状态 | `~\.dsh\fish-service-install.json` | `installMode=adopted`、`installDir`、版本 |
 | 缓存 | `~\.dsh\fish-service-cache\` | 新产物；旧文件不迁 |
-| 幂等表 | `~\.dsh\fish-service-cache\ops-idempotency.json` | 运行时生成 |
 
 ### 6.3 旧 TTS 数据
 
@@ -389,10 +388,9 @@ ctx.provide('fish.message', {
 | 2 | 接管 7880，导入 `baseUrl`/`ttsVoice` | `installMode=adopted`，`defaultVoice=dafeiyu` | 删 `fish-service-install.json` |
 | 3 | 禁用旧 TTS（确保不在 bundles） | 页面无旧朗读按钮、无 `/dsh-tts-api` | 加回 bundles |
 | 4 | 启用 fish-service 朗读按钮（P2） | 每条消息一个按钮，可播放 | 设置里关朗读/移除 bundles |
-| 5 | 升级 `dsh-fish-message` 到 0.2.0（P4 前置） | `fish.message` 服务存在；HTTP 行为不变 | 回退 message 版本/代码 |
+| 5 | 升级 `dsh-fish-message` 到 0.2.0 | `fish.message` 服务存在；HTTP 行为不变 | 回退 message 版本/代码 |
 | 6 | `fish-message` 打开 `useFishService` | 入站转写/出站语音正常；停服务时降级 | 设 `useFishService=false` |
-| 7 | 开 `fish-ops`（P4） | 5 个 op 按依赖出现；缺 message 时不出现 | 移除 ops bundle |
-| 8 | 跑回归（第 8 节） | 全部通过 | 按步回滚 |
+| 7 | 跑回归（第 8 节） | 全部通过 | 按步回滚 |
 
 **建议在低峰期做 3~6 步**；第 1~2 步可以提前做，不影响现有使用。
 
@@ -414,9 +412,8 @@ ctx.provide('fish.message', {
 | 10 | 双入口 | 同时启用旧 TTS + fish-service | 文档要求只开一个；验收时不能出现两个按钮 |
 | 11 | 507 | 占满显存再点朗读 | UI 显示「显存不够」hint；不自动重试风暴 |
 | 12 | 服务未装 | 新机器只装插件 | 设置页显示安装向导；工具返回 `service_not_installed` |
-| 13 | ops 缺依赖 | 禁用 fish-message | `voice_note_analyze`/`say_as_voice` 不在工具列表；`fish_tts` 仍可用 |
-| 14 | 重启 DSH | 重启后 | 配置/绑定/出站队列不丢；服务自启仍在 |
-| 15 | 回滚 | 加回旧 TTS、关 fish-service UI | 旧朗读恢复；无重复入口 |
+| 13 | 重启 DSH | 重启后 | 配置/绑定/出站队列不丢；服务自启仍在 |
+| 14 | 回滚 | 加回旧 TTS、关 fish-service UI | 旧朗读恢复；无重复入口 |
 
 ---
 
@@ -441,12 +438,7 @@ ctx.provide('fish.message', {
 - 删 `~\.dsh\fish-service-config.json`（先备份）；
 - 服务本身未被修改，无需恢复。
 
-### 9.4 回滚 ops
-
-- 从 bundles 移除 `dsh-fish-ops`；
-- 工具消失；不影响 fish-service / fish-message。
-
-### 9.5 回滚旧 TTS
+### 9.4 回滚旧 TTS
 
 - 加回 `@memef1f1y/dsh-plugin-tts` 到 bundles；
 - 关掉 fish-service 的朗读 UI；
@@ -466,5 +458,4 @@ ctx.provide('fish.message', {
 - [ ] 页面只有一个朗读入口；Network 无 `/dsh-tts-api`
 - [ ] QQ 文字/语音双向回归通过
 - [ ] 服务停掉时降级符合预期
-- [ ] ops 缺 message 时工具消失、`fish_ops_list` 有原因
 - [ ] 回滚步骤实际演练过一次（至少回滚朗读入口）

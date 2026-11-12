@@ -1,4 +1,4 @@
-# DSH 本地 AI 插件体系设计（fish-service / fish-ops）与一键部署
+# DSH 本地 AI 插件体系设计（fish-service）与一键部署
 
 > 文档版本：`v0.1`（P0 契约冻结稿）
 > 适用：DSH `0.2.2-rc.1`、`localai-service 2.5.x`（HTTP 契约 `api_version = "1"`）
@@ -13,11 +13,9 @@
 | --- | --- |
 | 服务层 / localai | `E:\LocalAIService` 的 Python FastAPI 服务，`python -m localai serve`，默认 `127.0.0.1:7880` |
 | `fish-service` | 插件 `dsh-fish-service`；DSH 侧唯一知道服务地址的地方 |
-| `fish-ops` | 插件 `dsh-fish-ops`；多步调用链编排层，按依赖条件注册 |
 | `fish.service` | `fish-service` 通过 `ctx.provide('fish.service', api)` 暴露的 Cordis 服务 |
 | `fish.message` | 规划中由 `dsh-fish-message` 暴露的 Cordis 服务（当前 0.1.0 **还没有**） |
 | 能力（capability） | 服务层的 `tts / asr / whisper / translate / speaker / separate / media / download / vision / jobs` |
-| 单步 / 多步 | 一次 HTTP 能完成的叫单步；需要两个以上插件或两次以上语义步骤的叫多步 |
 
 本文只覆盖 DSH 侧插件与部署；服务层推理实现、模型内部细节不在范围内，必要时引用 `E:\LocalAIService\docs\SERVICE_API.md`。
 
@@ -183,17 +181,15 @@
 
 1. **一个门面**：DSH 里只有 `fish-service` 知道服务地址；其它插件通过 `fish.service` 或配置引用，不再手写 HTTP。
 2. **能力可发现**：`capabilities` 把「有没有、能不能、占多少显存、缺什么」暴露给 Agent 和 UI；服务缺失/模型缺失/显存不足都能翻译成人话。
-3. **多步可组合**：`fish-ops` 把常见链路封装成工具；依赖不满足就不注册，不在运行时炸。
-4. **一键部署**：插件内完成预检、安装、启动、自启、模型下载、接管已有服务、升级、卸载、离线安装。
-5. **不重复造 UI**：服务自带 WebUI 通过 iframe 内嵌，插件只做壳与引导。
-6. **HTTP 接口保留**：`localai` 的 HTTP 契约不变；插件只是 DSH 侧门面，其它软件/脚本继续可用。
+3. **一键部署**：插件内完成预检、安装、启动、自启、模型下载、接管已有服务、升级、卸载、离线安装。
+4. **不重复造 UI**：服务自带 WebUI 通过 iframe 内嵌，插件只做壳与引导。
+5. **HTTP 接口保留**：`localai` 的 HTTP 契约不变；插件只是 DSH 侧门面，其它软件/脚本继续可用。
 
 ### 3.2 非目标
 
 - 不重写推理、不改模型加载策略、不做模型训练/微调；
 - 不把 HTTP 改成私有 IPC/WebSocket 协议；
 - 不做云端 TTS/翻译兜底（TTS 插件原有的 Edge/Cloud 能力不迁进来）；
-- 不在 `fish-ops` 里存服务地址、模型路径、token；
 - 不在 P1 做「服务端打包命令」；P5 才改 `localai` 仓库；
 - 不承诺跨平台（首版 Windows 10/11 x64；Linux/macOS 只保留接口，不做安装器）。
 
@@ -201,14 +197,13 @@
 
 ## 4. 设计原则
 
-1. **单一事实源**：`baseUrl`、token、超时、能力缓存只在 `fish-service` 的 `ConfigStore` 里；`fish-ops` 和 UI 都读 `fish.service`。
-2. **单步不封装**：`fish-ops` 只放多步链路；`fish_tts`、`fish_asr` 已存在，不再做 `tts_simple`。
-3. **能力先于调用**：任何重请求前先 `ensureReady(cap)`；`ready=false` 直接给 `model_missing`，不要打一次 503 再猜。
-4. **产物落盘、接口回路径**：TTS/分离/关键帧写到 DSH 缓存目录，工具返回 `wavPath`/`stems`/`frames[].path`；**绝不把 base64 塞进工具结果**。
-5. **降级而不是阻塞**：服务不可用时，`fish-service` 的工具返回结构化错误；`fish-message` 的转写失败降级为 `[语音（转写失败：…）]`；UI 显示引导而不是白屏。
-6. **接管优先于覆盖**：已有 `localai` 服务只接管，不重装；只有 `installMode=managed` 且目录带安装标记时才允许升级/卸载。
-7. **只回滚自己创建的东西**：安装器维护 `createdPaths` 清单；模型、音色、用户 `config.json` 默认不动。
-8. **契约先冻结**：P0 先把 `CONTRACT.md` 定死；P1 只实现契约内的东西，不边写边改字段。
+1. **单一事实源**：`baseUrl`、token、超时、能力缓存只在 `fish-service` 的 `ConfigStore` 里；UI 也读 `fish.service`。
+2. **能力先于调用**：任何重请求前先 `ensureReady(cap)`；`ready=false` 直接给 `model_missing`，不要打一次 503 再猜。
+3. **产物落盘、接口回路径**：TTS/分离/关键帧写到 DSH 缓存目录，工具返回 `wavPath`/`stems`/`frames[].path`；**绝不把 base64 塞进工具结果**。
+4. **降级而不是阻塞**：服务不可用时，`fish-service` 的工具返回结构化错误；`fish-message` 的转写失败降级为 `[语音（转写失败：…）]`；UI 显示引导而不是白屏。
+5. **接管优先于覆盖**：已有 `localai` 服务只接管，不重装；只有 `installMode=managed` 且目录带安装标记时才允许升级/卸载。
+6. **只回滚自己创建的东西**：安装器维护 `createdPaths` 清单；模型、音色、用户 `config.json` 默认不动。
+7. **契约先冻结**：P0 先把 `CONTRACT.md` 定死；P1 只实现契约内的东西，不边写边改字段。
 
 ---
 
@@ -240,12 +235,6 @@
 └───────────────▲──────────────────────────────────────────────────────┘
                 │ Cordis 服务 / 工具
 ┌───────────────┴──────────────────────────────────────────────────────┐
-│ dsh-fish-ops（组合链路，按 requires 条件注册）                        │
-│  voice_note_analyze / say_as_voice / translate_and_speak /            │
-│  long_text_read / vision_watch / fish_ops_list                        │
-└───────────────▲──────────────────────────────────────────────────────┘
-                │ 可选使用 fish.service，也可完全不用
-┌───────────────┴──────────────────────────────────────────────────────┐
 │ 其它插件：dsh-fish-message（QQ 桥）、dsh-fish-memory、……              │
 └──────────────────────────────────────────────────────────────────────┘
 ```
@@ -264,49 +253,30 @@ Agent/UI → fish_tts / POST /dsh-fish-service/tts
 UI 额外走 GET /dsh-fish-service/audio/<id> 流式播放；Agent 只拿路径。
 ```
 
-### 5.3 一次 `voice_note_analyze` 的时序
-
-```text
-Agent → voice_note_analyze({messageId})
-  → fish-ops 解析 requires：fish.service>=1.0 ✅、fish.message>=0.2 ✅
-  → fish.message.getVoice(messageId) → 本地 wav 路径 + 元数据
-  → fish.service.asr(wav, {language:'auto'})
-      → POST /asr（multipart，timeout 300s）
-  → 返回 {ok:true, text, language, durationMs}
-失败：
-  - 消息不是语音 → no_voice_attachment（不调服务）
-  - 服务没起 → service_down（带「启动服务」hint）
-```
-
 ---
 
 ## 6. 职责边界
 
-| 事情 | localai-service | dsh-fish-service | dsh-fish-ops | dsh-fish-message | 其它插件 |
-| --- | --- | --- | --- | --- | --- |
-| 监听地址 / token 的唯一配置 | 自己监听；token 由 env 提供 | **唯一保存 `baseUrl`/token 的地方** | 不保存 | 兼容旧字段，可选引用 | 不保存 |
-| 健康检查 | 提供 `/health`、`/capabilities` | 轮询、缓存、翻译成 `health()` | 只用 `fish.service` | 不需要 | 不需要 |
-| 模型管理 | 提供 `/admin/models*`、下载/切换 | 代理 + 安装向导 + 依赖选择 | 不碰 | 不碰 | 不碰 |
-| 安装/升级/卸载 | 提供打包命令、自启/重启接口 | **执行安装器**、记录 createdPaths | 不碰 | 不碰 | 不碰 |
-| 能力调用 | 真正推理 | 统一封装、超时、重试、产物落盘 | 组合多步 | 可选走 `fish.service` | 可选走 `fish.service` |
-| UI | 自带 `/ui` | 朗读/语音输入/设置页/内嵌 WebUI | 无 UI | 自己的 QQ 设置页 | 各自 |
-| 错误翻译 | HTTP 状态码 + `error`/`detail` | **映射成 9 类 + hint** | 透传并补 `op/stage` | 自己的降级文案 | 不需要 |
-| 会话投递 | 无 | 不投递（UI 除外） | 通过 `fish.message` 或 `ctx.agents` | 自己投递 | 自己 |
+| 事情 | localai-service | dsh-fish-service | dsh-fish-message | 其它插件 |
+| --- | --- | --- | --- | --- |
+| 监听地址 / token 的唯一配置 | 自己监听；token 由 env 提供 | **唯一保存 `baseUrl`/token 的地方** | 兼容旧字段，可选引用 | 不保存 |
+| 健康检查 | 提供 `/health`、`/capabilities` | 轮询、缓存、翻译成 `health()` | 不需要 | 不需要 |
+| 模型管理 | 提供 `/admin/models*`、下载/切换 | 代理 + 安装向导 + 依赖选择 | 不碰 | 不碰 |
+| 安装/升级/卸载 | 提供打包命令、自启/重启接口 | **执行安装器**、记录 createdPaths | 不碰 | 不碰 |
+| 能力调用 | 真正推理 | 统一封装、超时、重试、产物落盘 | 可选走 `fish.service` | 可选走 `fish.service` |
+| UI | 自带 `/ui` | 朗读/语音输入/设置页/内嵌 WebUI | 自己的 QQ 设置页 | 各自 |
+| 错误翻译 | HTTP 状态码 + `error`/`detail` | **映射成 9 类 + hint** | 自己的降级文案 | 不需要 |
+| 会话投递 | 无 | 不投递（UI 除外） | 自己投递 | 自己 |
 
 **依赖方向（硬约束）**
 
 ```text
-fish-ops  →  fish-service  →  localai HTTP
-fish-ops  →  fish-message（仅需要“取语音/发语音”的 op）
 fish-message  →  fish-service（可选；没有就 HTTP 兜底）
-fish-service  →  ✗ fish-ops
 fish-service  →  ✗ fish-message
 其它插件      →  fish-service（可选）
 ```
 
-- `fish-service` **不得** import / `ctx.get('fish-ops')` / 依赖 `fish-message`；
-- `fish-message` **不得**依赖 `fish-ops`；
-- `fish-ops` 可以依赖具体插件，但每个 op 必须自己声明，不能“整个插件硬依赖”。
+- `fish-service` **不得** import 或依赖 `fish-message`；
 
 ---
 
@@ -315,7 +285,7 @@ fish-service  →  ✗ fish-message
 | 对象 | 版本字段 | 规则 |
 | --- | --- | --- |
 | HTTP 契约 | `capabilities.api_version = "1"` | 主版本不兼容；新增字段视为兼容，调用方忽略未知字段 |
-| `fish.service` | `api.apiVersion = "1.0"` | 主版本必须相同；次版本向后兼容；`fish-ops` 用 `>=1.0` 判断 |
+| `fish.service` | `api.apiVersion = "1.0"` | 主版本必须相同；次版本向后兼容；调用方用 `>=1.0` 判断 |
 | `fish.message` | `api.apiVersion = "0.2"` | 0.x 阶段允许小版本破坏，但必须显式升 `requires` |
 | 插件包 | `package.json.version` | 语义化；P1 从 `0.1.0` 起 |
 | 服务层 | `capabilities.service.version` | 仅展示/诊断；插件只强制 `api_version` 主版本，另有 `minServiceVersion`（默认 `2.5.0`）用于安装器提示 |
@@ -327,7 +297,6 @@ fish-service  →  ✗ fish-message
 | `api_version` 主版本 ≠ 1 | `fish.service` 进入 `api_incompatible`：只保留 `health()`/`status`，写操作工具返回 `api_incompatible`，不自动重试 |
 | 服务版本 < 插件要求 | 状态页提示「服务版本过旧，建议升级」；读能力照常，安装器不自动降级 |
 | 服务版本 > 插件认识 | 允许使用；未知字段忽略；在状态页标注「比插件新」 |
-| `fish.message` 版本不满足 | 相关 op 不注册；`fish_ops_list` 给出 `requires` 与原因 |
 
 ---
 
@@ -363,7 +332,7 @@ E:\dsh-fish-service\
 ```js
 export const name = 'fish-service'
 export const inject = ['tools', 'webServer', 'agents', 'sessions']
-// 注意：inject 里没有 fish-ops / fish-message / message 相关项——它不依赖任何插件
+// 注意：inject 里没有 fish-message / message 相关项——它不依赖任何插件
 ```
 
 ```js
@@ -571,168 +540,7 @@ apply
 
 ---
 
-## 9. `dsh-fish-ops` 设计
-
-### 9.1 为什么条件注册
-
-`fish-ops` 的每个 op 依赖的服务/插件不同：
-
-- `voice_note_analyze` 需要 `fish.service` + `fish.message`；
-- `say_as_voice` 需要 `fish.service` + `fish.message`；
-- `translate_and_speak` 需要 `fish.service` + `fish.message`（端到端：翻译→合成→发送）；
-- `long_text_read` 需要 `fish.service` + `fish.message`（端到端：分段→合成→逐段发送）；
-- `vision_watch` 只需要 `fish.service`（视频→关键帧→报告；投递不在这个 op 里）。
-
-如果整个插件 `inject: ['fish.service','fish.message']`，那么**没装 fish-message 的用户连 `vision_watch` 都用不了**，而它根本不依赖 message。如果运行时再判断，工具已经出现在列表里，LLM 会调，然后报「依赖缺失」——这正是要避免的。所以按 op 声明、按 op 注册。
-
-> 首批 5 个里 4 个需要 message，只有 `vision_watch` 不需要；这不是巧合：它证明“少一个依赖时，只消失该消失的工具”。单步的 `fish_tts` / `fish_translate` 永远在，不需要 ops。
-
-因此：
-
-- 插件级 `inject` 只放 DSH 自带、一定存在的服务：`['tools','agents','sessions']`；
-- 每个 op 自己声明 `requires`，在 `apply` 时逐项解析；
-- **不满足的 op 不调用 `ctx.tools.register`** → 工具列表里根本不存在；
-- `fish_ops_list` 是唯一“可见”的诊断工具，列出所有 op（含不可用的）与原因；
-- 依赖后来出现（插件热插拔/加载顺序）→ 监听 `internal/service` 事件重新解析；服务消失 → disposer 摘掉工具。事件名以 Cordis 4 实测为准，若不存在则退化为 3 秒轮询 `ctx.get()`（只在有 op 不可用时轮询）。
-
-### 9.2 op manifest
-
-```js
-{
-  id: 'voice_note_analyze',
-  version: '1.0.0',
-  title: '语音消息分析',
-  requires: ['fish.service@>=1.0', 'fish.message@>=0.2'],
-  tool: { name: 'voice_note_analyze', parameters: {...}, output: {...} },
-  timeoutMs: 360000,
-  sideEffect: false,
-  idempotent: true,
-  async run(ctx, args, exec) { ... }
-}
-```
-
-- `requires` 只支持 `name@>=x.y` 与 `name`（任意版本）；不引入完整 semver 依赖，自己写 20 行解析。
-- `sideEffect:true` 的 op 必须支持 `idempotencyKey`；默认 key = `sha256(op + sessionId + 规范化参数)`，10 分钟内重复直接返回上次结果。
-- `timeoutMs` 是 op 总预算，不是单次 HTTP 超时；内部每一步用剩余预算。
-- `run` 只通过 `fish.service` / `fish.message` / `ctx.agents` 做事，**不 import HTTP 客户端、不读 `baseUrl`**。
-
-### 9.3 首批 op（5 个）
-
-| op | 链路 | 输入 | 输出 | 失败语义 |
-| --- | --- | --- | --- | --- |
-| `voice_note_analyze` | `fish.message.getVoice` → `fish.service.asr` | `messageId?` / `filePath?`、`language?` | `text`、`language`、`durationMs`、`engine` | 非语音→`no_voice_attachment`；服务错→原 code + `op/stage` |
-| `say_as_voice` | `fish.service.tts` → `fish.message.sendVoice` | `text`、`voice?`、`sessionId?`、`idempotencyKey?` | `sent`、`wavPath`、`messageId?`、`ms` | TTS 成功但发送失败→`send_failed`，保留 `wavPath` 可重试 |
-| `translate_and_speak` | `fish.service.translate` → `tts` → `sendVoice` | `text`、`source`、`target`、`voice?`、`sessionId?`、`idempotencyKey?` | `sourceText`、`translatedText`、`wavPath`、`sent` | 分阶段：`stage:'translate'|'tts'|'send'`，带 `partial` |
-| `long_text_read` | 分段 → 逐段 `tts` → 逐段发送 | `text?` / `filePath?`、`maxCharsPerChunk`、`voice?`、`sessionId?`、`idempotencyKey?` | `chunks[]`、`sentCount`、`wavPaths[]` | 某段失败→停止并返回已完成段；`mode:'concat'` 本版 `not_implemented` |
-| `vision_watch` | 可选 `download` → `vision.frames` → 生成报告 | `videoPath?` / `url?`、`targetFrames`、`effort` | `frames[]`、`report` | 长视频走 `/jobs/vision`；取消时调 `jobs.cancel`；**不投递**，由调用方决定怎么用报告 |
-
-**`voice_note_analyze` 步骤细节**
-
-1. `fish.message.getVoice(messageId)` 返回 `{filePath, durationMs, messageId, sender?}`；没有 `messageId` 时用 `filePath`（必须绝对路径，且存在）。
-2. `fish.service.asr(file,{language})` 拿转写文字。
-3. 声纹身份属于记忆层，不在这一步：需要时由 Agent 用声纹工具另算向量、在 `memos/` 里比对。
-4. 返回不包含原始音频路径以外的隐私内容；临时文件由 `fish.message` 的 inbox 管理。
-
-**`say_as_voice` 步骤细节**
-
-1. `tts` 返回 `wavPath`；若 `sessionId` 省略，用 `exec.sessionId`（DSH 当前会话）。
-2. `fish.message.sendVoice({sessionId, wavPath, text})`；message 侧负责转码/发送。
-3. 幂等：同 key 10 分钟内直接返回 `{deduplicated:true, ...}`，不重复发。
-4. 发送失败：**不删 wav**；返回 `send_failed` + `wavPath`，调用方可重试 `fish.message.sendVoice`。
-
-**`translate_and_speak` 步骤细节**
-
-1. `fish.service.translate(text,{source,target})`；失败直接返回 `stage:'translate'`，不合成；
-2. `fish.service.tts(translatedText,{voice})`；失败返回 `stage:'tts'`，`partial:{sourceText,translatedText}`；
-3. `fish.message.sendVoice({sessionId, wavPath, text:translatedText})`；失败返回 `stage:'send'`，保留 `translatedText` 与 `wavPath`；
-4. 幂等 key 覆盖“原文+目标语言+音色+会话”，10 分钟内重复调用直接返回上次结果，不重复发。
-
-**`long_text_read` 的分段规则**
-
-- 先按段落（`\n\n`）切；单段超过 `maxCharsPerChunk` 再按句号/问号/叹号/分号切；仍超长按字符硬切；
-- 每段 ≤ `maxCharsPerChunk`（默认 800，服务端上限 5000）；
-- 顺序合成、顺序发送，任意一段失败停止；已发送段不回滚（语音消息无法撤回的语义要提前告知）；
-- 最多 40 段；超过直接 `bad_request`，提示用户缩短或改用文件；
-- v1 `mode:'concat'` 返回 `not_implemented`；要做单条拼接需服务端新增 `/media/concat`（P5+ 评估）。
-
-**`vision_watch` 的输入策略**
-
-- `videoPath` 优先；`url` 时先 `fish.service.jobs.enqueue('download', {url})`，轮询到 `done` 拿 `result.path`；
-- 时长 ≤ 10 分钟用同步 `/vision/frames`；> 10 分钟用 `/jobs/vision`，每 2 秒查 `meta.progress`；
-- 返回 `frames`（路径 + 摘要）和一段 Markdown 报告；**只返回报告，不投递**。需要发到会话时，由调用方用 `fish.message.sendText` 或 `ctx.agents.get(sessionId).followup` 完成。
-
-### 9.4 错误传播、超时、取消、幂等
-
-**错误传播**
-
-- 任何底层 `FishServiceError` 都保留原 `code`/`hint`，外层补 `op`、`stage`、`causeCode`；
-- 工具返回 `{ok:false, code, hint, op, stage, partial?}`，**不 throw**；
-- 不把底层 `detail` 拼进 `hint`；`detail` 只进日志/调试字段；
-- 多步的 `partial` 必须明确哪些步骤已完成（例如翻译成功、TTS 失败 → `partial:{translatedText}`）。
-
-**超时**
-
-| op | 总预算 | 内部单步 |
-| --- | --- | --- |
-| `voice_note_analyze` | 360s | ASR 300s |
-| `say_as_voice` | 240s | TTS 180s + 发送 30s |
-| `translate_and_speak` | 240s | 翻译 60s + TTS 180s |
-| `long_text_read` | 900s | 每段 180s，段间不重置总预算 |
-| `vision_watch` | 1200s | 下载 1800s 上限但受总预算约束；视觉 600s |
-
-超时返回 `timeout` + `stage`，并尽量取消底层请求（AbortController）；job 类调用 `cancel`。
-
-**取消**
-
-- 使用 DSH 传入的 `exec.signal`；每步开始前检查 `signal.aborted`；
-- fetch 传 `signal`；job 类在 abort 时调 `POST /jobs/{id}/cancel`；
-- 取消后返回 `canceled`，已产生的缓存文件保留（TTL 清理），不删用户数据。
-
-**幂等**
-
-| op | 幂等 | 说明 |
-| --- | --- | --- |
-| `voice_note_analyze` | 天然幂等 | 同一文件 hash 缓存 10 分钟 |
-| `say_as_voice` | 需要 key | 默认 key 去重 10 分钟；同文同会话不重复发 |
-| `translate_and_speak` | 需要 key | 翻译可缓存，发送必须去重 |
-| `long_text_read` | 需要 key | 防止重复发一长串语音 |
-| `vision_watch` | 视频 hash + 参数 | 10 分钟内同视频同参数不重复生成 |
-
-### 9.5 `fish_ops_list`
-
-```json
-{
-  "ok": true,
-  "ops": [
-    {"id":"voice_note_analyze","available":true,"tool":"voice_note_analyze","requires":[{"id":"fish.service","ok":true},{"id":"fish.message","ok":true}]},
-    {"id":"vision_watch","available":false,"tool":null,"requires":[{"id":"fish.service","ok":false,"reason":"service_down"}]}
-  ],
-  "missing": [
-    {"require":"fish.message@>=0.2","reason":"未安装或版本过旧（当前无 fish.message 服务）","hint":"升级 dsh-fish-message 到 0.2.0+"}
-  ]
-}
-```
-
-- 只读，不触发任何服务调用（用缓存的能力状态）；
-- 不可用 op 的 `tool` 为 `null`，并给 `reason` + `hint`；
-- 这是唯一允许“知道不可用 op”的入口；其它工具列表里不可见。
-
-### 9.6 反模式（明确禁止）
-
-| 反模式 | 为什么禁止 | 正确做法 |
-| --- | --- | --- |
-| 在 ops 里包 `fish_tts` 单步 | 重复工具、LLM 选择困难 | 直接用 `fish_tts` |
-| 在 ops 里存 `baseUrl`/token | 地址双份、换端口失效 | 只用 `fish.service` |
-| 插件级硬依赖 `fish.message` | 没装 message 的用户整个 ops 不可用 | 每个 op 声明 `requires` |
-| 缺依赖时注册“占位工具” | LLM 会调用并收到错误 | 不注册；`fish_ops_list` 解释 |
-| 把 base64 放进工具结果 | 上下文爆炸、DSH 卡顿 | 返回路径 |
-| 在 ops 里重新实现错误翻译 | 文案不一致 | 透传 `code/hint`，只补 `op/stage` |
-| 多步失败后静默重试整条链 | 重复发语音/重复翻译 | 只重试可重试的单步；发送类用幂等 key |
-| ops 之间互相调用 | 依赖图变复杂、难卸载 | 共享 `fish.service`，不互相调 |
-
----
-
-## 10. 部署设计摘要
+## 9. 部署设计摘要
 
 完整流程见 [`DEPLOY.md`](DEPLOY.md)。核心决策：
 
@@ -746,14 +554,14 @@ apply
 
 ---
 
-## 11. 迁移设计摘要
+## 10. 迁移设计摘要
 
 完整步骤见 [`MIGRATION.md`](MIGRATION.md)。核心事实与决策：
 
 - **`@memef1f1y/dsh-plugin-tts 0.6.7` 当前不在 `dsh.profile.bundles`**，即未激活；迁移仍要显式校验并记录，防止未来被重新加入。
 - 禁用方式：从 `dsh.profile.bundles` 移除（保留 `dependencies` 以便回滚），备份 profile 的 `package.json` / `cordis.patch.yml`。
 - **`dsh-fish-message` 不改成硬依赖**：在 `lib/host.js` 里可选 `ctx.get('fish.service')`，`VoiceService` 优先走它，没有就保持现有 HTTP；配置里的 `asrBaseUrl`/`ttsBaseUrl` 标记 deprecated 但继续生效。
-- **`fish.message` 服务是新增的**：当前 0.1.0 没有；P4 前先加一个最小 `ctx.provide('fish.message', {apiVersion:'0.2', getVoice, sendVoice, sendText})`，HTTP 路由不变。`fish-ops` 的 `voice_note_analyze`/`say_as_voice` 依赖它。
+- **`fish.message` 服务是新增的**：当前 0.1.0 没有；需要时补一个最小 `ctx.provide("fish.message", {apiVersion:"0.2", getVoice, sendVoice, sendText})`，HTTP 路由不变。
 - **现有 v2.5 直接接管**：`installMode=adopted`，`baseUrl` 从 `fish-message-config.json` 的 `asrBaseUrl`/`ttsBaseUrl` 导入（两者一致时），不重装、不移动目录。
 - **服务端需要新增的东西**（当前不存在，P5 做）：
   - `localai bundle`（打包命令）；
@@ -764,7 +572,7 @@ apply
 
 ---
 
-## 12. 安全、隐私、权限
+## 11. 安全、隐私、权限
 
 | 面 | 决策 |
 | --- | --- |
@@ -776,11 +584,11 @@ apply
 | 用户数据 | 音频/声纹/翻译文本不写日志正文；日志只记长度/hash/耗时；缓存本地、可一键清空 |
 | WebUI iframe | 只允许 loopback 来源；宿主校验 `event.origin`；不把 token 放 iframe URL |
 | 工具权限 | 安装/卸载是高危操作，只由设置页触发；Agent 工具不暴露 `install/uninstall` |
-| SSRF | 下载能力由服务端已有的 SSRF 策略负责；`fish-ops` 不自己抓 URL |
+| SSRF | 下载能力由服务端已有的 SSRF 策略负责 |
 
 ---
 
-## 13. 可观测性
+## 12. 可观测性
 
 - 日志：`~/.dsh/fish-service.log`，5 MB 滚动；字段 `ts level op cap code ms`；用户文本只记长度/前 20 字（可配）。
 - 计数器：`/dsh-fish-service/metrics` 返回 JSON：请求数/错误分布/缓存命中/安装步骤耗时/健康检查延迟。
@@ -790,9 +598,9 @@ apply
 
 ---
 
-## 14. 实施计划
+## 13. 实施计划
 
-> 每个阶段都必须能独立验收；P1 不依赖 P5 的打包命令，P4 不依赖 P3 的安装器。
+> 每个阶段都必须能独立验收；P1 不依赖 P5 的打包命令。
 
 ### P0 文档与契约冻结（本仓库）
 
@@ -809,7 +617,7 @@ apply
 - `fish.service` 的 `health/ensureReady/tts/asr/translate/voices/config/events`；
 - 工具：`fish_service_status`、`fish_tts`、`fish_asr`、`fish_translate`（先 4 个，P2 补其余）；
 - 设置页：状态 + 地址/默认音色 + 保存；
-- 验收：见 15.1。
+- 验收：见 14.1。
 
 ### P2 UI 入口
 
@@ -820,7 +628,7 @@ apply
 - 自动朗读开关（`conversation.input.left`，默认关）；
 - 服务未装/未启动的引导与 toast；
 - 补 `fish_separate`、`fish_vision_frames`、`fish_media_probe`、`fish_job`；
-- 验收：见 15.2。
+- 验收：见 14.2。
 
 ### P2.2 框选朗读/翻译 + 音色目录 + 翻译语言
 
@@ -835,21 +643,14 @@ apply
 - 服务端（另一个仓库）加 `?embed=1` + `postMessage` 高度；
 - 设置页 iframe + 视图切换 + 新窗口兜底 + 服务未启动引导；
 - 安装管理：预检、adopt、启动/停止/重启、模型列表/下载、日志、自启；
-- 验收：见 15.3。
-
-### P4 `fish-ops`（条件注册）
-
-- 前置：`dsh-fish-message` 0.2.0 暴露 `fish.message`（最小 `getVoice/sendVoice/sendText`）；
-- op manifest + 依赖解析 + 动态注册/摘除；
-- 5 个 op + `fish_ops_list`；
-- 验收：见 15.4。
+- 验收：见 14.3。
 
 ### P5 打包与一键安装
 
 - `localai bundle` 命令 + manifest + SHA256；
 - 安装器：uv 引导、venv、引擎依赖、模型、启动、自启、进度、失败回滚；
 - 离线包 + 镜像；
-- 验收：见 15.5。
+- 验收：见 14.5。
 
 ### P6 迁移与回归
 
@@ -857,22 +658,21 @@ apply
 - `fish-message` 可选接 `fish.service`（HTTP 兜底）；
 - 接管现有 v2.5；导入 `ttsVoice`/`baseUrl`；
 - 全量回归（QQ 语音双向、朗读、安装/卸载、断网、507）；
-- 验收：见 15.6。
+- 验收：见 14.6。
 
 **依赖关系**
 
 ```text
 P0 ─→ P1 ─→ P2
         └─→ P3 ─→ P5
-        └─→ P4（需 fish-message 0.2.0 的 fish.message）
-P2/P4/P5 ─→ P6（迁移是最后一步，避免中途双入口）
+P2/P5 ─→ P6（迁移是最后一步，避免中途双入口）
 ```
 
 ---
 
-## 15. 验收标准（可测）
+## 14. 验收标准（可测）
 
-### 15.1 P1
+### 14.1 P1
 
 | # | 检查 | 通过标准 |
 | --- | --- | --- |
@@ -887,7 +687,7 @@ P2/P4/P5 ─→ P6（迁移是最后一步，避免中途双入口）
 | 9 | 配置 | 改 `baseUrl` 保存后立即生效；重启 DSH 仍保留；token 不出现在 `/status` |
 | 10 | 卸载 | 禁用插件后工具消失，重新启用后恢复；不残留路由 |
 
-### 15.2 P2
+### 14.2 P2
 
 | # | 检查 | 通过标准 |
 | --- | --- | --- |
@@ -897,7 +697,7 @@ P2/P4/P5 ─→ P6（迁移是最后一步，避免中途双入口）
 | 4 | 服务未启动 | 朗读/语音按钮显示引导，不白屏、不报 JS 异常 |
 | 5 | 自动朗读 | 默认关；开启后只读最终回复，不读工具调用/代码块 |
 
-### 15.3 P3
+### 14.3 P3
 
 | # | 检查 | 通过标准 |
 | --- | --- | --- |
@@ -909,19 +709,7 @@ P2/P4/P5 ─→ P6（迁移是最后一步，避免中途双入口）
 | 6 | 回滚 | 模拟安装第 3 步失败：只删除本次创建的文件，原有目录不受影响 |
 | 7 | 端口占用 | 7880 被非 localai 占用时提示换端口/关闭程序，不覆盖 |
 
-### 15.4 P4
-
-| # | 检查 | 通过标准 |
-| --- | --- | --- |
-| 1 | 条件注册 | 禁用 `dsh-fish-message` 重启：`voice_note_analyze`/`say_as_voice`/`translate_and_speak`/`long_text_read` 不在工具列表；`vision_watch` 与 `fish_tts` 仍在 |
-| 2 | 诊断 | `fish_ops_list` 显示缺失 `fish.message@>=0.2` 与 hint，且 `vision_watch.available=true` |
-| 3 | 热插拔 | 重新启用 message：无需重载 ops，工具在 3 秒内出现 |
-| 4 | 语音分析 | 发一条 QQ 语音，`voice_note_analyze` 返回文字 |
-| 5 | 发语音 | `say_as_voice` 发到绑定会话；10 分钟内重复调用不重复发 |
-| 6 | 长文 | 2000 字分 3 段发送；第 2 段失败时返回已完成段 + `stage` |
-| 7 | 取消 | 取消 `vision_watch` 后 5 秒内停止，job 状态 `canceled` 或不再推进 |
-
-### 15.5 P5
+### 14.5 P5
 
 | # | 检查 | 通过标准 |
 | --- | --- | --- |
@@ -933,7 +721,7 @@ P2/P4/P5 ─→ P6（迁移是最后一步，避免中途双入口）
 | 6 | 空间不足 | 预检拦截，提示需要 X GB，不开始下载 |
 | 7 | 自启 | 重启 Windows 后服务自动起来；卸载后计划任务删除（仅自己创建的） |
 
-### 15.6 P6
+### 14.6 P6
 
 | # | 检查 | 通过标准 |
 | --- | --- | --- |
@@ -946,7 +734,7 @@ P2/P4/P5 ─→ P6（迁移是最后一步，避免中途双入口）
 
 ---
 
-## 16. 风险清单
+## 15. 风险清单
 
 | # | 风险 | 影响 | 概率 | 缓解 / 检测 |
 | --- | --- | --- | --- | --- |
@@ -955,17 +743,16 @@ P2/P4/P5 ─→ P6（迁移是最后一步，避免中途双入口）
 | 3 | CUDA/torch 体积（6.5GB） | 下载久、磁盘爆 | 高 | 预检磁盘 + 10% 余量；引擎依赖可选；显示真实大小；支持离线包 |
 | 4 | 模型下载失败/中断 | 功能不可用 | 高 | 复用服务端 `/admin/models/download`；单任务；重试续传；校验 `present` + 缺失文件 |
 | 5 | iframe 兼容性 | 设置页白屏/高度不对 | 中 | 只允许 loopback；`?embed=1`；postMessage 高度 + 固定高度兜底；新窗口打开 |
-| 6 | ops 依赖漂移 | 工具消失/重复注册 | 中 | manifest 显式版本；`internal/service` 重解析；单测覆盖“禁用 message”场景 |
-| 7 | 双 TTS 冲突 | 一条消息读两遍 | 高 | 迁移清单强制校验 bundles；验收检查 Network 无 `/dsh-tts-api`；设置页互斥提示 |
-| 8 | 服务地址被改错 | 全部功能不可用 | 中 | 设置页「测试连接」；保存前 `GET /health`；保留最近一次可用地址 |
-| 9 | 卸载误删用户模型 | 数据丢失 | 低 | 安装标记 + createdPaths；默认保留 models/voices；二次确认 |
-| 10 | 长文本 TTS 超时 | 朗读中断 | 中 | 分段 ≤800 字；总预算；逐段发送；失败保留已完成段 |
-| 11 | 视觉长视频阻塞 | UI 卡住 | 中 | >10 分钟走 job；进度轮询；可取消 |
-| 12 | token 泄漏 | 本机接口被滥用 | 低 | 仅宿主持有；不返浏览器；日志脱敏；loopback 默认 |
+| 6 | 双 TTS 冲突 | 一条消息读两遍 | 高 | 迁移清单强制校验 bundles；验收检查 Network 无 `/dsh-tts-api`；设置页互斥提示 |
+| 7 | 服务地址被改错 | 全部功能不可用 | 中 | 设置页「测试连接」；保存前 `GET /health`；保留最近一次可用地址 |
+| 8 | 卸载误删用户模型 | 数据丢失 | 低 | 安装标记 + createdPaths；默认保留 models/voices；二次确认 |
+| 9 | 长文本 TTS 超时 | 朗读中断 | 中 | 分段 ≤800 字；总预算；逐段发送；失败保留已完成段 |
+| 10 | 视觉长视频阻塞 | UI 卡住 | 中 | >10 分钟走 job；进度轮询；可取消 |
+| 11 | token 泄漏 | 本机接口被滥用 | 低 | 仅宿主持有；不返浏览器；日志脱敏；loopback 默认 |
 
 ---
 
-## 17. 开放问题（评审拍板）
+## 16. 开放问题（评审拍板）
 
 1. **`dsh-fish-message` 的依赖形态**：保持「可选 `fish.service` + HTTP 兜底」（推荐，兼容旧装机），还是 0.2.0 起强制依赖？
 2. **默认音色迁移**：`fish-message` 当前 `ttsVoice=dafeiyu`；新装服务端 `default` 也在。迁移时保留 `dafeiyu`（推荐，声音不变），还是统一改成 `default`？
@@ -977,9 +764,9 @@ P2/P4/P5 ─→ P6（迁移是最后一步，避免中途双入口）
 
 ---
 
-## 18. 附录
+## 17. 附录
 
-### 18.1 实测环境快照（2026-11-09）
+### 17.1 实测环境快照（2026-11-09）
 
 ```text
 GET http://127.0.0.1:7880/capabilities
@@ -1007,7 +794,7 @@ GET /admin/system
   disk.models_mb = 17665.6
 ```
 
-### 18.2 关键文件路径
+### 17.2 关键文件路径
 
 | 路径 | 用途 |
 | --- | --- |
@@ -1024,12 +811,11 @@ GET /admin/system
 | `~\.dsh\profiles\desktop\package.json` | profile bundles（迁移要改这里） |
 | `~\.dsh\profiles\desktop\cordis.patch.yml` | profile patch（备份对象） |
 
-### 18.3 术语对照
+### 17.3 术语对照
 
 | 中文 | 代码/字段 |
 | --- | --- |
 | 服务门面 | `fish.service` / `dsh-fish-service` |
-| 组合链路 | op / `dsh-fish-ops` |
 | 能力 | capability |
 | 就绪 | `ready` |
 | 已加载 | `loaded` |
