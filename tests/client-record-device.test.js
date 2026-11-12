@@ -7,11 +7,11 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 
-function 载入客户端() {
-  const 源码 = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
-  let 工厂 = null
-  const 沙箱 = {
-    window: { __ModuleLoader__: { load: (定义) => { 工厂 = 定义.factory } } },
+function loadClient() {
+  const sourceCode = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+  let factory = null
+  const sandbox = {
+    window: { __ModuleLoader__: { load: (define) => { factory = define.factory } } },
     document: undefined,
     console,
     setTimeout,
@@ -21,47 +21,47 @@ function 载入客户端() {
     URL,
     fetch: async () => ({ json: async () => null }),
   }
-  vm.createContext(沙箱)
-  vm.runInContext(源码, 沙箱)
-  assert.equal(typeof 工厂, 'function')
-  return 工厂(() => ({
+  vm.createContext(sandbox)
+  vm.runInContext(sourceCode, sandbox)
+  assert.equal(typeof factory, 'function')
+  return factory(() => ({
     createElement: () => null,
     Fragment: 'Fragment',
-    useState: (初值) => [typeof 初值 === 'function' ? 初值() : 初值, () => {}],
+    useState: (initialValue) => [typeof initialValue === 'function' ? initialValue() : initialValue, () => {}],
     useEffect: () => {},
-    useRef: (值) => ({ current: 值 }),
+    useRef: (value) => ({ current: value }),
   }))
 }
 
 const {
-  构建录音约束,
-  打开麦克风,
-  设备不可用错误,
-  是虚拟设备名称,
-  虚拟设备提示,
-} = 载入客户端().__testing
+  buildRecordingConstraint,
+  openMic,
+  deviceUnavailableError,
+  isVirtualDeviceName,
+  virtualDevicePrompt,
+} = loadClient().__testing
 
 /** vm 里造出来的对象原型不同，比较前先转成当前 realm 的普通对象。 */
-const 纯 = (值) => JSON.parse(JSON.stringify(值))
+const pure = (value) => JSON.parse(JSON.stringify(value))
 
-function 造设备错误(名) {
-  const 错误 = new Error(名)
-  错误.name = 名
-  return 错误
+function makeDeviceError(name) {
+  const error = new Error(name)
+  error.name = name
+  return error
 }
 
 test('构建录音约束：空设备标识 → 系统默认约束，不带 deviceId', () => {
-  const 默认 = { audio: { echoCancellation: true, noiseSuppression: true } }
-  assert.deepEqual(纯(构建录音约束('')), 默认)
-  assert.deepEqual(纯(构建录音约束('   ')), 默认)
-  assert.deepEqual(纯(构建录音约束(undefined)), 默认)
-  assert.deepEqual(纯(构建录音约束(null)), 默认)
-  assert.deepEqual(纯(构建录音约束(42)), 默认)
-  assert.equal(构建录音约束('').audio.deviceId, undefined)
+  const expected = { audio: { echoCancellation: true, noiseSuppression: true } }
+  assert.deepEqual(pure(buildRecordingConstraint('')), expected)
+  assert.deepEqual(pure(buildRecordingConstraint('   ')), expected)
+  assert.deepEqual(pure(buildRecordingConstraint(undefined)), expected)
+  assert.deepEqual(pure(buildRecordingConstraint(null)), expected)
+  assert.deepEqual(pure(buildRecordingConstraint(42)), expected)
+  assert.equal(buildRecordingConstraint('').audio.deviceId, undefined)
 })
 
 test('构建录音约束：非空设备标识 → 精确指定 deviceId', () => {
-  assert.deepEqual(纯(构建录音约束('mic-abc')), {
+  assert.deepEqual(pure(buildRecordingConstraint('mic-abc')), {
     audio: {
       echoCancellation: true,
       noiseSuppression: true,
@@ -69,68 +69,68 @@ test('构建录音约束：非空设备标识 → 精确指定 deviceId', () => 
     },
   })
   // 前后空白去掉，不改设备标识内部的字符。
-  assert.deepEqual(纯(构建录音约束('  mic abc  ').audio.deviceId), { exact: 'mic abc' })
+  assert.deepEqual(pure(buildRecordingConstraint('  mic abc  ').audio.deviceId), { exact: 'mic abc' })
 })
 
 test('回退逻辑：所选设备报 OverconstrainedError → 改用系统默认', async () => {
-  const 流 = { id: 'default-stream' }
-  const 调用 = []
-  const 结果 = await 打开麦克风('gone-device', async (约束) => {
-    调用.push(约束)
-    if (调用.length === 1) throw 造设备错误('OverconstrainedError')
-    return 流
+  const stream = { id: 'default-stream' }
+  const call = []
+  const result = await openMic('gone-device', async (constraint) => {
+    call.push(constraint)
+    if (call.length === 1) throw makeDeviceError('OverconstrainedError')
+    return stream
   })
-  assert.equal(结果.stream, 流)
-  assert.equal(结果.fellBack, true)
-  assert.equal(调用.length, 2)
-  assert.deepEqual(调用[0], 构建录音约束('gone-device'))
-  assert.deepEqual(调用[1], 构建录音约束(''))
-  assert.equal(调用[1].audio.deviceId, undefined)
+  assert.equal(result.stream, stream)
+  assert.equal(result.fellBack, true)
+  assert.equal(call.length, 2)
+  assert.deepEqual(call[0], buildRecordingConstraint('gone-device'))
+  assert.deepEqual(call[1], buildRecordingConstraint(''))
+  assert.equal(call[1].audio.deviceId, undefined)
 })
 
 test('回退逻辑：设备被拔掉 / 改名（NotFoundError）同样回退', async () => {
-  const 调用 = []
-  const 结果 = await 打开麦克风('old-device', async (约束) => {
-    调用.push(约束)
-    if (调用.length === 1) throw 造设备错误('NotFoundError')
+  const call = []
+  const result = await openMic('old-device', async (constraint) => {
+    call.push(constraint)
+    if (call.length === 1) throw makeDeviceError('NotFoundError')
     return { id: 'ok' }
   })
-  assert.equal(结果.fellBack, true)
-  assert.equal(调用.length, 2)
-  assert.equal(设备不可用错误(造设备错误('DevicesNotFoundError')), true)
+  assert.equal(result.fellBack, true)
+  assert.equal(call.length, 2)
+  assert.equal(deviceUnavailableError(makeDeviceError('DevicesNotFoundError')), true)
 })
 
 test('回退逻辑：未指定设备或其它错误不回退，直接抛给调用方', async () => {
-  let 次数 = 0
+  let count = 0
   await assert.rejects(
-    打开麦克风('', async () => { 次数 += 1; throw 造设备错误('NotFoundError') }),
-    (错误) => 错误.name === 'NotFoundError',
+    openMic('', async () => { count += 1; throw makeDeviceError('NotFoundError') }),
+    (error) => error.name === 'NotFoundError',
   )
-  assert.equal(次数, 1)
+  assert.equal(count, 1)
 
-  次数 = 0
+  count = 0
   await assert.rejects(
-    打开麦克风('mic-1', async () => { 次数 += 1; throw 造设备错误('NotAllowedError') }),
-    (错误) => 错误.name === 'NotAllowedError',
+    openMic('mic-1', async () => { count += 1; throw makeDeviceError('NotAllowedError') }),
+    (error) => error.name === 'NotAllowedError',
   )
-  assert.equal(次数, 1)
+  assert.equal(count, 1)
 })
 
 test('回退逻辑：回退后仍失败，返回第二次的错误', async () => {
-  const 调用 = []
+  const call = []
   await assert.rejects(
-    打开麦克风('gone-device', async (约束) => {
-      调用.push(约束)
-      if (调用.length === 1) throw 造设备错误('OverconstrainedError')
-      throw 造设备错误('NotReadableError')
+    openMic('gone-device', async (constraint) => {
+      call.push(constraint)
+      if (call.length === 1) throw makeDeviceError('OverconstrainedError')
+      throw makeDeviceError('NotReadableError')
     }),
-    (错误) => 错误.name === 'NotReadableError',
+    (error) => error.name === 'NotReadableError',
   )
-  assert.equal(调用.length, 2)
+  assert.equal(call.length, 2)
 })
 
 test('虚拟设备识别：包含 stream / virtual / cable / voicemeeter 等关键词', () => {
-  for (const 名称 of [
+  for (const label of [
     'PicoStreamingMicrophone',
     'Virtual Audio Cable',
     'CABLE Output (VB-Audio Virtual Cable)',
@@ -139,15 +139,15 @@ test('虚拟设备识别：包含 stream / virtual / cable / voicemeeter 等关�
     '立体声混音',
     'Loopback Audio',
   ]) {
-    assert.equal(是虚拟设备名称(名称), true, 名称)
-    assert.match(虚拟设备提示(名称), /虚拟设备/)
+    assert.equal(isVirtualDeviceName(label), true, label)
+    assert.match(virtualDevicePrompt(label), /虚拟设备/)
   }
-  for (const 名称 of ['', 'Microphone (Realtek(R) Audio)', 'Headset Microphone', null, 42]) {
-    assert.equal(是虚拟设备名称(名称), false, String(名称))
-    assert.equal(虚拟设备提示(名称), '')
+  for (const label of ['', 'Microphone (Realtek(R) Audio)', 'Headset Microphone', null, 42]) {
+    assert.equal(isVirtualDeviceName(label), false, String(label))
+    assert.equal(virtualDevicePrompt(label), '')
   }
 })
 
 test('虚拟设备提示文案固定，便于直接展示给用户', () => {
-  assert.equal(虚拟设备提示('PicoStreamingMicrophone'), '当前输入设备可能是虚拟设备，请在设置里改选真实麦克风。')
+  assert.equal(virtualDevicePrompt('PicoStreamingMicrophone'), '当前输入设备可能是虚拟设备，请在设置里改选真实麦克风。')
 })

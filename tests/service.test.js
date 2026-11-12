@@ -14,9 +14,9 @@ import {
   writeTempFile,
 } from './helpers.js'
 import { apply } from '../lib/host.js'
-import { 默认识图提示, 默认会话识图提示 } from '../lib/vision-presets.js'
+import { defaultVisionPrompt, defaultSessionVisionPrompt } from '../lib/vision-presets.js'
 
-function 解析体(rec) {
+function parseBody(rec) {
   try { return JSON.parse(rec.body.toString('utf8') || '{}') } catch { return {} }
 }
 
@@ -47,7 +47,7 @@ test('tts：批量写缓存、只返回路径与指标、同 seed 复用缓存',
   const sent = []
   const handler = basicHandler({
     '/tts': (req, res, rec) => {
-      const body = 解析体(rec)
+      const body = parseBody(rec)
       sent.push(body)
       sendBuffer(res, 200, Buffer.from(`RIFF-${body.text}`), {
         'content-type': 'audio/wav',
@@ -88,7 +88,7 @@ test('tts：不传 seed 也查缓存；换音色/语速不命中；统计单调�
   const sent = []
   const handler = basicHandler({
     '/tts': (req, res, rec) => {
-      const body = 解析体(rec)
+      const body = parseBody(rec)
       sent.push(body)
       sendBuffer(res, 200, Buffer.from(`RIFF-${body.text}-${body.voice}-${body.speed ?? ''}`), {
         'content-type': 'audio/wav',
@@ -100,65 +100,65 @@ test('tts：不传 seed 也查缓存；换音色/语速不命中；统计单调�
   const stack = await makeStack({ handler })
   t.after(() => stack.close())
 
-  const 一 = await stack.api.tts('同一句话', { voice: 'dafeiyu', speed: 1.2 })
-  assert.equal(一.items[0].cached, false)
-  assert.equal(一.items[0].seed, 11) // 不传 seed 时服务端随机，用响应头 x-seed 回填
+  const one = await stack.api.tts('同一句话', { voice: 'dafeiyu', speed: 1.2 })
+  assert.equal(one.items[0].cached, false)
+  assert.equal(one.items[0].seed, 11) // 不传 seed 时服务端随机，用响应头 x-seed 回填
   assert.equal(sent.length, 1)
-  const 统计0 = stack.api.cache.stats()
+  const stats0 = stack.api.cache.stats()
   assert.deepEqual(
-    { hits: 统计0.hits, misses: 统计0.misses, hitRate: 统计0.hitRate, kind: 统计0.kind },
+    { hits: stats0.hits, misses: stats0.misses, hitRate: stats0.hitRate, kind: stats0.kind },
     { hits: 0, misses: 1, hitRate: 0, kind: 'tts' },
   )
-  assert.equal(统计0.files, 1)
-  assert.ok(统计0.bytes > 0)
+  assert.equal(stats0.files, 1)
+  assert.ok(stats0.bytes > 0)
 
-  const 二 = await stack.api.tts('同一句话', { voice: 'dafeiyu', speed: 1.2 })
+  const two = await stack.api.tts('同一句话', { voice: 'dafeiyu', speed: 1.2 })
   assert.equal(sent.length, 1) // 第二次不再发 HTTP
-  assert.equal(二.items[0].cached, true)
-  assert.equal(二.items[0].ms, 0)
-  assert.equal(二.items[0].wavPath, 一.items[0].wavPath)
-  assert.equal(二.items[0].bytes, 一.items[0].bytes)
+  assert.equal(two.items[0].cached, true)
+  assert.equal(two.items[0].ms, 0)
+  assert.equal(two.items[0].wavPath, one.items[0].wavPath)
+  assert.equal(two.items[0].bytes, one.items[0].bytes)
 
-  const 统计1 = stack.api.cache.stats()
-  assert.equal(统计1.hits, 1)
-  assert.equal(统计1.misses, 1)
-  assert.equal(统计1.hitRate, 0.5)
+  const stats1 = stack.api.cache.stats()
+  assert.equal(stats1.hits, 1)
+  assert.equal(stats1.misses, 1)
+  assert.equal(stats1.hitRate, 0.5)
 
-  const 三 = await stack.api.tts('同一句话', { voice: 'dafeiyu', speed: 1.2 })
-  assert.equal(三.items[0].cached, true)
-  const 统计2 = stack.api.cache.stats()
-  assert.ok(统计2.hitRate > 统计1.hitRate) // 命中率单调增长
-  assert.equal(统计2.files, 1) // 同一个文件不重复计数
+  const three = await stack.api.tts('同一句话', { voice: 'dafeiyu', speed: 1.2 })
+  assert.equal(three.items[0].cached, true)
+  const stats2 = stack.api.cache.stats()
+  assert.ok(stats2.hitRate > stats1.hitRate) // 命中率单调增长
+  assert.equal(stats2.files, 1) // 同一个文件不重复计数
 
   // 换音色 / 换语速 → key 变了，必须重新合成
-  const 换音色 = await stack.api.tts('同一句话', { voice: 'default', speed: 1.2 })
-  assert.equal(换音色.items[0].cached, false)
-  const 换语速 = await stack.api.tts('同一句话', { voice: 'dafeiyu', speed: 1.5 })
-  assert.equal(换语速.items[0].cached, false)
+  const swapVoice = await stack.api.tts('同一句话', { voice: 'default', speed: 1.2 })
+  assert.equal(swapVoice.items[0].cached, false)
+  const swapSpeed = await stack.api.tts('同一句话', { voice: 'dafeiyu', speed: 1.5 })
+  assert.equal(swapSpeed.items[0].cached, false)
   assert.equal(sent.length, 3)
   assert.equal(stack.api.cache.stats().misses, 3)
   assert.equal(stack.api.cache.stats().files, 3)
   assert.equal(sent[2].speed, 1.5)
 
   // 清空 TTS 缓存 → 再合成是 miss；文件账本清零，历史命中计数保留
-  const 清 = stack.api.cache.clear({ kind: 'tts' })
-  assert.equal(清.ok, true)
-  assert.equal(清.kind, 'tts')
-  assert.equal(清.files, 3)
+  const clear = stack.api.cache.clear({ kind: 'tts' })
+  assert.equal(clear.ok, true)
+  assert.equal(clear.kind, 'tts')
+  assert.equal(clear.files, 3)
   assert.equal(stack.api.cache.stats().files, 0)
   assert.equal(stack.api.cache.stats().hits, 2)
   assert.equal(stack.api.cache.stats().misses, 3)
 
-  const 清后 = await stack.api.tts('同一句话', { voice: 'dafeiyu', speed: 1.2 })
-  assert.equal(清后.items[0].cached, false)
+  const clearAfter = await stack.api.tts('同一句话', { voice: 'dafeiyu', speed: 1.2 })
+  assert.equal(clearAfter.items[0].cached, false)
   assert.equal(sent.length, 4)
   assert.equal(stack.api.cache.stats().files, 1)
 
   await assert.rejects(async () => stack.api.cache.clear({ kind: 'nope' }), (e) => e.code === 'bad_request')
-  const 清理 = stack.api.cache.cleanup()
-  assert.equal(清理.ok, true)
-  assert.equal(typeof 清理.expired, 'number')
-  assert.equal(typeof 清理.lru, 'number')
+  const cleanup = stack.api.cache.cleanup()
+  assert.equal(cleanup.ok, true)
+  assert.equal(typeof cleanup.expired, 'number')
+  assert.equal(typeof cleanup.lru, 'number')
 })
 
 test('tts：固定 seed 和自动（无 seed）的缓存互不串用', async (t) => {
@@ -166,7 +166,7 @@ test('tts：固定 seed 和自动（无 seed）的缓存互不串用', async (t)
   const stack = await makeStack({
     handler: basicHandler({
       '/tts': (req, res, rec) => {
-        const body = 解析体(rec)
+        const body = parseBody(rec)
         sent.push(body)
         sendBuffer(res, 200, Buffer.from(`RIFF-${body.seed ?? 'auto'}`), {
           'content-type': 'audio/wav',
@@ -177,14 +177,14 @@ test('tts：固定 seed 和自动（无 seed）的缓存互不串用', async (t)
   })
   t.after(() => stack.close())
 
-  const 自动 = await stack.api.tts('一句话', { voice: 'dafeiyu', speed: 1 })
-  const 固定 = await stack.api.tts('一句话', { voice: 'dafeiyu', speed: 1, seed: 5 })
-  assert.equal(自动.items[0].cached, false)
-  assert.equal(固定.items[0].cached, false)
+  const auto = await stack.api.tts('一句话', { voice: 'dafeiyu', speed: 1 })
+  const fixed = await stack.api.tts('一句话', { voice: 'dafeiyu', speed: 1, seed: 5 })
+  assert.equal(auto.items[0].cached, false)
+  assert.equal(fixed.items[0].cached, false)
   assert.equal(sent.length, 2)
-  assert.equal(固定.items[0].wavPath === 自动.items[0].wavPath, false)
-  assert.equal(自动.items[0].seed, 77) // 服务端 x-seed 回填
-  assert.equal(固定.items[0].seed, 5)
+  assert.equal(fixed.items[0].wavPath === auto.items[0].wavPath, false)
+  assert.equal(auto.items[0].seed, 77) // 服务端 x-seed 回填
+  assert.equal(fixed.items[0].seed, 5)
 })
 
 test('tts：21 条 / 空文本 / 超长 / speed / language 都返回 bad_request', async (t) => {
@@ -256,11 +256,11 @@ test('asr：返回文字/分段；timestamps 走 /asr/segments；文件不存在
 test('translate：单条 / 批量、顺序一致、上限校验', async (t) => {
   const handler = basicHandler({
     '/translate': (req, res, rec) => {
-      const body = 解析体(rec)
+      const body = parseBody(rec)
       sendJson(res, 200, { ok: true, text: `译:${body.text}`, source: body.source, target: body.target, chunks: 1 })
     },
     '/translate/batch': (req, res, rec) => {
-      const body = 解析体(rec)
+      const body = parseBody(rec)
       sendJson(res, 200, { ok: true, texts: body.texts.map((x) => `译:${x}`), source: body.source, target: body.target })
     },
   })
@@ -275,14 +275,14 @@ test('translate：单条 / 批量、顺序一致、上限校验', async (t) => {
   assert.deepEqual(many.texts, ['译:a', '译:b', '译:c'])
 
   // 空字符串原样返回，且不发给服务端（顺序不变）
-  const 请求前 = stack.mock.requests.filter((x) => x.path.startsWith('/translate')).length
+  const requestFront = stack.mock.requests.filter((x) => x.path.startsWith('/translate')).length
   const mixed = await stack.api.translate(['', 'a', ''], { source: 'en', target: 'zh' })
   assert.deepEqual(mixed.texts, ['', '译:a', ''])
-  const 请求后 = stack.mock.requests.filter((x) => x.path.startsWith('/translate')).length
-  assert.equal(请求后 - 请求前, 1)
-  const 全空 = await stack.api.translate(['', ''], { target: 'zh' })
-  assert.deepEqual(全空.texts, ['', ''])
-  assert.equal(stack.mock.requests.filter((x) => x.path.startsWith('/translate')).length, 请求后)
+  const requestAfter = stack.mock.requests.filter((x) => x.path.startsWith('/translate')).length
+  assert.equal(requestAfter - requestFront, 1)
+  const allEmpty = await stack.api.translate(['', ''], { target: 'zh' })
+  assert.deepEqual(allEmpty.texts, ['', ''])
+  assert.equal(stack.mock.requests.filter((x) => x.path.startsWith('/translate')).length, requestAfter)
 
   await assert.rejects(stack.api.translate(['x'], { target: 'auto' }), (e) => e.code === 'bad_request')
   await assert.rejects(stack.api.translate(Array.from({ length: 501 }, () => 'x'), { target: 'zh' }), (e) => e.code === 'bad_request')
@@ -290,13 +290,13 @@ test('translate：单条 / 批量、顺序一致、上限校验', async (t) => {
 })
 
 test('translate：不传 target 时按第一/第二语言自动选，检测结果作为 source', async (t) => {
-  const 收 = []
+  const collect = []
   const stack = await makeStack({
     config: { primaryLanguage: 'zh', secondaryLanguage: 'en' },
     handler: basicHandler({
       '/translate': (req, res, rec) => {
-        const body = 解析体(rec)
-        收.push(body)
+        const body = parseBody(rec)
+        collect.push(body)
         sendJson(res, 200, { ok: true, text: `译:${body.text}`, source: body.source, target: body.target })
       },
     }),
@@ -304,44 +304,44 @@ test('translate：不传 target 时按第一/第二语言自动选，检测结�
   t.after(() => stack.close())
 
   // 中文原文 = 第一语言 → 译成第二语言；source 检测为 zh。
-  const 中 = await stack.api.translate('你好，世界', {})
-  assert.equal(中.target, 'en')
-  assert.equal(中.source, 'zh')
-  assert.equal(收.at(-1).target, 'en')
-  assert.equal(收.at(-1).source, 'zh')
+  const middle = await stack.api.translate('你好，世界', {})
+  assert.equal(middle.target, 'en')
+  assert.equal(middle.source, 'zh')
+  assert.equal(collect.at(-1).target, 'en')
+  assert.equal(collect.at(-1).source, 'zh')
 
   // 英文原文 ≠ 第一语言 → 译成第一语言。
-  const 英 = await stack.api.translate('hello world', {})
-  assert.equal(英.target, 'zh')
-  assert.equal(英.source, 'en')
+  const english = await stack.api.translate('hello world', {})
+  assert.equal(english.target, 'zh')
+  assert.equal(english.source, 'en')
 
   // 日文 → 第一语言。
-  const 日 = await stack.api.translate('こんにちは', {})
-  assert.equal(日.target, 'zh')
-  assert.equal(日.source, 'ja')
+  const day = await stack.api.translate('こんにちは', {})
+  assert.equal(day.target, 'zh')
+  assert.equal(day.source, 'ja')
 
   // 显式 target 优先：中文原文也可以显式译成日文。
-  const 显式 = await stack.api.translate('你好', { target: 'ja' })
-  assert.equal(显式.target, 'ja')
-  assert.equal(收.at(-1).target, 'ja')
+  const explicit = await stack.api.translate('你好', { target: 'ja' })
+  assert.equal(explicit.target, 'ja')
+  assert.equal(collect.at(-1).target, 'ja')
 
   // 显式 source 优先于检测。
-  const 显式源 = await stack.api.translate('hello', { source: 'ja', target: 'zh' })
-  assert.equal(显式源.source, 'ja')
+  const explicitSource = await stack.api.translate('hello', { source: 'ja', target: 'zh' })
+  assert.equal(explicitSource.source, 'ja')
 
   // 检测不出 → 第一语言；source 传 auto。
-  const 空 = await stack.api.translate('12345', {})
-  assert.equal(空.target, 'zh')
-  assert.equal(空.source, 'auto')
+  const empty = await stack.api.translate('12345', {})
+  assert.equal(empty.target, 'zh')
+  assert.equal(empty.source, 'auto')
 })
 
 test('visionDescribe：逐张调 /vision/describe，caption 跟默认档提示，score 不传', async (t) => {
-  const 请求 = []
-  const 图 = (名) => writeTempFile(temp.dir, 名, 'png-bytes')
+  const request = []
+  const image = (name) => writeTempFile(temp.dir, name, 'png-bytes')
   const stack = await makeStack({
     handler: basicHandler({
       '/vision/describe': (req, res, rec) => {
-        请求.push(rec)
+        request.push(rec)
         sendJson(res, 200, { ok: true, text: '{"caption":"窗台上的猫"}', parsed: { caption: '窗台上的猫' }, elapsed_ms: 37 })
       },
     }),
@@ -349,8 +349,8 @@ test('visionDescribe：逐张调 /vision/describe，caption 跟默认档提示�
   const temp = stack.temp
   t.after(() => stack.close())
 
-  const a = 图('a.png')
-  const b = 图('b.jpg')
+  const a = image('a.png')
+  const b = image('b.jpg')
   const r = await stack.api.visionDescribe([a, b])
   assert.equal(r.ok, true)
   assert.equal(r.items.length, 2)
@@ -358,159 +358,159 @@ test('visionDescribe：逐张调 /vision/describe，caption 跟默认档提示�
   assert.equal(r.items[0].text, '{"caption":"窗台上的猫"}')
   assert.deepEqual(r.items[0].parsed, { caption: '窗台上的猫' })
   assert.equal(r.items[0].ms, 37)
-  assert.equal(请求.length, 2)
-  assert.match(请求[0].headers['content-type'], /multipart\/form-data/)
-  assert.match(请求[0].body.toString('utf8'), /name="file"; filename="a\.png"/)
+  assert.equal(request.length, 2)
+  assert.match(request[0].headers['content-type'], /multipart\/form-data/)
+  assert.match(request[0].body.toString('utf8'), /name="file"; filename="a\.png"/)
   // caption 必须有提示词覆盖服务端评分提示，默认档是「详细」。
-  assert.match(请求[0].body.toString('utf8'), /name="prompt"/)
-  assert.ok(请求[0].body.toString('utf8').replace(/\r\n/g, '\n').includes(默认识图提示.detailed))
+  assert.match(request[0].body.toString('utf8'), /name="prompt"/)
+  assert.ok(request[0].body.toString('utf8').replace(/\r\n/g, '\n').includes(defaultVisionPrompt.detailed))
   // score 保持服务端默认。
   await stack.api.visionDescribe(a, { mode: 'score' })
-  assert.equal(请求.at(-1).body.toString('utf8').includes('name="prompt"'), false)
+  assert.equal(request.at(-1).body.toString('utf8').includes('name="prompt"'), false)
   // 自定义 prompt 覆盖默认。
   await stack.api.visionDescribe(a, { mode: 'caption', prompt: '这是什么？' })
-  assert.match(请求.at(-1).body.toString('utf8'), /这是什么？/)
+  assert.match(request.at(-1).body.toString('utf8'), /这是什么？/)
 })
 
 test('visionDescribe：最多 10 张、缺文件、非图片扩展名都拒绝', async (t) => {
   const stack = await makeStack()
   t.after(() => stack.close())
-  const 图 = writeTempFile(stack.temp.dir, 'a.png', 'x')
+  const image = writeTempFile(stack.temp.dir, 'a.png', 'x')
   await assert.rejects(
     stack.api.visionDescribe(Array.from({ length: 11 }, (_, i) => `${stack.temp.dir}\\${i}.png`)),
     (e) => e.code === 'bad_request',
   )
   await assert.rejects(stack.api.visionDescribe(join(stack.temp.dir, '不存在.png')), (e) => e.code === 'bad_request')
-  const 文本 = writeTempFile(stack.temp.dir, 'a.txt', 'x')
-  await assert.rejects(stack.api.visionDescribe(文本), (e) => e.code === 'bad_request')
-  assert.ok(existsSync(图))
+  const text = writeTempFile(stack.temp.dir, 'a.txt', 'x')
+  await assert.rejects(stack.api.visionDescribe(text), (e) => e.code === 'bad_request')
+  assert.ok(existsSync(image))
 })
 
 test('visionDescribe：prompt > preset > 配置默认档，ocr 固定只看文字档', async (t) => {
-  const 请求 = []
+  const request = []
   const stack = await makeStack({
     handler: basicHandler({
       '/vision/describe': (req, res, rec) => {
-        请求.push(rec)
+        request.push(rec)
         sendJson(res, 200, { ok: true, text: '描述', elapsed_ms: 2 })
       },
     }),
   })
   t.after(() => stack.close())
-  const 图 = writeTempFile(stack.temp.dir, 'a.png', 'x')
-  const 提示字段 = (rec) => {
-    const 文 = rec.body.toString('utf8')
-    const 匹配 = 文.match(/name="prompt"\r\n\r\n([\s\S]*?)\r\n--/)
+  const image = writeTempFile(stack.temp.dir, 'a.png', 'x')
+  const promptField = (rec) => {
+    const text = rec.body.toString('utf8')
+    const match = text.match(/name="prompt"\r\n\r\n([\s\S]*?)\r\n--/)
     // multipart 文本字段会把换行规范成 CRLF，比较前统一。
-    return 匹配 ? 匹配[1].replace(/\r\n/g, '\n') : ''
+    return match ? match[1].replace(/\r\n/g, '\n') : ''
   }
 
-  await stack.api.visionDescribe(图)
-  assert.equal(提示字段(请求.at(-1)), 默认识图提示.detailed)
+  await stack.api.visionDescribe(image)
+  assert.equal(promptField(request.at(-1)), defaultVisionPrompt.detailed)
 
-  await stack.api.visionDescribe(图, { preset: 'brief' })
-  assert.equal(提示字段(请求.at(-1)), 默认识图提示.brief)
+  await stack.api.visionDescribe(image, { preset: 'brief' })
+  assert.equal(promptField(request.at(-1)), defaultVisionPrompt.brief)
 
   // 中文档位名也认。
-  await stack.api.visionDescribe(图, { preset: '详细' })
-  assert.equal(提示字段(请求.at(-1)), 默认识图提示.detailed)
+  await stack.api.visionDescribe(image, { preset: '详细' })
+  assert.equal(promptField(request.at(-1)), defaultVisionPrompt.detailed)
 
   // 非法档位静默回配置默认档，不报错。
-  await stack.api.visionDescribe(图, { preset: '不存在的档' })
-  assert.equal(提示字段(请求.at(-1)), 默认识图提示.detailed)
+  await stack.api.visionDescribe(image, { preset: '不存在的档' })
+  assert.equal(promptField(request.at(-1)), defaultVisionPrompt.detailed)
 
   // 显式 prompt 压过 preset。
-  await stack.api.visionDescribe(图, { preset: 'brief', prompt: '只看猫' })
-  assert.equal(提示字段(请求.at(-1)), '只看猫')
+  await stack.api.visionDescribe(image, { preset: 'brief', prompt: '只看猫' })
+  assert.equal(promptField(request.at(-1)), '只看猫')
 
   // 旧 mode 兼容：ocr 固定「只看文字」，即使同时给了别的档位。
-  await stack.api.visionDescribe(图, { mode: 'ocr', preset: 'brief' })
-  assert.equal(提示字段(请求.at(-1)), 默认识图提示.text)
+  await stack.api.visionDescribe(image, { mode: 'ocr', preset: 'brief' })
+  assert.equal(promptField(request.at(-1)), defaultVisionPrompt.text)
 
   // 配置里改过的档位提示词优先于内置默认。
   await stack.api.config.set({ visionPresets: { brief: '我的简短提示' } })
-  await stack.api.visionDescribe(图, { preset: 'brief' })
-  assert.equal(提示字段(请求.at(-1)), '我的简短提示')
+  await stack.api.visionDescribe(image, { preset: 'brief' })
+  assert.equal(promptField(request.at(-1)), '我的简短提示')
 
   // 默认档位跟着配置走。
   await stack.api.config.set({ visionDefaultPreset: 'standard' })
-  await stack.api.visionDescribe(图)
-  assert.equal(提示字段(请求.at(-1)), 默认识图提示.standard)
+  await stack.api.visionDescribe(image)
+  assert.equal(promptField(request.at(-1)), defaultVisionPrompt.standard)
 })
 
 test('visionDescribe：scope=session 用会话识图提示词，与工具档位互不覆盖', async (t) => {
-  const 请求 = []
+  const request = []
   const stack = await makeStack({
     handler: basicHandler({
       '/vision/describe': (req, res, rec) => {
-        请求.push(rec)
+        request.push(rec)
         sendJson(res, 200, { ok: true, text: '描述', elapsed_ms: 2 })
       },
     }),
   })
   t.after(() => stack.close())
-  const 图 = writeTempFile(stack.temp.dir, 'a.png', 'x')
-  const 提示字段 = (rec) => {
-    const 文 = rec.body.toString('utf8')
-    const 匹配 = 文.match(/name="prompt"\r\n\r\n([\s\S]*?)\r\n--/)
+  const image = writeTempFile(stack.temp.dir, 'a.png', 'x')
+  const promptField = (rec) => {
+    const text = rec.body.toString('utf8')
+    const match = text.match(/name="prompt"\r\n\r\n([\s\S]*?)\r\n--/)
     // multipart 文本字段会把换行规范成 CRLF，比较前统一。
-    return 匹配 ? 匹配[1].replace(/\r\n/g, '\n') : ''
+    return match ? match[1].replace(/\r\n/g, '\n') : ''
   }
 
   // 会话识图的默认提示词与「详细」档一致。
-  await stack.api.visionDescribe(图, { scope: 'session' })
-  assert.equal(提示字段(请求.at(-1)), 默认会话识图提示)
-  assert.equal(默认会话识图提示, 默认识图提示.detailed)
+  await stack.api.visionDescribe(image, { scope: 'session' })
+  assert.equal(promptField(request.at(-1)), defaultSessionVisionPrompt)
+  assert.equal(defaultSessionVisionPrompt, defaultVisionPrompt.detailed)
 
   // 会话识图不吃工具档位：同时给 preset 也走会话提示词。
-  await stack.api.visionDescribe(图, { scope: 'session', preset: 'brief' })
-  assert.equal(提示字段(请求.at(-1)), 默认会话识图提示)
+  await stack.api.visionDescribe(image, { scope: 'session', preset: 'brief' })
+  assert.equal(promptField(request.at(-1)), defaultSessionVisionPrompt)
 
   // 单独改会话识图提示词，工具档位不受影响。
   await stack.api.config.set({ visionSessionPrompt: '请用一句话说图。' })
-  await stack.api.visionDescribe(图, { scope: 'session' })
-  assert.equal(提示字段(请求.at(-1)), '请用一句话说图。')
-  await stack.api.visionDescribe(图, { preset: 'brief' })
-  assert.equal(提示字段(请求.at(-1)), 默认识图提示.brief)
+  await stack.api.visionDescribe(image, { scope: 'session' })
+  assert.equal(promptField(request.at(-1)), '请用一句话说图。')
+  await stack.api.visionDescribe(image, { preset: 'brief' })
+  assert.equal(promptField(request.at(-1)), defaultVisionPrompt.brief)
 
   // 显式 prompt 仍压过会话提示词；ocr 仍固定只看文字。
-  await stack.api.visionDescribe(图, { scope: 'session', prompt: '只看猫' })
-  assert.equal(提示字段(请求.at(-1)), '只看猫')
-  await stack.api.visionDescribe(图, { scope: 'session', mode: 'ocr' })
-  assert.equal(提示字段(请求.at(-1)), 默认识图提示.text)
+  await stack.api.visionDescribe(image, { scope: 'session', prompt: '只看猫' })
+  assert.equal(promptField(request.at(-1)), '只看猫')
+  await stack.api.visionDescribe(image, { scope: 'session', mode: 'ocr' })
+  assert.equal(promptField(request.at(-1)), defaultVisionPrompt.text)
 })
 
 test('config.set：识图档位非法回默认，提示词只认四档且超长截断', async (t) => {
   const stack = await makeStack()
   t.after(() => stack.close())
 
-  const 坏档 = await stack.api.config.set({ visionDefaultPreset: '特写' })
-  assert.equal(坏档.ok, true)
-  assert.ok(坏档.warnings.some((x) => x.includes('已恢复默认')))
+  const badPreset = await stack.api.config.set({ visionDefaultPreset: '特写' })
+  assert.equal(badPreset.ok, true)
+  assert.ok(badPreset.warnings.some((x) => x.includes('已恢复默认')))
   assert.equal(stack.api.config.get().visionDefaultPreset, 'detailed')
 
-  const 会话 = await stack.api.config.set({ visionSessionPrompt: '  我的会话提示  ' })
-  assert.equal(会话.ok, true)
+  const session = await stack.api.config.set({ visionSessionPrompt: '  我的会话提示  ' })
+  assert.equal(session.ok, true)
   assert.equal(stack.api.config.get().visionSessionPrompt, '我的会话提示')
 
-  const 会话超长 = await stack.api.config.set({ visionSessionPrompt: '很'.repeat(4100) })
-  assert.equal(会话超长.ok, true)
-  assert.ok(会话超长.warnings.some((x) => x.includes('已截断')))
+  const sessionExceedLength = await stack.api.config.set({ visionSessionPrompt: '很'.repeat(4100) })
+  assert.equal(sessionExceedLength.ok, true)
+  assert.ok(sessionExceedLength.warnings.some((x) => x.includes('已截断')))
   assert.equal(stack.api.config.get().visionSessionPrompt.length, 4000)
 
-  const 提示 = await stack.api.config.set({
+  const prompt = await stack.api.config.set({
     visionPresets: { brief: '一句话', foo: '不该收', detailed: 42 },
   })
-  assert.equal(提示.ok, true)
-  assert.ok(提示.warnings.some((x) => x.includes('已忽略')))
-  const 预设 = stack.api.config.get().visionPresets
-  assert.equal(预设.brief, '一句话')
-  assert.equal(预设.detailed, 默认识图提示.detailed)
-  assert.equal(预设.foo, undefined)
+  assert.equal(prompt.ok, true)
+  assert.ok(prompt.warnings.some((x) => x.includes('已忽略')))
+  const presets = stack.api.config.get().visionPresets
+  assert.equal(presets.brief, '一句话')
+  assert.equal(presets.detailed, defaultVisionPrompt.detailed)
+  assert.equal(presets.foo, undefined)
 
-  const 超长 = await stack.api.config.set({ visionPresets: { brief: '很'.repeat(4100) } })
-  assert.equal(超长.ok, true)
-  assert.ok(超长.warnings.some((x) => x.includes('已截断')))
+  const exceedLength = await stack.api.config.set({ visionPresets: { brief: '很'.repeat(4100) } })
+  assert.equal(exceedLength.ok, true)
+  assert.ok(exceedLength.warnings.some((x) => x.includes('已截断')))
   assert.equal(stack.api.config.get().visionPresets.brief.length, 4000)
 })
 
@@ -522,14 +522,14 @@ test('visionPrefs：默认开、随配置变、可经 config.set 写入；不探
   assert.deepEqual(stack.api.visionPrefs(), {
     localDescribe: true,
     visionSessionReady: true,
-    visionSessionPrompt: 默认会话识图提示,
+    visionSessionPrompt: defaultSessionVisionPrompt,
     visionDefaultPreset: 'detailed',
   })
   assert.equal(stack.api.config.get().localDescribe, true)
 
-  const 结果 = await stack.api.config.set({ localDescribe: false, visionSessionPrompt: '我的会话提示' })
-  assert.equal(结果.ok, true)
-  assert.ok(结果.applied.includes('localDescribe'))
+  const result = await stack.api.config.set({ localDescribe: false, visionSessionPrompt: '我的会话提示' })
+  assert.equal(result.ok, true)
+  assert.ok(result.applied.includes('localDescribe'))
   assert.deepEqual(stack.api.visionPrefs(), {
     localDescribe: false,
     visionSessionReady: false,
@@ -538,8 +538,8 @@ test('visionPrefs：默认开、随配置变、可经 config.set 写入；不探
   })
 
   // 只认明确的开：其它值一律按关（与其它布尔字段一致）。
-  const 关 = await stack.api.config.set({ localDescribe: 0 })
-  assert.equal(关.ok, true)
+  const off = await stack.api.config.set({ localDescribe: 0 })
+  assert.equal(off.ok, true)
   assert.deepEqual(stack.api.visionPrefs(), {
     localDescribe: false,
     visionSessionReady: false,
@@ -554,15 +554,15 @@ test('visionPrefs：默认开、随配置变、可经 config.set 写入；不探
 })
 
 test('separate：复制 stems 到缓存、返回 dir；未知 stem 拒绝', async (t) => {
-  let 源目录 = ''
+  let sourceDir = ''
   const stack = await makeStack({
     handler: basicHandler({
       '/separate': (req, res) => {
         sendJson(res, 200, {
           ok: true,
           stems: {
-            vocals: { path: join(源目录, 'src-vocals.wav'), duration: 1.2 },
-            drums: { path: join(源目录, 'src-drums.wav') },
+            vocals: { path: join(sourceDir, 'src-vocals.wav'), duration: 1.2 },
+            drums: { path: join(sourceDir, 'src-drums.wav') },
           },
           released_models: ['asr'],
         })
@@ -570,11 +570,11 @@ test('separate：复制 stems 到缓存、返回 dir；未知 stem 拒绝', asyn
     }),
   })
   t.after(() => stack.close())
-  源目录 = stack.temp.dir
+  sourceDir = stack.temp.dir
   // 服务器返回的文件必须真实存在
-  writeTempFile(源目录, 'src-vocals.wav', 'vocals')
-  writeTempFile(源目录, 'src-drums.wav', 'drums')
-  const src = writeTempFile(源目录, 'song.mp3', 'audio')
+  writeTempFile(sourceDir, 'src-vocals.wav', 'vocals')
+  writeTempFile(sourceDir, 'src-drums.wav', 'drums')
+  const src = writeTempFile(sourceDir, 'song.mp3', 'audio')
 
   const r = await stack.api.separate(src, { stems: ['vocals', 'drums'] })
   assert.equal(r.ok, true)
@@ -589,17 +589,17 @@ test('separate：复制 stems 到缓存、返回 dir；未知 stem 拒绝', asyn
 })
 
 test('visionFrames：复制关键帧到缓存、映射 stats；url 未实现', async (t) => {
-  let 源目录 = ''
-  let 帧A = ''
-  let 帧B = ''
+  let sourceDir = ''
+  let frameA = ''
+  let frameB = ''
   const stack = await makeStack({
     handler: basicHandler({
       '/vision/frames': (req, res) => {
         sendJson(res, 200, {
           ok: true,
           frames: [
-            { time: 1.5, path: 帧A, score: 0.8, kind: 'slide', ocr_text: '标题', summary: '第一帧' },
-            { time: 3.0, path: 帧B, confidence: 'low' },
+            { time: 1.5, path: frameA, score: 0.8, kind: 'slide', ocr_text: '标题', summary: '第一帧' },
+            { time: 3.0, path: frameB, confidence: 'low' },
           ],
           duration: 12.5,
           subtitles_from: 'embedded',
@@ -609,10 +609,10 @@ test('visionFrames：复制关键帧到缓存、映射 stats；url 未实现', a
     }),
   })
   t.after(() => stack.close())
-  源目录 = stack.temp.dir
-  帧A = writeTempFile(源目录, 'f1.jpg', 'fake-jpeg')
-  帧B = writeTempFile(源目录, 'f2.jpg', 'fake-jpeg')
-  const video = writeTempFile(源目录, 'v.mp4', 'video')
+  sourceDir = stack.temp.dir
+  frameA = writeTempFile(sourceDir, 'f1.jpg', 'fake-jpeg')
+  frameB = writeTempFile(sourceDir, 'f2.jpg', 'fake-jpeg')
+  const video = writeTempFile(sourceDir, 'v.mp4', 'video')
 
   const r = await stack.api.visionFrames({ videoPath: video }, { targetFrames: 2 })
   assert.equal(r.ok, true)
@@ -659,12 +659,12 @@ test('mediaProbe：批量探测、字段映射', async (t) => {
 })
 
 test('jobs：enqueue/status/list/cancel/wait 与 payload 精简', async (t) => {
-  let 轮询 = 0
+  let poll = 0
   const stack = await makeStack({
     handler: basicHandler({
       '/jobs': (req, res, rec) => {
         if (req.method === 'POST') {
-          const body = 解析体(rec)
+          const body = parseBody(rec)
           assert.equal(body.kind, 'tts')
           return sendJson(res, 200, { ok: true, id: 'j1', state: 'queued' })
         }
@@ -678,9 +678,9 @@ test('jobs：enqueue/status/list/cancel/wait 与 payload 精简', async (t) => {
         })
       },
       '/jobs/j1': (req, res) => {
-        轮询 += 1
+        poll += 1
         sendJson(res, 200, {
-          id: 'j1', kind: 'tts', state: 轮询 > 1 ? 'done' : 'running',
+          id: 'j1', kind: 'tts', state: poll > 1 ? 'done' : 'running',
           created_at: '2026-11-09T00:00:00Z', result: { wavPath: 'C:\\a.wav' },
         })
       },
@@ -728,28 +728,28 @@ test('jobs.result：取任务结果；未完成时回 not_ready 而不是抛错'
   })
   t.after(() => stack.close())
 
-  const 完 = await stack.api.jobs.result('j1')
-  assert.equal(完.ok, true)
-  assert.equal(完.state, 'done')
-  assert.deepEqual(完.result.texts, ['译:甲', '译:乙'])
-  assert.equal(完.result.elapsed_ms, 1234)
+  const finished = await stack.api.jobs.result('j1')
+  assert.equal(finished.ok, true)
+  assert.equal(finished.state, 'done')
+  assert.deepEqual(finished.result.texts, ['译:甲', '译:乙'])
+  assert.equal(finished.result.elapsed_ms, 1234)
 
-  const 未完 = await stack.api.jobs.result('j2')
-  assert.equal(未完.ok, false)
-  assert.equal(未完.id, 'j2')
-  assert.equal(未完.state, 'not_done')
-  assert.equal(未完.code, 'not_ready')
+  const unfinished = await stack.api.jobs.result('j2')
+  assert.equal(unfinished.ok, false)
+  assert.equal(unfinished.id, 'j2')
+  assert.equal(unfinished.state, 'not_done')
+  assert.equal(unfinished.code, 'not_ready')
 
   await assert.rejects(stack.api.jobs.result(''), (e) => e.code === 'bad_request')
 })
 
 test('translateJobs：提交 / 查状态 / 取译文 / 取消，旧版服务抛 not_supported', async (t) => {
-  const 收 = []
+  const collect = []
   const stack = await makeStack({
     handler: basicHandler({
       '/jobs/translate': (req, res, rec) => {
-        const body = 解析体(rec)
-        收.push(body)
+        const body = parseBody(rec)
+        collect.push(body)
         sendJson(res, 200, { ok: true, id: 'j1', state: 'queued', count: body.texts.length, source: body.source, target: body.target })
       },
       '/jobs/j1': (req, res) => sendJson(res, 200, { id: 'j1', kind: 'translate', state: 'running', meta: { progress: { done: 1, total: 2 } } }),
@@ -764,28 +764,28 @@ test('translateJobs：提交 / 查状态 / 取译文 / 取消，旧版服务抛 
   })
   t.after(() => stack.close())
 
-  const 提交 = await stack.api.translateJobs.submit(['a', 'b'], { source: 'zh', target: 'en' })
-  assert.deepEqual(提交, { ok: true, id: 'j1', state: 'queued', source: 'zh', target: 'en', count: 2 })
-  assert.deepEqual(收[0], { texts: ['a', 'b'], source: 'zh', target: 'en' })
+  const submit = await stack.api.translateJobs.submit(['a', 'b'], { source: 'zh', target: 'en' })
+  assert.deepEqual(submit, { ok: true, id: 'j1', state: 'queued', source: 'zh', target: 'en', count: 2 })
+  assert.deepEqual(collect[0], { texts: ['a', 'b'], source: 'zh', target: 'en' })
 
-  const 状态 = await stack.api.translateJobs.status('j1')
-  assert.equal(状态.ok, true)
-  assert.equal(状态.state, 'running')
-  assert.deepEqual(状态.progress, { done: 1, total: 2 })
-  assert.equal('payload' in 状态, false)
+  const status = await stack.api.translateJobs.status('j1')
+  assert.equal(status.ok, true)
+  assert.equal(status.state, 'running')
+  assert.deepEqual(status.progress, { done: 1, total: 2 })
+  assert.equal('payload' in status, false)
 
-  const 译文 = await stack.api.translateJobs.result('j1')
-  assert.equal(译文.ok, true)
-  assert.deepEqual(译文.texts, ['译:a', '译:b'])
-  assert.equal(译文.source, 'zh')
-  assert.equal(译文.target, 'en')
-  assert.equal(译文.engine, 'nllb')
-  assert.equal(译文.ms, 900)
+  const translated = await stack.api.translateJobs.result('j1')
+  assert.equal(translated.ok, true)
+  assert.deepEqual(translated.texts, ['译:a', '译:b'])
+  assert.equal(translated.source, 'zh')
+  assert.equal(translated.target, 'en')
+  assert.equal(translated.engine, 'nllb')
+  assert.equal(translated.ms, 900)
 
-  const 取消 = await stack.api.translateJobs.cancel('j1')
-  assert.equal(取消.ok, true)
-  assert.equal(取消.state, 'canceled')
-  assert.equal(取消.cancelRequested, true)
+  const cancel = await stack.api.translateJobs.cancel('j1')
+  assert.equal(cancel.ok, true)
+  assert.equal(cancel.state, 'canceled')
+  assert.equal(cancel.cancelRequested, true)
 
   // 参数校验沿用同步接口：target 不能 auto、条数与总字数有上限。
   await assert.rejects(stack.api.translateJobs.submit(['a'], { target: 'auto' }), (e) => e.code === 'bad_request')
@@ -795,13 +795,13 @@ test('translateJobs：提交 / 查状态 / 取译文 / 取消，旧版服务抛 
 })
 
 test('translateJobs：旧版服务 404 抛 not_supported；未完成取结果回 not_ready；取消失败不阻塞', async (t) => {
-  const 旧版 = await makeStack({
+  const legacy = await makeStack({
     handler: basicHandler({
       '/jobs/translate': (req, res) => sendJson(res, 404, { ok: false, error: 'not_found' }),
     }),
   })
-  t.after(() => 旧版.close())
-  await assert.rejects(旧版.api.translateJobs.submit(['a'], { target: 'en' }), (e) => e.code === 'not_implemented' && /版本较旧/.test(e.hint))
+  t.after(() => legacy.close())
+  await assert.rejects(legacy.api.translateJobs.submit(['a'], { target: 'en' }), (e) => e.code === 'not_implemented' && /版本较旧/.test(e.hint))
 
   const stack = await makeStack({
     handler: basicHandler({
@@ -814,15 +814,15 @@ test('translateJobs：旧版服务 404 抛 not_supported；未完成取结果回
 
   await assert.rejects(stack.api.translateJobs.submit(['a'], { target: 'en' }), (e) => e.code === 'upstream_error')
 
-  const 未完 = await stack.api.translateJobs.result('j9')
-  assert.equal(未完.ok, false)
-  assert.equal(未完.code, 'not_ready')
-  assert.equal(未完.state, 'not_done')
+  const unfinished = await stack.api.translateJobs.result('j9')
+  assert.equal(unfinished.ok, false)
+  assert.equal(unfinished.code, 'not_ready')
+  assert.equal(unfinished.state, 'not_done')
 
-  const 已结束 = await stack.api.translateJobs.cancel('j9')
-  assert.equal(已结束.ok, true)
-  assert.equal(已结束.state, 'canceled')
-  assert.equal(已结束.cancelRequested, false)
+  const ended = await stack.api.translateJobs.cancel('j9')
+  assert.equal(ended.ok, true)
+  assert.equal(ended.state, 'canceled')
+  assert.equal(ended.cancelRequested, false)
 })
 
 test('voices：直接映射 /voices，30 秒内不重复请求', async (t) => {
@@ -836,15 +836,15 @@ test('voices：直接映射 /voices，30 秒内不重复请求', async (t) => {
   assert.equal(first.directory, 'E:\\LocalAIService\\voices')
   assert.equal(Object.keys(first).includes('directory'), false)
 
-  const 前 = stack.mock.requests.filter((r) => r.path === '/voices').length
+  const front = stack.mock.requests.filter((r) => r.path === '/voices').length
   const second = await stack.api.voices()
   assert.deepEqual(second, first)
-  assert.equal(stack.mock.requests.filter((r) => r.path === '/voices').length, 前)
+  assert.equal(stack.mock.requests.filter((r) => r.path === '/voices').length, front)
 
   // force 跳过缓存，拿最新目录。
-  const 强制 = await stack.api.voices({ force: true })
-  assert.equal(强制.directory, 'E:\\LocalAIService\\voices')
-  assert.equal(stack.mock.requests.filter((r) => r.path === '/voices').length, 前 + 1)
+  const force = await stack.api.voices({ force: true })
+  assert.equal(force.directory, 'E:\\LocalAIService\\voices')
+  assert.equal(stack.mock.requests.filter((r) => r.path === '/voices').length, front + 1)
 })
 
 test('config：get 脱敏；set 白名单、保存、警告、token 原样打码保留', async (t) => {
@@ -878,7 +878,7 @@ test('config：P2 朗读/语音字段可写，非法值给警告且不写', asyn
   const stack = await makeStack()
   t.after(() => stack.close())
 
-  const 好 = await stack.api.config.set({
+  const ok = await stack.api.config.set({
     ttsSpeed: 1.25,
     readMaxChars: 3000,
     readConcurrency: 3,
@@ -888,8 +888,8 @@ test('config：P2 朗读/语音字段可写，非法值给警告且不写', asyn
     rememberVoiceChoice: false,
     asrLanguage: 'zh',
   })
-  assert.equal(好.ok, true)
-  assert.deepEqual(好.applied.sort(), [
+  assert.equal(ok.ok, true)
+  assert.deepEqual(ok.applied.sort(), [
     'asrLanguage', 'autoRead', 'readConcurrency', 'readMaxChars', 'readSkipCode',
     'recordMime', 'rememberVoiceChoice', 'ttsSpeed',
   ])
@@ -902,16 +902,16 @@ test('config：P2 朗读/语音字段可写，非法值给警告且不写', asyn
   assert.equal(stack.store.current.rememberVoiceChoice, false)
   assert.equal(stack.store.current.asrLanguage, 'zh')
 
-  const 坏 = await stack.api.config.set({
+  const bad = await stack.api.config.set({
     ttsSpeed: 3,
     readMaxChars: 10,
     readConcurrency: 9,
     recordMime: 'mp3',
     asrLanguage: 'ko',
   })
-  assert.equal(坏.ok, true)
-  assert.deepEqual(坏.applied, [])
-  assert.equal(坏.warnings.length, 5)
+  assert.equal(bad.ok, true)
+  assert.deepEqual(bad.applied, [])
+  assert.equal(bad.warnings.length, 5)
   assert.equal(stack.store.current.ttsSpeed, 1.25)
   assert.equal(stack.store.current.readConcurrency, 3)
 })
@@ -922,46 +922,46 @@ test('config：后台也自动朗读可写；默认开，旧配置缺字段也�
 
   assert.equal(stack.api.config.get().autoReadInBackground, true)
 
-  const 关 = await stack.api.config.set({ autoReadInBackground: false })
-  assert.equal(关.ok, true)
-  assert.deepEqual(关.applied, ['autoReadInBackground'])
+  const off = await stack.api.config.set({ autoReadInBackground: false })
+  assert.equal(off.ok, true)
+  assert.deepEqual(off.applied, ['autoReadInBackground'])
   assert.equal(stack.store.current.autoReadInBackground, false)
   assert.equal(stack.api.config.get().autoReadInBackground, false)
 
-  const 开 = await stack.api.config.set({ autoReadInBackground: true })
-  assert.deepEqual(开.applied, ['autoReadInBackground'])
+  const on = await stack.api.config.set({ autoReadInBackground: true })
+  assert.deepEqual(on.applied, ['autoReadInBackground'])
   assert.equal(stack.store.current.autoReadInBackground, true)
 
   // 旧文件里没有这个字段：规范化后补成开。
-  const 旧 = await makeStack({ config: { autoReadInBackground: undefined } })
-  t.after(() => 旧.close())
-  assert.equal(旧.api.config.get().autoReadInBackground, true)
+  const prev = await makeStack({ config: { autoReadInBackground: undefined } })
+  t.after(() => prev.close())
+  assert.equal(prev.api.config.get().autoReadInBackground, true)
 })
 
 test('config：输入设备可写、空串表示系统默认；非法值只警告不写', async (t) => {
   const stack = await makeStack()
   t.after(() => stack.close())
 
-  const 好 = await stack.api.config.set({ recordDeviceId: '  mic-abc  ' })
-  assert.equal(好.ok, true)
-  assert.deepEqual(好.applied, ['recordDeviceId'])
+  const ok = await stack.api.config.set({ recordDeviceId: '  mic-abc  ' })
+  assert.equal(ok.ok, true)
+  assert.deepEqual(ok.applied, ['recordDeviceId'])
   assert.equal(stack.store.current.recordDeviceId, 'mic-abc')
   assert.equal(stack.api.config.get().recordDeviceId, 'mic-abc')
 
-  const 空 = await stack.api.config.set({ recordDeviceId: '' })
-  assert.deepEqual(空.applied, ['recordDeviceId'])
+  const empty = await stack.api.config.set({ recordDeviceId: '' })
+  assert.deepEqual(empty.applied, ['recordDeviceId'])
   assert.equal(stack.store.current.recordDeviceId, '')
 
-  const 坏 = await stack.api.config.set({ recordDeviceId: 123 })
-  assert.deepEqual(坏.applied, [])
-  assert.equal(坏.warnings.length, 1)
-  assert.match(坏.warnings[0], /格式不正确/)
+  const bad = await stack.api.config.set({ recordDeviceId: 123 })
+  assert.deepEqual(bad.applied, [])
+  assert.equal(bad.warnings.length, 1)
+  assert.match(bad.warnings[0], /格式不正确/)
   assert.equal(stack.store.current.recordDeviceId, '')
 
-  const 长 = await stack.api.config.set({ recordDeviceId: 'x'.repeat(201) })
-  assert.deepEqual(长.applied, [])
-  assert.equal(长.warnings.length, 1)
-  assert.match(长.warnings[0], /200 字/)
+  const length = await stack.api.config.set({ recordDeviceId: 'x'.repeat(201) })
+  assert.deepEqual(length.applied, [])
+  assert.equal(length.warnings.length, 1)
+  assert.match(length.warnings[0], /200 字/)
   assert.equal(stack.store.current.recordDeviceId, '')
 })
 
@@ -969,36 +969,36 @@ test('config：按会话自动朗读可写、规范化；非法值只警告不�
   const stack = await makeStack()
   t.after(() => stack.close())
 
-  const 一 = await stack.api.config.set({
+  const one = await stack.api.config.set({
     autoReadSessions: { 'session-a': true, 'session-b': 'false', 'bad-key': true },
   })
-  assert.equal(一.ok, true)
-  assert.deepEqual(一.applied, ['autoReadSessions'])
-  assert.equal(一.warnings.length, 1)
-  assert.match(一.warnings[0], /1 条无法识别/)
+  assert.equal(one.ok, true)
+  assert.deepEqual(one.applied, ['autoReadSessions'])
+  assert.equal(one.warnings.length, 1)
+  assert.match(one.warnings[0], /1 条无法识别/)
   assert.deepEqual(stack.store.current.autoReadSessions, { 'session-a': true, 'session-b': false })
   assert.equal(stack.store.current.autoRead, false) // 全局默认不受影响
   assert.deepEqual(stack.api.config.get().autoReadSessions, { 'session-a': true, 'session-b': false })
 
-  const 二 = await stack.api.config.set({ autoReadSessions: { 'session-a': false } })
-  assert.deepEqual(二.applied, ['autoReadSessions'])
+  const two = await stack.api.config.set({ autoReadSessions: { 'session-a': false } })
+  assert.deepEqual(two.applied, ['autoReadSessions'])
   assert.deepEqual(stack.store.current.autoReadSessions, { 'session-a': false })
 
   // 不是普通对象：整项忽略，保留原有设置，只给提示。
-  const 坏 = await stack.api.config.set({ autoReadSessions: ['session-a'] })
-  assert.deepEqual(坏.applied, [])
-  assert.equal(坏.warnings.length, 1)
+  const bad = await stack.api.config.set({ autoReadSessions: ['session-a'] })
+  assert.deepEqual(bad.applied, [])
+  assert.equal(bad.warnings.length, 1)
   assert.deepEqual(stack.store.current.autoReadSessions, { 'session-a': false })
 
   // 超过 200 条：接受保存，但只保留前 200 条并提示。
-  const 超 = {}
-  for (let i = 0; i < 205; i += 1) 超[`session-${i}`] = true
-  const 三 = await stack.api.config.set({ autoReadSessions: 超 })
-  assert.equal(三.ok, true)
-  assert.deepEqual(三.applied, ['autoReadSessions'])
+  const exceed = {}
+  for (let i = 0; i < 205; i += 1) exceed[`session-${i}`] = true
+  const three = await stack.api.config.set({ autoReadSessions: exceed })
+  assert.equal(three.ok, true)
+  assert.deepEqual(three.applied, ['autoReadSessions'])
   assert.equal(Object.keys(stack.store.current.autoReadSessions).length, 200)
-  assert.equal(三.warnings.length, 1)
-  assert.match(三.warnings[0], /200 条/)
+  assert.equal(three.warnings.length, 1)
+  assert.match(three.warnings[0], /200 条/)
 })
 
 test('ensureReady：tts 通过；preload 只对 tts 生效；未知能力 / 缺模型返回结构化错误', async (t) => {
@@ -1030,9 +1030,9 @@ test('ensureReady：tts 通过；preload 只对 tts 生效；未知能力 / 缺�
   assert.equal(unknown.ok, false)
   assert.equal(unknown.code, 'upstream_error')
 
-  const 缺模型 = structuredClone(CAPABILITIES_BODY)
-  缺模型.capabilities.vision.ready = false
-  const stack2 = await makeStack({ handler: basicHandler({ '/capabilities': (req, res) => sendJson(res, 200, 缺模型) }) })
+  const missingModel = structuredClone(CAPABILITIES_BODY)
+  missingModel.capabilities.vision.ready = false
+  const stack2 = await makeStack({ handler: basicHandler({ '/capabilities': (req, res) => sendJson(res, 200, missingModel) }) })
   t.after(() => stack2.close())
   const missing = await stack2.api.ensureReady('vision')
   assert.equal(missing.ok, false)
@@ -1042,12 +1042,12 @@ test('ensureReady：tts 通过；preload 只对 tts 生效；未知能力 / 缺�
 })
 
 test('错误映射：507 → vram_exhausted；503(ready=false) → model_missing；400 → bad_request；504 → timeout', async (t) => {
-  const 状态 = { code: 507 }
+  const status = { code: 507 }
   const stack = await makeStack({
     handler: basicHandler({
       '/tts': (req, res) => {
-        if (状态.code === 507) return sendJson(res, 507, { ok: false, error: 'insufficient_vram', need_mb: 6912, free_mb: 6000 })
-        if (状态.code === 504) return sendJson(res, 504, { ok: false, error: 'job_timeout' })
+        if (status.code === 507) return sendJson(res, 507, { ok: false, error: 'insufficient_vram', need_mb: 6912, free_mb: 6000 })
+        if (status.code === 504) return sendJson(res, 504, { ok: false, error: 'job_timeout' })
         return sendJson(res, 400, { ok: false, error: 'invalid_text', detail: '文本不合法' })
       },
     }),
@@ -1055,14 +1055,14 @@ test('错误映射：507 → vram_exhausted；503(ready=false) → model_missing
   t.after(() => stack.close())
 
   await assert.rejects(stack.api.tts('hi'), (e) => e.code === 'vram_exhausted' && /显存/.test(e.hint))
-  状态.code = 400
+  status.code = 400
   await assert.rejects(stack.api.tts('hi'), (e) => e.code === 'bad_request')
-  状态.code = 504
+  status.code = 504
   await assert.rejects(stack.api.tts('hi'), (e) => e.code === 'timeout')
 
-  const 缺模型 = structuredClone(CAPABILITIES_BODY)
-  缺模型.capabilities.tts.ready = false
-  const stack2 = await makeStack({ handler: basicHandler({ '/capabilities': (req, res) => sendJson(res, 200, 缺模型) }) })
+  const missingModel = structuredClone(CAPABILITIES_BODY)
+  missingModel.capabilities.tts.ready = false
+  const stack2 = await makeStack({ handler: basicHandler({ '/capabilities': (req, res) => sendJson(res, 200, missingModel) }) })
   t.after(() => stack2.close())
   await assert.rejects(stack2.api.tts('hi'), (e) => e.code === 'model_missing'
     && /模型/.test(e.hint)
@@ -1074,11 +1074,11 @@ test('错误映射：507 → vram_exhausted；503(ready=false) → model_missing
 test('宿主装配：provide fish.service、注册 9 个工具与 >5 条路由，stop 可卸载', async (t) => {
   const mock = await startMock(basicHandler())
   const temp = (await import('./helpers.js')).makeTempDir()
-  const 旧Home = process.env.DSH_HOME
+  const prevHome = process.env.DSH_HOME
   process.env.DSH_HOME = temp.dir
   t.after(async () => {
-    if (旧Home === undefined) delete process.env.DSH_HOME
-    else process.env.DSH_HOME = 旧Home
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
     await mock.close()
     temp.cleanup()
   })

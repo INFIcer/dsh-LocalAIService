@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 
-const 真实状态 = {
+const realStatus = {
   ok: true,
   plugin: { name: 'dsh-fish-service', version: '0.6.0' },
   config: {
@@ -62,33 +62,33 @@ const 真实状态 = {
 }
 
 /** 极简 React：useState 真的会触发重渲染，useEffect 在每次提交后执行一次。 */
-function 造假React() {
-  const 单元 = new WeakMap()
-  const 副作用 = new Map()
-  const 栈 = []
-  let 脏 = false
+function fakeReact() {
+  const cell = new WeakMap()
+  const sideEffect = new Map()
+  const stack = []
+  let dirty = false
 
-  function 取帧(fn) {
-    let 记 = 单元.get(fn)
-    if (!记) {
-      记 = { cells: [], idx: 0, 上次钩子数: 0 }
-      单元.set(fn, 记)
+  function fetchFrame(fn) {
+    let remember = cell.get(fn)
+    if (!remember) {
+      remember = { cells: [], idx: 0, lastTimeHookCount: 0 }
+      cell.set(fn, remember)
     }
-    记.idx = 0
-    记.本次钩子数 = 0
-    return 记
+    remember.idx = 0
+    remember.thisHookCount = 0
+    return remember
   }
 
-  function 帧() {
-    if (栈.length === 0) throw new Error('hook 不在组件里')
-    return 栈[栈.length - 1]
+  function frame() {
+    if (stack.length === 0) throw new Error('hook 不在组件里')
+    return stack[stack.length - 1]
   }
 
   /** 取下一个 hook 槽位；顺带模拟 React #310：本次渲染的 hook 不能比上次多。 */
-  function 取格() {
-    const f = 帧()
+  function fetchCell() {
+    const f = frame()
     const i = f.idx++
-    if (!f.首次 && i >= f.上次钩子数) {
+    if (!f.firstRun && i >= f.lastTimeHookCount) {
       throw new Error(`React #310：组件渲染的钩子比上次多（第 ${i + 1} 个）`)
     }
     return { f, i }
@@ -100,94 +100,94 @@ function 造假React() {
       type,
       props: { ...(props || {}), children: children.length <= 1 ? children[0] : children },
     }),
-    useState: (初值) => {
-      const { f, i } = 取格()
-      if (!(i in f.cells)) f.cells[i] = typeof 初值 === 'function' ? 初值() : 初值
-      const 设 = (值) => {
-        const 下个 = typeof 值 === 'function' ? 值(f.cells[i]) : 值
-        if (Object.is(下个, f.cells[i])) return
-        f.cells[i] = 下个
-        脏 = true
+    useState: (initialValue) => {
+      const { f, i } = fetchCell()
+      if (!(i in f.cells)) f.cells[i] = typeof initialValue === 'function' ? initialValue() : initialValue
+      const setValue = (value) => {
+        const nextOne = typeof value === 'function' ? value(f.cells[i]) : value
+        if (Object.is(nextOne, f.cells[i])) return
+        f.cells[i] = nextOne
+        dirty = true
       }
-      return [f.cells[i], 设]
+      return [f.cells[i], setValue]
     },
-    useRef: (初值) => {
-      const { f, i } = 取格()
-      if (!(i in f.cells)) f.cells[i] = { current: 初值 }
+    useRef: (initialValue) => {
+      const { f, i } = fetchCell()
+      if (!(i in f.cells)) f.cells[i] = { current: initialValue }
       return f.cells[i]
     },
     useCallback: (fn) => fn,
     useMemo: (fn) => fn(),
     useEffect: (cb) => {
-      const { f, i } = 取格()
-      const 键 = f.fn
-      let 表 = 副作用.get(键)
-      if (!表) {
-        表 = new Map()
-        副作用.set(键, 表)
+      const { f, i } = fetchCell()
+      const key = f.fn
+      let table = sideEffect.get(key)
+      if (!table) {
+        table = new Map()
+        sideEffect.set(key, table)
       }
-      表.set(i, cb)
+      table.set(i, cb)
     },
   }
 
-  function 渲染组件(fn, props) {
-    const 记 = 取帧(fn)
-    记.fn = fn
-    记.首次 = 记.上次钩子数 === 0 && !记.已渲染过
-    栈.push(记)
+  function renderComponent(fn, props) {
+    const remember = fetchFrame(fn)
+    remember.fn = fn
+    remember.firstRun = remember.lastTimeHookCount === 0 && !remember.renderedBefore
+    stack.push(remember)
     try {
       return fn(props)
     } finally {
-      记.已渲染过 = true
-      记.上次钩子数 = Math.max(记.上次钩子数, 记.idx)
-      栈.pop()
+      remember.renderedBefore = true
+      remember.lastTimeHookCount = Math.max(remember.lastTimeHookCount, remember.idx)
+      stack.pop()
     }
   }
 
-  function 展开(节点, 文本) {
-    if (节点 == null || 节点 === false) return
-    if (typeof 节点 === 'string' || typeof 节点 === 'number') {
-      文本.push(String(节点))
+  function expand(node, text) {
+    if (node == null || node === false) return
+    if (typeof node === 'string' || typeof node === 'number') {
+      text.push(String(node))
       return
     }
-    if (Array.isArray(节点)) {
-      for (const 子 of 节点) 展开(子, 文本)
+    if (Array.isArray(node)) {
+      for (const child of node) expand(child, text)
       return
     }
-    const { type, props } = 节点
+    const { type, props } = node
     if (typeof type === 'function') {
-      展开(渲染组件(type, props), 文本)
+      expand(renderComponent(type, props), text)
       return
     }
-    展开(props?.children, 文本)
+    expand(props?.children, text)
   }
 
-  function 提交(根) {
-    脏 = false
-    const 文本 = []
-    展开(根, 文本)
-    return 文本.join(' ')
+  function submit(root) {
+    dirty = false
+    const text = []
+    expand(root, text)
+    return text.join(' ')
   }
 
-  function 执行副作用() {
-    for (const 表 of 副作用.values()) {
-      for (const cb of 表.values()) {
-        const 结果 = cb()
-        if (结果 && typeof 结果.then === 'function') 结果.catch(() => {})
+  function runSideEffect() {
+    for (const table of sideEffect.values()) {
+      for (const cb of table.values()) {
+        const result = cb()
+        if (result && typeof result.then === 'function') result.catch(() => {})
       }
     }
-    副作用.clear()
+    sideEffect.clear()
   }
 
-  return { React, 提交, 执行副作用, 是脏: () => 脏 }
+  return { React, submit, runSideEffect, dirty: () => dirty }
 }
 
-function 载入(状态 = 真实状态) {
-  const 源码 = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
-  let 工厂 = null
-  const 假 = 造假React()
-  const 沙箱 = {
-    window: { __ModuleLoader__: { load: (定义) => { 工厂 = 定义.factory } } },
+function load(status = realStatus) {
+  const sourceCode = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+  let factory = null
+  const fake = fakeReact()
+  const sandbox = {
+    window: { __ModuleLoader__: { load: (define) => { factory = define.factory } } },
     document: undefined,
     console,
     setTimeout,
@@ -196,48 +196,48 @@ function 载入(状态 = 真实状态) {
     setInterval: () => 0,
     clearInterval: () => {},
     URL,
-    fetch: async (地址) => ({
+    fetch: async (address) => ({
       ok: true,
       json: async () => {
-        if (String(地址).includes('/state')) return 状态
-        if (String(地址).includes('/cache/stats')) return { ok: true, files: 0, bytes: 0 }
-        if (String(地址).includes('/logs')) return { ok: true, lines: [] }
+        if (String(address).includes('/state')) return status
+        if (String(address).includes('/cache/stats')) return { ok: true, files: 0, bytes: 0 }
+        if (String(address).includes('/logs')) return { ok: true, lines: [] }
         return { ok: true }
       },
     }),
   }
-  vm.createContext(沙箱)
-  vm.runInContext(源码, 沙箱)
-  assert.equal(typeof 工厂, 'function')
-  const 导出 = 工厂(() => 假.React)
-  return { 导出, 假 }
+  vm.createContext(sandbox)
+  vm.runInContext(sourceCode, sandbox)
+  assert.equal(typeof factory, 'function')
+  const exported = factory(() => fake.React)
+  return { exported, fake }
 }
 
 test('设置页 Section 用真实 /state 能渲染出内容', async () => {
-  const { 导出, 假 } = 载入()
-  assert.equal(typeof 导出.__testing.Section, 'function')
+  const { exported, fake } = load()
+  assert.equal(typeof exported.__testing.Section, 'function')
 
-  let 根 = 假.提交(假.React.createElement(导出.__testing.Section, {}))
-  assert.match(根, /本地 AI/)
+  let root = fake.submit(fake.React.createElement(exported.__testing.Section, {}))
+  assert.match(root, /本地 AI/)
 
   // 跑一次 effect（会去拉 /state），再提交，模拟 DSH 里的真实流程。
-  for (let 轮 = 0; 轮 < 8 && !根.includes('能力'); 轮 += 1) {
+  for (let round = 0; round < 8 && !root.includes('能力'); round += 1) {
     await new Promise((r) => setTimeout(r, 0))
-    假.执行副作用()
-    根 = 假.提交(假.React.createElement(导出.__testing.Section, {}))
+    fake.runSideEffect()
+    root = fake.submit(fake.React.createElement(exported.__testing.Section, {}))
   }
 
-  assert.match(根, /能力/, `渲染结果应包含能力表，实际：${根.slice(0, 300)}`)
-  assert.match(根, /8 \/ 8 项可用/)
+  assert.match(root, /能力/, `渲染结果应包含能力表，实际：${root.slice(0, 300)}`)
+  assert.match(root, /8 \/ 8 项可用/)
 })
 
 test('设置页 Section 在服务离线（state ok:false 或 null）时不崩', async () => {
-  const { 导出, 假 } = 载入({ ok: false })
-  for (let 轮 = 0; 轮 < 6; 轮 += 1) {
+  const { exported, fake } = load({ ok: false })
+  for (let round = 0; round < 6; round += 1) {
     await new Promise((r) => setTimeout(r, 0))
-    假.执行副作用()
-    假.提交(假.React.createElement(导出.__testing.Section, {}))
+    fake.runSideEffect()
+    fake.submit(fake.React.createElement(exported.__testing.Section, {}))
   }
-  const 文本 = 假.提交(假.React.createElement(导出.__testing.Section, {}))
-  assert.match(文本, /本地 AI/)
+  const text = fake.submit(fake.React.createElement(exported.__testing.Section, {}))
+  assert.match(text, /本地 AI/)
 })

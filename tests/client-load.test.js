@@ -7,14 +7,14 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 
-function 装React() {
+function installReact() {
   return {
-    createElement: (...参数) => ({ 参数 }),
-    useState: (初值) => [typeof 初值 === 'function' ? 初值() : 初值, () => {}],
+    createElement: (...param) => ({ param }),
+    useState: (initialValue) => [typeof initialValue === 'function' ? initialValue() : initialValue, () => {}],
     useEffect: () => {},
-    useRef: (值) => ({ current: 值 }),
-    useCallback: (函数) => 函数,
-    useMemo: (工厂函数) => 工厂函数(),
+    useRef: (value) => ({ current: value }),
+    useCallback: (fn) => fn,
+    useMemo: (factoryFn) => factoryFn(),
     useSyncExternalStore: () => null,
     Fragment: 'Fragment',
     version: '18.2.0',
@@ -22,17 +22,17 @@ function 装React() {
 }
 
 test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 本地识图 / 面板 / 自动朗读', async () => {
-  const 源码 = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
-  let 工厂 = null
+  const sourceCode = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+  let factory = null
 
-  const 窗口 = {
+  const window = {
     __ModuleLoader__: {
-      load: (定义) => { 工厂 = 定义.factory },
+      load: (define) => { factory = define.factory },
     },
   }
 
-  const 沙箱 = {
-    window: 窗口,
+  const sandbox = {
+    window: window,
     document: undefined,
     console,
     setTimeout,
@@ -42,51 +42,51 @@ test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 本地识�
     URL,
     fetch: async () => ({ json: async () => null }),
   }
-  vm.createContext(沙箱)
-  vm.runInContext(源码, 沙箱)
-  assert.equal(typeof 工厂, 'function', 'window.__ModuleLoader__.load 应该拿到 factory')
+  vm.createContext(sandbox)
+  vm.runInContext(sourceCode, sandbox)
+  assert.equal(typeof factory, 'function', 'window.__ModuleLoader__.load 应该拿到 factory')
 
-  const 导出 = 工厂((名字) => {
-    if (名字 === 'react') return 装React()
-    throw new Error(`未预期的 require：${名字}`)
+  const exported = factory((displayName) => {
+    if (displayName === 'react') return installReact()
+    throw new Error(`未预期的 require：${displayName}`)
   })
-  assert.equal(typeof 导出.apply, 'function')
-  assert.deepEqual([...导出.inject], ['slots', 'uiConversation', 'sidebarRightTabs'])
+  assert.equal(typeof exported.apply, 'function')
+  assert.deepEqual([...exported.inject], ['slots', 'uiConversation', 'sidebarRightTabs'])
 
-  const 注册们 = []
-  const 交互们 = []
-  const 右栏定义 = []
-  let 释放 = 0
-  const 服务 = {
-    inject: (_槽位, 回调) => { 回调(); return () => { 释放 += 1 } },
-    register: (配置, 组件) => {
-      注册们.push({ 配置, 组件 })
-      return () => { 释放 += 1 }
+  const registers = []
+  const interactions = []
+  const rightPanelDefine = []
+  let release = 0
+  const service = {
+    inject: (_slot, callback) => { callback(); return () => { release += 1 } },
+    register: (config, component) => {
+      registers.push({ config, component })
+      return () => { release += 1 }
     },
   }
-  const 右栏 = {
-    register: (定义) => {
-      右栏定义.push(定义)
-      return () => { 释放 += 1 }
+  const rightPanel = {
+    register: (define) => {
+      rightPanelDefine.push(define)
+      return () => { release += 1 }
     },
   }
   const ui = {
     interactions: {
-      register: (定义, 标签) => {
-        交互们.push({ 定义, 标签 })
-        return () => { 释放 += 1 }
+      register: (define, tag) => {
+        interactions.push({ define, tag })
+        return () => { release += 1 }
       },
     },
   }
-  let 卸载 = null
+  let dispose = null
   const ctx = {
-    effect: (安装) => { 卸载 = 安装() },
-    get: (名字) =>
-      名字 === 'slots' ? 服务 : 名字 === 'uiConversation' ? ui : 名字 === 'sidebarRightTabs' ? 右栏 : undefined,
+    effect: (install) => { dispose = install() },
+    get: (displayName) =>
+      displayName === 'slots' ? service : displayName === 'uiConversation' ? ui : displayName === 'sidebarRightTabs' ? rightPanel : undefined,
   }
-  导出.apply(ctx)
+  exported.apply(ctx)
 
-  assert.deepEqual(注册们.map((x) => x.配置.name), [
+  assert.deepEqual(registers.map((x) => x.config.name), [
     'settings.section',
     'conversation.chat.assistant-actions',
     'conversation.input.right',
@@ -97,7 +97,7 @@ test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 本地识�
     'conversation.chat.text-interaction',
     'sidebar.right.pane.tab',
   ])
-  assert.deepEqual(注册们.map((x) => x.配置.id), [
+  assert.deepEqual(registers.map((x) => x.config.id), [
     'fish-service',
     'fish-read',
     'fish-mic',
@@ -109,216 +109,216 @@ test('client.js 加载：apply 注册设置页 / 朗读 / 麦克风 / 本地识�
     undefined,
   ])
   // 本地识图是输入框旁的独立按钮，和麦克风同一排；官方附件栏不再被顶替。
-  assert.equal(注册们.find((x) => x.配置.id === 'fish-vision').配置.order, 31)
-  assert.equal(注册们.find((x) => x.配置.id === 'fish-mic').配置.order, 32)
+  assert.equal(registers.find((x) => x.config.id === 'fish-vision').config.order, 31)
+  assert.equal(registers.find((x) => x.config.id === 'fish-mic').config.order, 32)
   // 状态胶囊是 list 槽：靠 id 区分条目，不需要 priority。
-  const 状态胶囊 = 注册们.find((x) => x.配置.id === 'fish-metrics')
-  assert.equal(状态胶囊.配置.order, 40)
-  assert.equal(状态胶囊.配置.priority, undefined)
-  assert.equal(注册们.some((x) => x.配置.name === 'conversation.input.attachments'), false)
-  assert.equal(注册们.some((x) => x.配置.name === 'shell.bottom'), false)
-  assert.equal(注册们.at(-2).配置.key, 'fish-selection')
+  const statusCapsule = registers.find((x) => x.config.id === 'fish-metrics')
+  assert.equal(statusCapsule.config.order, 40)
+  assert.equal(statusCapsule.config.priority, undefined)
+  assert.equal(registers.some((x) => x.config.name === 'conversation.input.attachments'), false)
+  assert.equal(registers.some((x) => x.config.name === 'shell.bottom'), false)
+  assert.equal(registers.at(-2).config.key, 'fish-selection')
   // 右栏面板是 keyed 槽，key 必须是 tab 类型的 id。
-  assert.equal(注册们.at(-1).配置.key, 'dsh-fish-service/translate')
+  assert.equal(registers.at(-1).config.key, 'dsh-fish-service/translate')
   // 面板靠 inject 拿当前会话 id，草稿才能按会话隔离。
-  assert.equal(typeof 注册们.at(-1).配置.inject, 'function')
-  assert.equal(注册们.at(-1).配置.inject('session-1').sessionId, 'session-1')
+  assert.equal(typeof registers.at(-1).config.inject, 'function')
+  assert.equal(registers.at(-1).config.inject('session-1').sessionId, 'session-1')
 
   // 右栏卡片：只注册一个类型，id/kind 都要唯一，guide 里给出一张入口卡。
-  assert.equal(右栏定义.length, 1)
-  assert.equal(右栏定义[0].id, 'dsh-fish-service/translate')
-  assert.equal(右栏定义[0].kind, 'fish-translate')
-  assert.equal(右栏定义[0].keepMounted, true)
-  assert.equal(右栏定义[0].title(), '双语翻译')
-  assert.equal(右栏定义[0].guide.length, 1)
+  assert.equal(rightPanelDefine.length, 1)
+  assert.equal(rightPanelDefine[0].id, 'dsh-fish-service/translate')
+  assert.equal(rightPanelDefine[0].kind, 'fish-translate')
+  assert.equal(rightPanelDefine[0].keepMounted, true)
+  assert.equal(rightPanelDefine[0].title(), '双语翻译')
+  assert.equal(rightPanelDefine[0].guide.length, 1)
   assert.deepEqual(
-    { id: 右栏定义[0].guide[0].id, order: 右栏定义[0].guide[0].order },
+    { id: rightPanelDefine[0].guide[0].id, order: rightPanelDefine[0].guide[0].order },
     { id: 'translate', order: 35 },
   )
-  assert.equal(右栏定义[0].guide[0].title(), '双语翻译')
-  assert.match(右栏定义[0].guide[0].description(), /对着翻/)
+  assert.equal(rightPanelDefine[0].guide[0].title(), '双语翻译')
+  assert.match(rightPanelDefine[0].guide[0].description(), /对着翻/)
 
   // 框选交互：只对 selection + 有文本的请求 open；其它情况不抢。
-  assert.equal(交互们.length, 1)
-  assert.equal(交互们[0].定义.id, 'fish-selection')
-  let 打开 = 0
-  const 请求 = (over = {}) => ({ trigger: 'selection', readText: () => '选中文字', open: () => { 打开 += 1 }, ...over })
-  交互们[0].定义.onInteraction(请求())
-  assert.equal(打开, 1)
-  交互们[0].定义.onInteraction(请求({ trigger: 'context-menu' }))
-  交互们[0].定义.onInteraction(请求({ readText: () => null }))
-  交互们[0].定义.onInteraction(请求({ readText: () => '   ' }))
-  assert.equal(打开, 1)
+  assert.equal(interactions.length, 1)
+  assert.equal(interactions[0].define.id, 'fish-selection')
+  let open = 0
+  const request = (over = {}) => ({ trigger: 'selection', readText: () => '选中文字', open: () => { open += 1 }, ...over })
+  interactions[0].define.onInteraction(request())
+  assert.equal(open, 1)
+  interactions[0].define.onInteraction(request({ trigger: 'context-menu' }))
+  interactions[0].define.onInteraction(request({ readText: () => null }))
+  interactions[0].define.onInteraction(request({ readText: () => '   ' }))
+  assert.equal(open, 1)
 
-  for (const 项 of 注册们) assert.equal(typeof 项.组件, 'function')
+  for (const item of registers) assert.equal(typeof item.component, 'function')
 
   // 再拿最小 props 各渲染一次：能抓出「引用了不存在的变量 / 拼错字段」这类运行时错误。
-  const 组件们 = Object.fromEntries(注册们.map((x) => [x.配置.id, x.组件]))
-  assert.doesNotThrow(() => 组件们['fish-service']())
-  assert.doesNotThrow(() => 组件们['fish-read']({ messageId: 'm1', useChat: () => '' }))
-  assert.doesNotThrow(() => 组件们['fish-mic']({ sessionId: 's1' }))
-  assert.doesNotThrow(() => 组件们['fish-voice']({ sessionId: 's1' }))
-  assert.doesNotThrow(() => 组件们['fish-auto-read']())
+  const components = Object.fromEntries(registers.map((x) => [x.config.id, x.component]))
+  assert.doesNotThrow(() => components['fish-service']())
+  assert.doesNotThrow(() => components['fish-read']({ messageId: 'm1', useChat: () => '' }))
+  assert.doesNotThrow(() => components['fish-mic']({ sessionId: 's1' }))
+  assert.doesNotThrow(() => components['fish-voice']({ sessionId: 's1' }))
+  assert.doesNotThrow(() => components['fish-auto-read']())
   // 状态胶囊：服务未加载时也能渲染「连接中」。
-  assert.doesNotThrow(() => 组件们['fish-metrics']())
+  assert.doesNotThrow(() => components['fish-metrics']())
   // 本地识图按钮：独立入口，不依赖草稿附件。
-  assert.doesNotThrow(() => 组件们['fish-vision']({ sessionId: 's1' }))
-  assert.doesNotThrow(() => 组件们['fish-vision']())
+  assert.doesNotThrow(() => components['fish-vision']({ sessionId: 's1' }))
+  assert.doesNotThrow(() => components['fish-vision']())
   // 面板空闲时不应该渲染任何东西。
-  assert.equal(组件们['fish-voice']({ sessionId: 's1' }), null)
+  assert.equal(components['fish-voice']({ sessionId: 's1' }), null)
   // 右栏翻译面板：没有会话 id 也要能渲染。
-  assert.doesNotThrow(() => 导出.__testing.翻译面板({}))
-  assert.doesNotThrow(() => 导出.__testing.翻译面板({ sessionId: 's1' }))
+  assert.doesNotThrow(() => exported.__testing.translationPanel({}))
+  assert.doesNotThrow(() => exported.__testing.translationPanel({ sessionId: 's1' }))
 
   // 上传前按 MIME 定扩展名：服务端只认这几种。
-  const { 识图扩展 } = 导出.__testing
-  assert.equal(识图扩展('image/png'), '.png')
-  assert.equal(识图扩展('image/jpeg'), '.jpg')
-  assert.equal(识图扩展('image/webp'), '.webp')
-  assert.equal(识图扩展('image/gif'), '.gif')
-  assert.equal(识图扩展('image/bmp'), '.bmp')
-  assert.equal(识图扩展(''), '.jpg')
-  assert.equal(识图扩展(undefined), '.jpg')
+  const { visionExt } = exported.__testing
+  assert.equal(visionExt('image/png'), '.png')
+  assert.equal(visionExt('image/jpeg'), '.jpg')
+  assert.equal(visionExt('image/webp'), '.webp')
+  assert.equal(visionExt('image/gif'), '.gif')
+  assert.equal(visionExt('image/bmp'), '.bmp')
+  assert.equal(visionExt(''), '.jpg')
+  assert.equal(visionExt(undefined), '.jpg')
 
   // ---- 发送前识图：纯函数（入口判断 / 描述拼装 / 待插入队列） ----
-  const 测试 = 导出.__testing
-  const 图 = (名, 类型 = '') => ({ name: 名, type: 类型, size: 10 })
+  const testingApi = exported.__testing
+  const image = (name, type = '') => ({ name: name, type: type, size: 10 })
 
   // 是图片文件：MIME 优先，扩展名兜底（大小写不敏感）。
-  assert.equal(测试.是图片文件(图('a.png', 'image/png')), true)
-  assert.equal(测试.是图片文件(图('a.JPG')), true)
-  assert.equal(测试.是图片文件(图('a.webp', '')), true)
-  assert.equal(测试.是图片文件(图('a.pdf', 'application/pdf')), false)
-  assert.equal(测试.是图片文件(图('a.pdf')), false)
-  assert.equal(测试.是图片文件(null), false)
+  assert.equal(testingApi.isImageFile(image('a.png', 'image/png')), true)
+  assert.equal(testingApi.isImageFile(image('a.JPG')), true)
+  assert.equal(testingApi.isImageFile(image('a.webp', '')), true)
+  assert.equal(testingApi.isImageFile(image('a.pdf', 'application/pdf')), false)
+  assert.equal(testingApi.isImageFile(image('a.pdf')), false)
+  assert.equal(testingApi.isImageFile(null), false)
 
   // 识图入口：开关关、服务离线给一句短提示（都不改图片）；正常返回空串。
-  assert.equal(测试.识图阻塞原因({ 载入: true, 在线: true, config: {} }), '')
-  assert.match(测试.识图阻塞原因({ 载入: true, 在线: true, config: { localDescribe: false } }), /已关闭/)
-  assert.match(测试.识图阻塞原因({ 载入: true, 在线: false, config: {} }), /未连接/)
+  assert.equal(testingApi.visionBlockReason({ load: true, online: true, config: {} }), '')
+  assert.match(testingApi.visionBlockReason({ load: true, online: true, config: { localDescribe: false } }), /已关闭/)
+  assert.match(testingApi.visionBlockReason({ load: true, online: false, config: {} }), /未连接/)
   // 偏好还没载入时先当作可用；真失败时页面自己会提示。
-  assert.equal(测试.识图阻塞原因({ 载入: false }), '')
-  assert.equal(测试.识图阻塞原因(null), '')
-  assert.equal(测试.本地识图开({ localDescribe: false }), false)
-  assert.equal(测试.本地识图开({}), true)
-  assert.equal(测试.本地识图开(null), true)
+  assert.equal(testingApi.visionBlockReason({ load: false }), '')
+  assert.equal(testingApi.visionBlockReason(null), '')
+  assert.equal(testingApi.localVisionOn({ localDescribe: false }), false)
+  assert.equal(testingApi.localVisionOn({}), true)
+  assert.equal(testingApi.localVisionOn(null), true)
 
   // 拼图片描述：文件名 + 详细描述，每张一段；空描述不插。
-  assert.equal(测试.拼图片描述('a.png', ' 一只猫\n坐在窗台 '), '［图片：a.png］\n一只猫\n坐在窗台\n')
-  assert.equal(测试.拼图片描述('', '文字'), '［图片：图片］\n文字\n')
-  assert.equal(测试.拼图片描述('a.png', '   '), '')
-  assert.equal(测试.拼图片描述('a.png', undefined), '')
+  assert.equal(testingApi.composeImageDesc('a.png', ' 一只猫\n坐在窗台 '), '［图片：a.png］\n一只猫\n坐在窗台\n')
+  assert.equal(testingApi.composeImageDesc('', '文字'), '［图片：图片］\n文字\n')
+  assert.equal(testingApi.composeImageDesc('a.png', '   '), '')
+  assert.equal(testingApi.composeImageDesc('a.png', undefined), '')
 
   // 待插入队列：按会话隔离，取出即删除，失败计入失败数。
-  assert.equal(测试.入队待插入({ sessionId: 's1', text: '甲' }), true)
-  assert.equal(测试.入队待插入({ sessionId: 's2', text: '乙' }), true)
-  assert.equal(测试.入队待插入({ sessionId: 's1', text: '' }), false)
-  assert.equal(测试.取待插入('s1').join(','), '甲')
-  assert.equal(测试.取待插入('s1').length, 0)
-  let 结果 = 测试.消费待插入('s2', (文本) => 文本 === '乙')
-  assert.equal(结果.成功, 1)
-  assert.equal(结果.失败, 0)
-  结果 = 测试.消费待插入('s2', () => false)
-  assert.equal(结果.成功, 0)
-  assert.equal(结果.失败, 0)
-  assert.equal(测试.入队待插入({ text: '无会话标记' }), true)
-  assert.equal(测试.取待插入('s3').join(','), '无会话标记')
-  assert.equal(测试.入队待插入({ sessionId: 's4', text: '插入失败' }), true)
-  结果 = 测试.消费待插入('s4', () => false)
-  assert.equal(结果.成功, 0)
-  assert.equal(结果.失败, 1)
+  assert.equal(testingApi.enqueuePendingInsert({ sessionId: 's1', text: '甲' }), true)
+  assert.equal(testingApi.enqueuePendingInsert({ sessionId: 's2', text: '乙' }), true)
+  assert.equal(testingApi.enqueuePendingInsert({ sessionId: 's1', text: '' }), false)
+  assert.equal(testingApi.fetchPendingInsert('s1').join(','), '甲')
+  assert.equal(testingApi.fetchPendingInsert('s1').length, 0)
+  let result = testingApi.consumePendingInsert('s2', (text) => text === '乙')
+  assert.equal(result.success, 1)
+  assert.equal(result.fail, 0)
+  result = testingApi.consumePendingInsert('s2', () => false)
+  assert.equal(result.success, 0)
+  assert.equal(result.fail, 0)
+  assert.equal(testingApi.enqueuePendingInsert({ text: '无会话标记' }), true)
+  assert.equal(testingApi.fetchPendingInsert('s3').join(','), '无会话标记')
+  assert.equal(testingApi.enqueuePendingInsert({ sessionId: 's4', text: '插入失败' }), true)
+  result = testingApi.consumePendingInsert('s4', () => false)
+  assert.equal(result.success, 0)
+  assert.equal(result.fail, 1)
 
   // 识图档位：和服务端同一套四档；id 大小写、中文名都收，认不出返回空串交给默认档。
-  assert.deepEqual([...测试.识图档位们].map((档) => 档.id), ['brief', 'standard', 'detailed', 'text'])
-  assert.deepEqual([...测试.识图档位选项].map((项) => 项.value), ['brief', 'standard', 'detailed', 'text'])
-  assert.equal(测试.规范识图档位('brief'), 'brief')
-  assert.equal(测试.规范识图档位(' Brief '), 'brief')
-  assert.equal(测试.规范识图档位('详细'), 'detailed')
-  assert.equal(测试.规范识图档位('只看文字'), 'text')
-  assert.equal(测试.规范识图档位('特写'), '')
-  assert.equal(测试.规范识图档位(null), '')
+  assert.deepEqual([...testingApi.visionPresets].map((preset) => preset.id), ['brief', 'standard', 'detailed', 'text'])
+  assert.deepEqual([...testingApi.visionPresetOption].map((item) => item.value), ['brief', 'standard', 'detailed', 'text'])
+  assert.equal(testingApi.normalizeVisionPreset('brief'), 'brief')
+  assert.equal(testingApi.normalizeVisionPreset(' Brief '), 'brief')
+  assert.equal(testingApi.normalizeVisionPreset('详细'), 'detailed')
+  assert.equal(testingApi.normalizeVisionPreset('只看文字'), 'text')
+  assert.equal(testingApi.normalizeVisionPreset('特写'), '')
+  assert.equal(testingApi.normalizeVisionPreset(null), '')
   // 表情包档已经挪到鱼讯插件，这里不再有。
-  assert.equal(测试.识图档位们.some((档) => 档.id === 'sticker'), false)
+  assert.equal(testingApi.visionPresets.some((preset) => preset.id === 'sticker'), false)
 
-  // ---- 界面注入开关：纯函数按中文名或配置键判断；旧配置缺字段按开 ----
-  const { 界面开关开, 界面开关键, 偏好 } = 测试
-  for (const 名 of ['语音识别', '本地识图', '性能监控', '自动朗读']) {
-    assert.equal(界面开关开({}, 名), true)
-    assert.equal(界面开关开(null, 名), true)
-    assert.equal(界面开关开({ [界面开关键[名]]: false }, 名), false)
-    assert.equal(界面开关开({ [界面开关键[名]]: 'false' }, 名), false)
-    assert.equal(界面开关开({ [界面开关键[名]]: 0 }, 名), false)
-    assert.equal(界面开关开({ [界面开关键[名]]: true }, 名), true)
+  // ---- 界面注入开关：纯函数按组件名或配置键判断；旧配置缺字段按开 ----
+  const { uiSwitchOn, uiSwitchKey, prefs } = testingApi
+  for (const name of ['speechRecognition', 'localVision', 'performanceMonitor', 'autoRead']) {
+    assert.equal(uiSwitchOn({}, name), true)
+    assert.equal(uiSwitchOn(null, name), true)
+    assert.equal(uiSwitchOn({ [uiSwitchKey[name]]: false }, name), false)
+    assert.equal(uiSwitchOn({ [uiSwitchKey[name]]: 'false' }, name), false)
+    assert.equal(uiSwitchOn({ [uiSwitchKey[name]]: 0 }, name), false)
+    assert.equal(uiSwitchOn({ [uiSwitchKey[name]]: true }, name), true)
   }
-  assert.equal(界面开关开({ uiMetrics: false }, 'uiMetrics'), false)
-  assert.equal(界面开关开({ uiMetrics: '乱写' }, 'uiMetrics'), true)
+  assert.equal(uiSwitchOn({ uiMetrics: false }, 'uiMetrics'), false)
+  assert.equal(uiSwitchOn({ uiMetrics: '乱写' }, 'uiMetrics'), true)
 
   // 关掉后对应注入组件返回 null（组件仍挂载，hooks 照常跑，才能即时停掉副作用）。
-  for (const [配置键, 组件ID] of [
+  for (const [configKey, componentID] of [
     ['uiVoiceInput', 'fish-mic'],
     ['uiVision', 'fish-vision'],
     ['uiMetrics', 'fish-metrics'],
     ['uiAutoRead', 'fish-auto-read'],
   ]) {
-    const 原配置 = 偏好.get().config
+    const origConfig = prefs.get().config
     try {
-      assert.notEqual(组件们[组件ID]({ sessionId: 's1' }), null)
-      偏好.set((旧) => ({ ...旧, config: { ...(旧.config || {}), [配置键]: false } }))
-      assert.equal(组件们[组件ID]({ sessionId: 's1' }), null)
+      assert.notEqual(components[componentID]({ sessionId: 's1' }), null)
+      prefs.set((prev) => ({ ...prev, config: { ...(prev.config || {}), [configKey]: false } }))
+      assert.equal(components[componentID]({ sessionId: 's1' }), null)
     } finally {
-      偏好.set((旧) => ({ ...旧, config: 原配置 }))
+      prefs.set((prev) => ({ ...prev, config: origConfig }))
     }
     // 恢复后重新可见。
-    assert.notEqual(组件们[组件ID]({ sessionId: 's1' }), null)
+    assert.notEqual(components[componentID]({ sessionId: 's1' }), null)
   }
 
   // 录音上限：到点自动停止时 stop() 收尾会略超 300 秒；按上限截断，不能整段丢弃。
-  const { 规整录音时长 } = 测试
-  const 正常 = 规整录音时长(299000)
-  assert.equal(正常.ok, true)
-  assert.equal(正常.durationMs, 299000)
-  assert.equal(正常.capped, false)
-  const 略超 = 规整录音时长(300150)
-  assert.equal(略超.ok, true, '自动停止时略超上限不能判失败')
-  assert.equal(略超.durationMs, 300000, '时长要按上限截断')
-  assert.equal(略超.capped, true)
-  assert.equal(规整录音时长(303000).ok, true)
-  assert.equal(规整录音时长(310000).ok, false)
+  const { clampRecordingDuration } = testingApi
+  const normal = clampRecordingDuration(299000)
+  assert.equal(normal.ok, true)
+  assert.equal(normal.durationMs, 299000)
+  assert.equal(normal.capped, false)
+  const slightlyOver = clampRecordingDuration(300150)
+  assert.equal(slightlyOver.ok, true, '自动停止时略超上限不能判失败')
+  assert.equal(slightlyOver.durationMs, 300000, '时长要按上限截断')
+  assert.equal(slightlyOver.capped, true)
+  assert.equal(clampRecordingDuration(303000).ok, true)
+  assert.equal(clampRecordingDuration(310000).ok, false)
 
   // 卸载：apply 交给 ctx.effect 的清理函数要反注册槽位/交互/右栏，可重复调用。
-  assert.equal(typeof 卸载, 'function')
-  assert.equal(释放, 0)
-  卸载()
-  assert.equal(释放, 11)
-  卸载()
-  assert.equal(释放, 11)
+  assert.equal(typeof dispose, 'function')
+  assert.equal(release, 0)
+  dispose()
+  assert.equal(release, 11)
+  dispose()
+  assert.equal(release, 11)
 
   // 两轮 apply（热重载）各自可卸载。
-  导出.apply(ctx)
-  assert.equal(注册们.length, 18)
-  卸载()
-  assert.equal(释放, 22)
+  exported.apply(ctx)
+  assert.equal(registers.length, 18)
+  dispose()
+  assert.equal(release, 22)
 })
 
 test('client.js：slots 还没就绪时会重试，而不是直接抛错', async () => {
-  const 源码 = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
-  let 工厂 = null
-  const 沙箱 = {
-    window: { __ModuleLoader__: { load: (定义) => { 工厂 = 定义.factory } } },
+  const sourceCode = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+  let factory = null
+  const sandbox = {
+    window: { __ModuleLoader__: { load: (define) => { factory = define.factory } } },
     document: undefined,
     console,
-    setTimeout: (函数) => { void 函数; return 0 },
+    setTimeout: (fn) => { void fn; return 0 },
     clearTimeout: () => {},
     setInterval: () => 0,
     clearInterval: () => {},
     URL,
     fetch: async () => ({ json: async () => null }),
   }
-  vm.createContext(沙箱)
-  vm.runInContext(源码, 沙箱)
-  const 导出 = 工厂(() => 装React())
-  let 取了 = 0
-  const ctx = { get: () => { 取了 += 1; return undefined } }
-  assert.doesNotThrow(() => 导出.apply(ctx))
-  assert.ok(取了 > 0, '应该尝试过 ctx.get("slots")')
+  vm.createContext(sandbox)
+  vm.runInContext(sourceCode, sandbox)
+  const exported = factory(() => installReact())
+  let taken = 0
+  const ctx = { get: () => { taken += 1; return undefined } }
+  assert.doesNotThrow(() => exported.apply(ctx))
+  assert.ok(taken > 0, '应该尝试过 ctx.get("slots")')
 })

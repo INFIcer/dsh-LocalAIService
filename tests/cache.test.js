@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { CacheStore } from '../lib/cache.js'
 import { makeTempDir, writeTempFile } from './helpers.js'
 
-function 造缓存(temp, opts = {}) {
+function makeCache(temp, opts = {}) {
   const cache = new CacheStore({ dir: join(temp.dir, 'cache'), ttlHours: 72, maxMb: 2048, ...opts })
   cache.init()
   return cache
@@ -15,7 +15,7 @@ function 造缓存(temp, opts = {}) {
 test('saveBuffer 写入 tts 子目录，返回绝对路径与正确字节', () => {
   const temp = makeTempDir()
   try {
-    const cache = 造缓存(temp)
+    const cache = makeCache(temp)
     const data = Buffer.from('RIFF....WAVE')
     const p = cache.saveBuffer('tts', data, { ext: '.wav', key: 'abc123', ts: 1000 })
     assert.ok(existsSync(p))
@@ -30,7 +30,7 @@ test('saveBuffer 写入 tts 子目录，返回绝对路径与正确字节', () =
 test('findByKey 只找同前缀；copyIn / makeJobDir 正常建目录', () => {
   const temp = makeTempDir()
   try {
-    const cache = 造缓存(temp)
+    const cache = makeCache(temp)
     const p = cache.saveBuffer('tts', Buffer.from('x'), { key: 'key-a', ts: 123 })
     assert.equal(cache.findByKey('tts', 'key-a'), p)
     assert.equal(cache.findByKey('tts', 'key-b'), '')
@@ -52,7 +52,7 @@ test('findByKey 只找同前缀；copyIn / makeJobDir 正常建目录', () => {
 test('usage 统计文件数、字节数与按类分组', () => {
   const temp = makeTempDir()
   try {
-    const cache = 造缓存(temp)
+    const cache = makeCache(temp)
     cache.saveBuffer('tts', Buffer.alloc(100), { ext: '.wav', ts: 1 })
     cache.saveBuffer('tts', Buffer.alloc(200), { ext: '.wav', ts: 2 })
     cache.saveBuffer('vision', Buffer.alloc(50), { ext: '.jpg', ts: 3 })
@@ -73,16 +73,16 @@ test('usage 统计文件数、字节数与按类分组', () => {
 test('cleanup 删除过期文件（TTL）', () => {
   const temp = makeTempDir()
   try {
-    const cache = 造缓存(temp, { ttlHours: 1 })
-    const 旧 = cache.saveBuffer('tts', Buffer.from('old'), { ts: 1 })
-    const 新 = cache.saveBuffer('tts', Buffer.from('new'), { ts: 2 })
-    const 老时间 = new Date(Date.now() - 2 * 3600 * 1000)
-    utimesSync(旧, 老时间, 老时间)
+    const cache = makeCache(temp, { ttlHours: 1 })
+    const prev = cache.saveBuffer('tts', Buffer.from('old'), { ts: 1 })
+    const next = cache.saveBuffer('tts', Buffer.from('new'), { ts: 2 })
+    const olderTime = new Date(Date.now() - 2 * 3600 * 1000)
+    utimesSync(prev, olderTime, olderTime)
 
     const r = cache.cleanup()
     assert.equal(r.expired, 1)
-    assert.equal(existsSync(旧), false)
-    assert.equal(existsSync(新), true)
+    assert.equal(existsSync(prev), false)
+    assert.equal(existsSync(next), true)
   } finally {
     temp.cleanup()
   }
@@ -91,18 +91,18 @@ test('cleanup 删除过期文件（TTL）', () => {
 test('cleanup 按 LRU 删到 cacheMaxMb 以内', () => {
   const temp = makeTempDir()
   try {
-    const cache = 造缓存(temp, { maxMb: 0.0005 }) // ~524 字节
-    const 老 = cache.saveBuffer('tts', Buffer.alloc(400), { ts: 1, name: 'old.wav' })
-    const 新 = cache.saveBuffer('tts', Buffer.alloc(400), { ts: 2, name: 'new.wav' })
-    const 老时间 = new Date(Date.now() - 60_000)
-    const 新时间 = new Date()
-    utimesSync(老, 老时间, 老时间)
-    utimesSync(新, 新时间, 新时间)
+    const cache = makeCache(temp, { maxMb: 0.0005 }) // ~524 字节
+    const older = cache.saveBuffer('tts', Buffer.alloc(400), { ts: 1, name: 'old.wav' })
+    const next = cache.saveBuffer('tts', Buffer.alloc(400), { ts: 2, name: 'new.wav' })
+    const olderTime = new Date(Date.now() - 60_000)
+    const nextTime = new Date()
+    utimesSync(older, olderTime, olderTime)
+    utimesSync(next, nextTime, nextTime)
 
     const r = cache.cleanup()
     assert.equal(r.lru, 1)
-    assert.equal(existsSync(老), false)
-    assert.equal(existsSync(新), true)
+    assert.equal(existsSync(older), false)
+    assert.equal(existsSync(next), true)
     assert.ok(cache.usage().mb <= 0.1)
   } finally {
     temp.cleanup()
@@ -112,26 +112,26 @@ test('cleanup 按 LRU 删到 cacheMaxMb 以内', () => {
 test('clear：省略 kind 清生成产物但保留 voice；指定 kind 只清那一类', () => {
   const temp = makeTempDir()
   try {
-    const cache = 造缓存(temp)
+    const cache = makeCache(temp)
     cache.saveBuffer('tts', Buffer.alloc(100), { ext: '.wav', ts: 1 })
     cache.saveBuffer('tts', Buffer.alloc(50), { ext: '.wav', ts: 2 })
     cache.saveBuffer('vision', Buffer.alloc(30), { ext: '.jpg', ts: 3 })
-    const 录音 = cache.saveBuffer('voice', Buffer.alloc(20), { ext: '.webm', ts: 4 })
+    const recording = cache.saveBuffer('voice', Buffer.alloc(20), { ext: '.webm', ts: 4 })
 
-    const 全部 = cache.clear()
-    assert.deepEqual(全部.kinds.sort(), ['separate', 'tmp', 'tts', 'vision'])
-    assert.equal(全部.files, 3)
-    assert.equal(全部.bytes, 180)
+    const all = cache.clear()
+    assert.deepEqual(all.kinds.sort(), ['separate', 'tmp', 'tts', 'vision'])
+    assert.equal(all.files, 3)
+    assert.equal(all.bytes, 180)
     assert.equal(cache.usage().byKind.tts, undefined)
-    assert.equal(existsSync(录音), true) // 用户明确保留的录音不动
+    assert.equal(existsSync(recording), true) // 用户明确保留的录音不动
     assert.ok(existsSync(join(temp.dir, 'cache', 'tts'))) // 目录会重建
 
     cache.saveBuffer('tts', Buffer.alloc(10), { ext: '.wav', ts: 5 })
-    const 只TTS = cache.clear('tts')
-    assert.deepEqual(只TTS.kinds, ['tts'])
-    assert.equal(只TTS.files, 1)
-    assert.equal(只TTS.bytes, 10)
-    assert.equal(existsSync(录音), true)
+    const onlyTTS = cache.clear('tts')
+    assert.deepEqual(onlyTTS.kinds, ['tts'])
+    assert.equal(onlyTTS.files, 1)
+    assert.equal(onlyTTS.bytes, 10)
+    assert.equal(existsSync(recording), true)
 
     assert.throws(() => cache.clear('nope'), /未知缓存类型/)
   } finally {
@@ -156,7 +156,7 @@ test('目录不存在时 usage / cleanup 安全返回', () => {
 test('startAutoCleanup 返回停止函数且可重复停止', () => {
   const temp = makeTempDir()
   try {
-    const cache = 造缓存(temp)
+    const cache = makeCache(temp)
     const stop = cache.startAutoCleanup({ intervalMs: 60000 })
     assert.equal(typeof stop, 'function')
     stop()

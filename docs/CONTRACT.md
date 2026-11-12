@@ -525,9 +525,9 @@ interface DescribeResult {
 }
 ```
 
-- `input` 是单个路径或路径数组，**最多 10 张**；路径必须是本机绝对路径、存在、是文件（复用 `检查本机文件`）；
+- `input` 是单个路径或路径数组，**最多 10 张**；路径必须是本机绝对路径、存在、是文件（复用 `checkLocalFile`）；
 - 扩展名只接受 `.jpg/.jpeg/.png/.webp/.gif/.bmp`，否则 `bad_request`；
-- 能力名 `vision`：先走 `要能力('vision')`，服务离线/模型没装按现有错误分类返回；
+- 能力名 `vision`：先走 `requestCapability('vision')`，服务离线/模型没装按现有错误分类返回；
 - 提示词优先级：显式 `prompt` > `scope='session'` 时的会话识图提示词 > 显式 `preset` > `config.visionDefaultPreset`；空串的档位提示词按内置默认处理；
 - `scope` 只影响提示词来源：`'tool'`（默认）用工具档位，`'session'` 用 `config.visionSessionPrompt`（留空时与「详细」档一致），此时忽略 `preset`；
 - 旧 `mode` 仍兼容：`caption` 走上面的优先级，`ocr` 固定「只看文字」档，`score` **不传** `prompt`（沿用服务端 `vlm_frame_score.md` 评分提示）；

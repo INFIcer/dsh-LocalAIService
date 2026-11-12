@@ -55,139 +55,139 @@ window.__ModuleLoader__.load({
       .then((r) => r.json().catch(() => null))
       .catch((error) => ({ ok: false, code: 'upstream_error', hint: String(error?.message || error) }))
 
-    const 音频地址 = (路径) => `${B}/audio?path=${encodeURIComponent(String(路径 || ''))}`
+    const audioUrl = (path) => `${B}/audio?path=${encodeURIComponent(String(path || ''))}`
 
     // ---------------- 极简 store（跨槽位共享状态） ----------------
 
-    function 造store(初值) {
-      let 值 = 初值
-      const 听 = new Set()
+    function makeStore(initialValue) {
+      let value = initialValue
+      const listener = new Set()
       return {
-        get: () => 值,
-        set(下一个) {
-          值 = typeof 下一个 === 'function' ? 下一个(值) : 下一个
-          for (const 函数 of [...听]) {
-            try { 函数(值) } catch { /* 单个订阅者出错不影响别人 */ }
+        get: () => value,
+        set(next) {
+          value = typeof next === 'function' ? next(value) : next
+          for (const fn of [...listener]) {
+            try { fn(value) } catch { /* 单个订阅者出错不影响别人 */ }
           }
         },
-        subscribe(函数) {
-          听.add(函数)
-          return () => 听.delete(函数)
+        subscribe(fn) {
+          listener.add(fn)
+          return () => listener.delete(fn)
         },
       }
     }
 
     function useStore(store) {
-      const [值, 设值] = React.useState(store.get)
+      const [value, setValue] = React.useState(store.get)
       React.useEffect(() => {
-        const 停 = store.subscribe(设值)
-        设值(store.get())
-        return 停
+        const halt = store.subscribe(setValue)
+        setValue(store.get())
+        return halt
       }, [store])
-      return 值
+      return value
     }
 
     // ---------------- 插件偏好（来自 /state，设置页保存后同步更新） ----------------
 
-    const 偏好 = 造store({
-      载入: false,
-      在线: false,
+    const prefs = makeStore({
+      load: false,
+      online: false,
       config: {},
-      健康: null,
-      音色: [],
-      插件: {},
+      health: null,
+      voice: [],
+      plugin: {},
     })
 
-    let 偏好请求 = null
-    function 载入偏好({ force = false } = {}) {
-      if (偏好请求 && !force) return 偏好请求
-      偏好请求 = get('/state').then((s) => {
+    let prefsRequest = null
+    function loadPrefs({ force = false } = {}) {
+      if (prefsRequest && !force) return prefsRequest
+      prefsRequest = get('/state').then((s) => {
         if (s && s.ok) {
-          偏好.set((旧) => ({
-            ...旧,
-            载入: true,
-            在线: Boolean(s.health && s.health.reachable),
+          prefs.set((prev) => ({
+            ...prev,
+            load: true,
+            online: Boolean(s.health && s.health.reachable),
             config: s.config || {},
-            健康: s.health || null,
-            音色: Array.isArray(s.voices) ? s.voices : 旧.音色,
-            插件: s.plugin || {},
+            health: s.health || null,
+            voice: Array.isArray(s.voices) ? s.voices : prev.voice,
+            plugin: s.plugin || {},
           }))
         } else {
-          偏好.set((旧) => ({ ...旧, 载入: true }))
+          prefs.set((prev) => ({ ...prev, load: true }))
         }
         return s
       }).catch(() => {
-        偏好请求 = null
+        prefsRequest = null
         return null
       })
-      return 偏好请求
+      return prefsRequest
     }
 
     // ---------------- 按会话自动朗读（纯函数，便于单测） ----------------
 
-    const 会话自动朗读上限 = 200
-    const 会话键合法 = (键) => typeof 键 === 'string' && /^session-/.test(键)
-    const 真值 = (值) => 值 === true || 值 === 'true' || 值 === 1 || 值 === '1'
+    const autoReadSessionLimit = 200
+    const validSessionKey = (key) => typeof key === 'string' && /^session-/.test(key)
+    const truthy = (value) => value === true || value === 'true' || value === 1 || value === '1'
 
     /** 当前会话是否自动朗读：本会话有设置就用它，否则回落到全局默认（autoRead）。 */
-    function 读会话自动朗读(配置, 会话键) {
-      const 配置项 = 配置 && typeof 配置 === 'object' ? 配置 : {}
-      const 表 = 配置项.autoReadSessions && typeof 配置项.autoReadSessions === 'object'
-        && !Array.isArray(配置项.autoReadSessions)
-        ? 配置项.autoReadSessions
+    function readAutoReadSessions(config, sessionKey) {
+      const configItem = config && typeof config === 'object' ? config : {}
+      const table = configItem.autoReadSessions && typeof configItem.autoReadSessions === 'object'
+        && !Array.isArray(configItem.autoReadSessions)
+        ? configItem.autoReadSessions
         : null
-      if (表 && 会话键合法(会话键) && Object.prototype.hasOwnProperty.call(表, 会话键)) {
-        return 真值(表[会话键])
+      if (table && validSessionKey(sessionKey) && Object.prototype.hasOwnProperty.call(table, sessionKey)) {
+        return truthy(table[sessionKey])
       }
-      return 真值(配置项.autoRead)
+      return truthy(configItem.autoRead)
     }
 
     /** 只改当前会话那一条，返回新配置；其它会话与全局默认保持不变。 */
-    function 写会话自动朗读(配置, 会话键, 开) {
-      const 配置项 = 配置 && typeof 配置 === 'object' ? 配置 : {}
-      if (!会话键合法(会话键)) return 配置项
-      const 表 = 配置项.autoReadSessions && typeof 配置项.autoReadSessions === 'object'
-        && !Array.isArray(配置项.autoReadSessions)
-        ? { ...配置项.autoReadSessions }
+    function writeAutoReadSessions(config, sessionKey, on) {
+      const configItem = config && typeof config === 'object' ? config : {}
+      if (!validSessionKey(sessionKey)) return configItem
+      const table = configItem.autoReadSessions && typeof configItem.autoReadSessions === 'object'
+        && !Array.isArray(configItem.autoReadSessions)
+        ? { ...configItem.autoReadSessions }
         : {}
       // 先删再写：最近改过的会话排在最后，超过上限时优先淘汰最早的设置。
-      delete 表[会话键]
-      表[会话键] = 开 === true || 开 === 'true'
-      const 键们 = Object.keys(表)
-      while (键们.length > 会话自动朗读上限) delete 表[键们.shift()]
-      return { ...配置项, autoReadSessions: 表 }
+      delete table[sessionKey]
+      table[sessionKey] = on === true || on === 'true'
+      const keys = Object.keys(table)
+      while (keys.length > autoReadSessionLimit) delete table[keys.shift()]
+      return { ...configItem, autoReadSessions: table }
     }
 
     /** 后台朗读：旧配置没有该字段、或值无法识别时按开启；只有明确关闭才关。 */
-    function 读后台自动朗读(配置) {
-      const 值 = 配置 && typeof 配置 === 'object' ? 配置.autoReadInBackground : undefined
-      if (值 === false || 值 === 'false' || 值 === 0 || 值 === '0') return false
+    function readBackgroundAutoRead(config) {
+      const value = config && typeof config === 'object' ? config.autoReadInBackground : undefined
+      if (value === false || value === 'false' || value === 0 || value === '0') return false
       return true
     }
 
     /** 这条新回复是否自动朗读：会话开关必须开；页面在后台时还要「后台也自动朗读」开着。 */
-    function 是否自动朗读(配置, 会话键, 页面可见) {
-      if (!读会话自动朗读(配置, 会话键)) return false
-      if (页面可见) return true
-      return 读后台自动朗读(配置)
+    function shouldAutoRead(config, sessionKey, pageVisible) {
+      if (!readAutoReadSessions(config, sessionKey)) return false
+      if (pageVisible) return true
+      return readBackgroundAutoRead(config)
     }
 
     // 有组件挂载时才轮询 /health（30 秒一次），没人看就不打扰服务。
-    let 心跳 = null
-    let 挂载数 = 0
-    function 保活(开) {
-      挂载数 += 开 ? 1 : -1
-      if (挂载数 < 0) 挂载数 = 0
-      if (开 && !心跳) {
-        心跳 = setInterval(async () => {
+    let heartbeat = null
+    let mountCount = 0
+    function keepAlive(on) {
+      mountCount += on ? 1 : -1
+      if (mountCount < 0) mountCount = 0
+      if (on && !heartbeat) {
+        heartbeat = setInterval(async () => {
           try {
             const r = await fetch(B + '/health', { cache: 'no-store' }).then((x) => x.json())
-            if (r) 偏好.set((旧) => ({ ...旧, 在线: Boolean(r.ok) }))
+            if (r) prefs.set((prev) => ({ ...prev, online: Boolean(r.ok) }))
           } catch { /* 服务重启/DSH 关闭时忽略 */ }
         }, 30000)
-      } else if (!开 && 挂载数 === 0 && 心跳) {
-        clearInterval(心跳)
-        心跳 = null
+      } else if (!on && mountCount === 0 && heartbeat) {
+        clearInterval(heartbeat)
+        heartbeat = null
       }
     }
 
@@ -199,89 +199,89 @@ window.__ModuleLoader__.load({
     //   3. 切换消息 / 再点一次 = stop()：递增代次 + abort 未完成的 segment 请求。
     // 这样长文不用等全部合成，首段出声明显更早；同一段重复朗读由服务端缓存直接命中。
 
-    const 播放 = {
-      态: 造store({ phase: 'idle', messageId: '', error: '', index: 0, total: 0 }),
-      音频: null,
-      预取: null,
-      序号: 0,
-      消息: '',
-      中止: null,
+    const play = {
+      state: makeStore({ phase: 'idle', messageId: '', error: '', index: 0, total: 0 }),
+      audio: null,
+      prefetch: null,
+      seq: 0,
+      message: '',
+      abort: null,
 
-      stop(错误 = '') {
-        this.序号 += 1
-        try { this.中止?.abort() } catch { /* 已经结束 */ }
-        this.中止 = null
-        for (const 音频 of [this.音频, this.预取]) {
-          if (!音频) continue
-          try { 音频.pause() } catch { /* 已经结束 */ }
-          try { 音频.removeAttribute('src'); 音频.load() } catch { /* 忽略 */ }
+      stop(error = '') {
+        this.seq += 1
+        try { this.abort?.abort() } catch { /* 已经结束 */ }
+        this.abort = null
+        for (const audio of [this.audio, this.prefetch]) {
+          if (!audio) continue
+          try { audio.pause() } catch { /* 已经结束 */ }
+          try { audio.removeAttribute('src'); audio.load() } catch { /* 忽略 */ }
         }
-        this.音频 = null
-        this.预取 = null
-        this.消息 = ''
-        this.态.set({ phase: 'idle', messageId: '', error: 错误, index: 0, total: 0 })
+        this.audio = null
+        this.prefetch = null
+        this.message = ''
+        this.state.set({ phase: 'idle', messageId: '', error: error, index: 0, total: 0 })
       },
 
       /** 流式合成并顺序播放；同一条消息再点一次 = 停止。 */
-      async 合成并播放(messageId, 文本, 配置) {
+      async synthesizeAndPlay(messageId, text, config) {
         this.stop()
-        const 代 = ++this.序号
-        const 中止 = typeof AbortController === 'function' ? new AbortController() : null
-        this.中止 = 中止
-        this.消息 = messageId
-        this.态.set({ phase: 'synth', messageId, error: '', index: 0, total: 0 })
+        const generation = ++this.seq
+        const abort = typeof AbortController === 'function' ? new AbortController() : null
+        this.abort = abort
+        this.message = messageId
+        this.state.set({ phase: 'synth', messageId, error: '', index: 0, total: 0 })
 
         const plan = await post('/read/plan', {
-          text: 文本,
-          voice: 配置.ttsVoice,
-          speed: 配置.ttsSpeed,
-          maxChars: 配置.readMaxChars,
-          skipCodeBlocks: 配置.readSkipCode !== false,
-        }, { signal: 中止?.signal })
-        if (代 !== this.序号) return
+          text: text,
+          voice: config.ttsVoice,
+          speed: config.ttsSpeed,
+          maxChars: config.readMaxChars,
+          skipCodeBlocks: config.readSkipCode !== false,
+        }, { signal: abort?.signal })
+        if (generation !== this.seq) return
         if (!plan || !plan.ok) {
-          this.中止 = null
-          this.态.set({ phase: 'error', messageId, error: (plan && plan.hint) || '朗读准备失败，请稍后重试。', index: 0, total: 0 })
+          this.abort = null
+          this.state.set({ phase: 'error', messageId, error: (plan && plan.hint) || '朗读准备失败，请稍后重试。', index: 0, total: 0 })
           return
         }
 
-        const 段们 = Array.isArray(plan.segments) ? plan.segments.filter((x) => x && typeof x.text === 'string') : []
-        if (!段们.length) {
-          this.中止 = null
-          this.态.set({ phase: 'error', messageId, error: '这条消息没有可朗读的文字。', index: 0, total: 0 })
+        const segments = Array.isArray(plan.segments) ? plan.segments.filter((x) => x && typeof x.text === 'string') : []
+        if (!segments.length) {
+          this.abort = null
+          this.state.set({ phase: 'error', messageId, error: '这条消息没有可朗读的文字。', index: 0, total: 0 })
           return
         }
-        const 总段 = 段们.length
-        const 提示 = plan.truncated ? '（内容过长，仅朗读了前一部分）' : ''
+        const totalSegments = segments.length
+        const prompt = plan.truncated ? '（内容过长，仅朗读了前一部分）' : ''
 
         // 每段只请求一次；任务表让「预取」和「正在播的下一段」复用同一个请求。
-        const 任务 = new Map()
-        const 要段 = (i) => {
-          if (!任务.has(i)) {
-            任务.set(i, post('/read/segment', {
-              index: Number.isInteger(段们[i].index) ? 段们[i].index : i,
-              total: 总段,
-              text: 段们[i].text,
+        const task = new Map()
+        const requestSegment = (i) => {
+          if (!task.has(i)) {
+            task.set(i, post('/read/segment', {
+              index: Number.isInteger(segments[i].index) ? segments[i].index : i,
+              total: totalSegments,
+              text: segments[i].text,
               ...(plan.voice ? { voice: plan.voice } : {}),
               ...(plan.speed ? { speed: plan.speed } : {}),
-            }, { signal: 中止?.signal }))
+            }, { signal: abort?.signal }))
           }
-          return 任务.get(i)
+          return task.get(i)
         }
 
         // 第 1 段和第 2 段一起发出去：第 1 段一到就播，第 2 段在后台合成。
         // 第 1 段回来之前保持「合成中」转圈；回来后才切到「播放中 1/N」。
-        void 要段(0)
-        if (总段 > 1) void 要段(1)
+        void requestSegment(0)
+        if (totalSegments > 1) void requestSegment(1)
 
-        for (let i = 0; i < 总段; i++) {
-          if (代 !== this.序号) return
-          const r = await 要段(i)
-          if (代 !== this.序号) return
+        for (let i = 0; i < totalSegments; i++) {
+          if (generation !== this.seq) return
+          const r = await requestSegment(i)
+          if (generation !== this.seq) return
           if (!r || !r.ok) {
-            try { 中止?.abort() } catch { /* 已经结束 */ }
-            this.中止 = null
-            this.态.set({
+            try { abort?.abort() } catch { /* 已经结束 */ }
+            this.abort = null
+            this.state.set({
               phase: 'error',
               messageId,
               error: (r && r.hint) || '朗读中断，请重试。',
@@ -290,50 +290,50 @@ window.__ModuleLoader__.load({
             })
             return
           }
-          this.态.set((旧) => ({ ...旧, phase: 'playing', error: '', hint: 提示, index: i + 1, total: 总段 }))
+          this.state.set((prev) => ({ ...prev, phase: 'playing', error: '', hint: prompt, index: i + 1, total: totalSegments }))
           // 播放当前段之前先把下一段请求发出去，利用播放时间做预取。
-          if (i + 1 < 总段) void 要段(i + 1)
-          const 错误 = await this.播一段({ wavPath: r.wavPath }, 代)
-          if (代 !== this.序号) return
-          if (错误) {
-            try { 中止?.abort() } catch { /* 已经结束 */ }
-            this.中止 = null
-            this.态.set((旧) => ({ ...旧, phase: 'error', error: 错误, index: 0, total: 0 }))
+          if (i + 1 < totalSegments) void requestSegment(i + 1)
+          const error = await this.playOneSegment({ wavPath: r.wavPath }, generation)
+          if (generation !== this.seq) return
+          if (error) {
+            try { abort?.abort() } catch { /* 已经结束 */ }
+            this.abort = null
+            this.state.set((prev) => ({ ...prev, phase: 'error', error: error, index: 0, total: 0 }))
             return
           }
         }
-        if (代 === this.序号) {
-          this.中止 = null
-          this.态.set({ phase: 'idle', messageId: '', error: '', hint: 提示, index: 0, total: 0 })
+        if (generation === this.seq) {
+          this.abort = null
+          this.state.set({ phase: 'idle', messageId: '', error: '', hint: prompt, index: 0, total: 0 })
         }
       },
 
-      播一段(item, 代) {
+      playOneSegment(item, generation) {
         return new Promise((resolve) => {
-          const 音频 = new Audio(音频地址(item.wavPath))
-          this.音频 = 音频
-          let 结束 = false
-          let 检查 = null
-          const 收尾 = (错误) => {
-            if (结束) return
-            结束 = true
-            if (检查) { clearInterval(检查); 检查 = null }
-            if (this.音频 === 音频) this.音频 = null
-            try { 音频.pause() } catch { /* 忽略 */ }
-            resolve(错误)
+          const audio = new Audio(audioUrl(item.wavPath))
+          this.audio = audio
+          let finish = false
+          let check = null
+          const collectTail = (error) => {
+            if (finish) return
+            finish = true
+            if (check) { clearInterval(check); check = null }
+            if (this.audio === audio) this.audio = null
+            try { audio.pause() } catch { /* 忽略 */ }
+            resolve(error)
           }
-          音频.onended = () => 收尾('')
-          音频.onerror = () => 收尾('音频无法播放，请再点一次朗读。')
+          audio.onended = () => collectTail('')
+          audio.onerror = () => collectTail('音频无法播放，请再点一次朗读。')
           try {
-            音频.play().then(() => { /* 开始播了 */ }).catch(() => {
-              收尾('浏览器阻止了自动播放，请再点一次朗读。')
+            audio.play().then(() => { /* 开始播了 */ }).catch(() => {
+              collectTail('浏览器阻止了自动播放，请再点一次朗读。')
             })
           } catch {
-            收尾('无法播放这段音频。')
+            collectTail('无法播放这段音频。')
           }
           // 播放器被 stop() 强行换掉时，别让 Promise 永远挂着。
-          检查 = setInterval(() => {
-            if (代 !== this.序号) 收尾('')
+          check = setInterval(() => {
+            if (generation !== this.seq) collectTail('')
           }, 300)
         })
       },
@@ -341,18 +341,18 @@ window.__ModuleLoader__.load({
 
     // ---------------- 从聊天快照里取消息文字 ----------------
 
-    function 取轮次键们(快照, turn) {
+    function fetchRoundKeys(snapshot, turn) {
       try {
-        const 键们 = 快照 && 快照.locations && 快照.locations.getTurn ? 快照.locations.getTurn(turn) : null
-        return Array.isArray(键们) ? 键们 : []
+        const keys = snapshot && snapshot.locations && snapshot.locations.getTurn ? snapshot.locations.getTurn(turn) : null
+        return Array.isArray(keys) ? keys : []
       } catch {
         return []
       }
     }
 
-    function 取节点(快照, 键) {
+    function fetchNode(snapshot, key) {
       try {
-        return 快照 && 快照.nodes && 快照.nodes.get ? 快照.nodes.get(键) : undefined
+        return snapshot && snapshot.nodes && snapshot.nodes.get ? snapshot.nodes.get(key) : undefined
       } catch {
         return undefined
       }
@@ -363,44 +363,44 @@ window.__ModuleLoader__.load({
      * 消息定稿后轮次不会变，所以按 messageId 缓存轮次号；否则每条消息每次快照
      * 都扫全部轮次，长会话里会拖慢流式渲染。
      */
-    const 消息轮次缓存 = new Map()
+    const messageRoundCache = new Map()
 
-    function 找消息轮次(快照, messageId) {
-      if (!快照 || !messageId) return null
-      const 轮次 = 快照.timeline && Array.isArray(快照.timeline.turnOrder) ? 快照.timeline.turnOrder : []
-      const 缓存 = 消息轮次缓存.get(messageId)
+    function findMessageRound(snapshot, messageId) {
+      if (!snapshot || !messageId) return null
+      const round = snapshot.timeline && Array.isArray(snapshot.timeline.turnOrder) ? snapshot.timeline.turnOrder : []
+      const cache = messageRoundCache.get(messageId)
       // 先试缓存轮次；命中就只扫一轮。缓存失效（切会话/重建）时再扫全部。
-      const 候选 = 缓存 !== undefined && 轮次.includes(缓存) ? [缓存] : []
-      for (const turn of 候选) {
-        const 键们 = 取轮次键们(快照, turn)
-        for (const 键 of 键们) {
-          const 节点 = 取节点(快照, 键)
-          if (!节点 || 节点.kind !== 'turn-tail') continue
-          const 终 = 节点.data && 节点.data.closing && 节点.data.closing.finalNode
-          if (终 && 终.messageId === messageId) {
+      const candidate = cache !== undefined && round.includes(cache) ? [cache] : []
+      for (const turn of candidate) {
+        const keys = fetchRoundKeys(snapshot, turn)
+        for (const key of keys) {
+          const node = fetchNode(snapshot, key)
+          if (!node || node.kind !== 'turn-tail') continue
+          const final = node.data && node.data.closing && node.data.closing.finalNode
+          if (final && final.messageId === messageId) {
             return {
               turn,
-              键们,
-              是最后: 轮次[轮次.length - 1] === turn,
-              块们: Array.isArray(节点.data.closing.blocks) ? 节点.data.closing.blocks : [],
+              keys,
+              isLast: round[round.length - 1] === turn,
+              chunks: Array.isArray(node.data.closing.blocks) ? node.data.closing.blocks : [],
             }
           }
         }
       }
-      for (const turn of 轮次) {
-        if (候选.length && turn === 候选[0]) continue
-        const 键们 = 取轮次键们(快照, turn)
-        for (const 键 of 键们) {
-          const 节点 = 取节点(快照, 键)
-          if (!节点 || 节点.kind !== 'turn-tail') continue
-          const 终 = 节点.data && 节点.data.closing && 节点.data.closing.finalNode
-          if (终 && 终.messageId === messageId) {
-            消息轮次缓存.set(messageId, turn)
+      for (const turn of round) {
+        if (candidate.length && turn === candidate[0]) continue
+        const keys = fetchRoundKeys(snapshot, turn)
+        for (const key of keys) {
+          const node = fetchNode(snapshot, key)
+          if (!node || node.kind !== 'turn-tail') continue
+          const final = node.data && node.data.closing && node.data.closing.finalNode
+          if (final && final.messageId === messageId) {
+            messageRoundCache.set(messageId, turn)
             return {
               turn,
-              键们,
-              是最后: 轮次[轮次.length - 1] === turn,
-              块们: Array.isArray(节点.data.closing.blocks) ? 节点.data.closing.blocks : [],
+              keys,
+              isLast: round[round.length - 1] === turn,
+              chunks: Array.isArray(node.data.closing.blocks) ? node.data.closing.blocks : [],
             }
           }
         }
@@ -408,41 +408,41 @@ window.__ModuleLoader__.load({
       return null
     }
 
-    function 消息位置(快照, messageId) {
-      const 命中 = 找消息轮次(快照, messageId)
-      if (!命中) return ''
-      return `${命中.turn}|${命中.是最后 ? 1 : 0}`
+    function messagePosition(snapshot, messageId) {
+      const hit = findMessageRound(snapshot, messageId)
+      if (!hit) return ''
+      return `${hit.turn}|${hit.isLast ? 1 : 0}`
     }
 
-    function 消息文本(快照, messageId) {
-      const 命中 = 找消息轮次(快照, messageId)
-      if (!命中) return ''
+    function messageText(snapshot, messageId) {
+      const hit = findMessageRound(snapshot, messageId)
+      if (!hit) return ''
       // 只读「这一轮最终回复」的文本块（closing.blocks）；工具调用 / 思考 / 中间步骤都不读。
-      const 段 = []
-      for (const 块 of 命中.块们) {
-        if (块 && 块.kind === 'text' && typeof 块.text === 'string') 段.push(块.text)
+      const segment = []
+      for (const chunk of hit.chunks) {
+        if (chunk && chunk.kind === 'text' && typeof chunk.text === 'string') segment.push(chunk.text)
       }
-      return 段.join('\n\n').trim()
+      return segment.join('\n\n').trim()
     }
 
     /** 兜底：快照取不到时，从按钮所在的 DOM 行往上找最近的助手消息行。 */
-    function DOM取文本(元素) {
+    function domFetchText(element) {
       try {
-        if (!元素 || typeof 元素.closest !== 'function') return ''
-        const 行 = 元素.closest('[data-chat-flow-key]') || 元素.closest('[data-chat-anchor-key]')
-        if (!行 || !行.parentElement) return ''
-        const 列表 = 行.parentElement
-        let 目标 = null
-        for (let 前 = 行.previousElementSibling; 前; 前 = 前.previousElementSibling) {
-          if (前.getAttribute && 前.getAttribute('data-chat-flow-kind') === 'assistant-step') { 目标 = 前; break }
+        if (!element || typeof element.closest !== 'function') return ''
+        const line = element.closest('[data-chat-flow-key]') || element.closest('[data-chat-anchor-key]')
+        if (!line || !line.parentElement) return ''
+        const list = line.parentElement
+        let target = null
+        for (let front = line.previousElementSibling; front; front = front.previousElementSibling) {
+          if (front.getAttribute && front.getAttribute('data-chat-flow-kind') === 'assistant-step') { target = front; break }
         }
-        if (!目标) {
-          const 全部 = 列表.querySelectorAll('[data-chat-flow-kind="assistant-step"]')
-          目标 = 全部.length ? 全部[全部.length - 1] : null
+        if (!target) {
+          const all = list.querySelectorAll('[data-chat-flow-kind="assistant-step"]')
+          target = all.length ? all[all.length - 1] : null
         }
-        if (!目标) return ''
-        const 文 = String(目标.innerText || '').trim()
-        return 文
+        if (!target) return ''
+        const text = String(target.innerText || '').trim()
+        return text
       } catch {
         return ''
       }
@@ -450,45 +450,45 @@ window.__ModuleLoader__.load({
 
     // ---------------- 图标 + 样式 ----------------
 
-    function 图标发声(大小 = 15) {
-      return h('svg', { viewBox: '0 0 16 16', width: 大小, height: 大小, 'aria-hidden': true, fill: 'none' },
+    function iconSpeak(size = 15) {
+      return h('svg', { viewBox: '0 0 16 16', width: size, height: size, 'aria-hidden': true, fill: 'none' },
         h('path', { d: 'M2.6 6.1h2.1L7.6 3.4v9.2L4.7 9.9H2.6z', fill: 'currentColor' }),
         h('path', { d: 'M10.1 5.4a3.4 3.4 0 0 1 0 5.2', stroke: 'currentColor', strokeWidth: 1.2, strokeLinecap: 'round' }),
         h('path', { d: 'M11.9 3.7a5.6 5.6 0 0 1 0 8.6', stroke: 'currentColor', strokeWidth: 1.2, strokeLinecap: 'round' }))
     }
 
-    function 图标暂停(大小 = 15) {
-      return h('svg', { viewBox: '0 0 16 16', width: 大小, height: 大小, 'aria-hidden': true, fill: 'currentColor' },
+    function iconPause(size = 15) {
+      return h('svg', { viewBox: '0 0 16 16', width: size, height: size, 'aria-hidden': true, fill: 'currentColor' },
         h('rect', { x: 3.4, y: 2.8, width: 3.2, height: 10.4, rx: 1 }),
         h('rect', { x: 9.4, y: 2.8, width: 3.2, height: 10.4, rx: 1 }))
     }
 
-    function 图标转圈(大小 = 15) {
-      return h('svg', { className: 'fish-spin', viewBox: '0 0 16 16', width: 大小, height: 大小, 'aria-hidden': true, fill: 'none' },
+    function iconSpinner(size = 15) {
+      return h('svg', { className: 'fish-spin', viewBox: '0 0 16 16', width: size, height: size, 'aria-hidden': true, fill: 'none' },
         h('circle', { cx: 8, cy: 8, r: 6, stroke: 'currentColor', strokeWidth: 1.6, opacity: 0.25 }),
         h('path', { d: 'M8 2a6 6 0 0 1 6 6', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round' }))
     }
 
-    function 图标麦克风(大小 = 15) {
-      return h('svg', { viewBox: '0 0 16 16', width: 大小, height: 大小, 'aria-hidden': true, fill: 'none' },
+    function iconMic(size = 15) {
+      return h('svg', { viewBox: '0 0 16 16', width: size, height: size, 'aria-hidden': true, fill: 'none' },
         h('rect', { x: 5.6, y: 1.8, width: 4.8, height: 8, rx: 2.4, fill: 'currentColor' }),
         h('path', { d: 'M3.6 7.6a4.4 4.4 0 0 0 8.8 0', stroke: 'currentColor', strokeWidth: 1.3, strokeLinecap: 'round' }),
         h('path', { d: 'M8 12v2.2', stroke: 'currentColor', strokeWidth: 1.3, strokeLinecap: 'round' }))
     }
 
-    function 图标图片(大小 = 15) {
-      return h('svg', { viewBox: '0 0 16 16', width: 大小, height: 大小, 'aria-hidden': true, fill: 'none' },
+    function iconImage(size = 15) {
+      return h('svg', { viewBox: '0 0 16 16', width: size, height: size, 'aria-hidden': true, fill: 'none' },
         h('rect', { x: 2, y: 3, width: 12, height: 10, rx: 2, stroke: 'currentColor', strokeWidth: 1.2 }),
         h('circle', { cx: 5.7, cy: 6.6, r: 1.15, fill: 'currentColor' }),
         h('path', { d: 'M2.6 12.2l3.1-3.1 2.1 2.1 1.9-1.7 3.7 3', stroke: 'currentColor', strokeWidth: 1.2, strokeLinejoin: 'round', strokeLinecap: 'round' }))
     }
 
-    function 图标停止(大小 = 14) {
-      return h('svg', { viewBox: '0 0 16 16', width: 大小, height: 大小, 'aria-hidden': true, fill: 'currentColor' },
+    function iconStop(size = 14) {
+      return h('svg', { viewBox: '0 0 16 16', width: size, height: size, 'aria-hidden': true, fill: 'currentColor' },
         h('rect', { x: 3.2, y: 3.2, width: 9.6, height: 9.6, rx: 2.4 }))
     }
 
-    const 样式文本 = `
+    const styleText = `
 @keyframes fish-spin { to { transform: rotate(360deg) } }
 @keyframes fish-pulse { 0%,100% { opacity: 1 } 50% { opacity: .3 } }
 @keyframes fish-in { from { opacity: 0; transform: translateY(4px) } to { opacity: 1; transform: translateY(0) } }
@@ -680,23 +680,23 @@ select.fish-select option:checked {
     // 样式只注入一次：每个消息都渲染一份 <style> 会把 DOM 撑爆。
     // DSH 自己的客户端包也是这么做的（在客户端模块里往 head 里插一段 CSS）。
     // 借用一个计数：apply 可能被重放（热重载），最后一个卸载者才移除节点。
-    let 样式借用 = 0
-    function 注入样式() {
+    let styleBorrow = 0
+    function injectStyle() {
       try {
         if (typeof document === 'undefined') return () => {}
-        let 节点 = document.querySelector('style[data-fish-service="p2"]')
-        const 新建 = !节点
-        if (!节点) {
-          节点 = document.createElement('style')
-          节点.dataset.fishService = 'p2'
-          节点.textContent = 样式文本
-          document.head.appendChild(节点)
+        let node = document.querySelector('style[data-fish-service="p2"]')
+        const create = !node
+        if (!node) {
+          node = document.createElement('style')
+          node.dataset.fishService = 'p2'
+          node.textContent = styleText
+          document.head.appendChild(node)
         }
-        样式借用 += 1
+        styleBorrow += 1
         return () => {
-          样式借用 = Math.max(0, 样式借用 - 1)
-          if (新建 && 样式借用 === 0) {
-            try { 节点.remove() } catch { /* 已从文档移除 */ }
+          styleBorrow = Math.max(0, styleBorrow - 1)
+          if (create && styleBorrow === 0) {
+            try { node.remove() } catch { /* 已从文档移除 */ }
           }
         }
       } catch {
@@ -707,240 +707,240 @@ select.fish-select option:checked {
 
     // ---------------- 朗读按钮 ----------------
 
-    const 已自动朗读 = new Set()
+    const autoReadDone = new Set()
     // 每个会话「第一次看到时的最后一轮」：只有比它更新的回复才会自动朗读，
     // 这样打开旧会话 / 切回旧会话都不会把历史消息念一遍。
-    const 会话初始末轮 = new Map()
+    const sessionInitialLastRound = new Map()
 
-    function 末轮次(快照) {
+    function lastRound(snapshot) {
       try {
-        const 轮次 = 快照 && 快照.timeline && Array.isArray(快照.timeline.turnOrder) ? 快照.timeline.turnOrder : []
-        return 轮次.length ? 轮次[轮次.length - 1] : -1
+        const round = snapshot && snapshot.timeline && Array.isArray(snapshot.timeline.turnOrder) ? snapshot.timeline.turnOrder : []
+        return round.length ? round[round.length - 1] : -1
       } catch {
         return -1
       }
     }
 
     /** props.useChat 缺失时的占位选择器：仍然按 hook 调用，保证 hook 数量稳定。 */
-    function 空选择器() {
-      const [空] = React.useState('')
-      return 空
+    function emptySelector() {
+      const [empty] = React.useState('')
+      return empty
     }
 
-    function 朗读按钮(props) {
+    function readButton(props) {
       const { messageId } = props || {}
-      const 播放态 = useStore(播放.态)
-      const 偏好态 = useStore(偏好)
-      const 按钮 = React.useRef(null)
-      const 挂载时已载入 = React.useRef(Boolean(偏好.get().载入))
+      const playState = useStore(play.state)
+      const prefsState = useStore(prefs)
+      const button = React.useRef(null)
+      const mountedLoaded = React.useRef(Boolean(prefs.get().load))
 
       // 槽位标准 props：useChat 一定有；真没有时退化成空选择器（不读快照，只走 DOM 兜底）。
-      const 用聊天 = typeof props?.useChat === 'function' ? props.useChat : 空选择器
+      const useChat = typeof props?.useChat === 'function' ? props.useChat : emptySelector
 
-      const 文本 = 用聊天((快照) => 消息文本(快照, messageId))
-      const 位置 = 用聊天((快照) => 消息位置(快照, messageId))
-      const 末轮 = 用聊天((快照) => 末轮次(快照))
-      const 会话键 = String(props?.sessionId || '')
+      const text = useChat((snapshot) => messageText(snapshot, messageId))
+      const position = useChat((snapshot) => messagePosition(snapshot, messageId))
+      const lastRound = useChat((snapshot) => lastRound(snapshot))
+      const sessionKey = String(props?.sessionId || '')
 
       React.useEffect(() => {
         // 本轮所有消息按钮挂载时记录一次；之后新到的回复轮次会更大。
-        if (!会话初始末轮.has(会话键)) 会话初始末轮.set(会话键, 末轮)
-      }, [末轮, 会话键])
+        if (!sessionInitialLastRound.has(sessionKey)) sessionInitialLastRound.set(sessionKey, lastRound)
+      }, [lastRound, sessionKey])
 
       React.useEffect(() => {
-        保活(true)
-        if (!偏好.get().载入) void 载入偏好()
-        return () => 保活(false)
+        keepAlive(true)
+        if (!prefs.get().load) void loadPrefs()
+        return () => keepAlive(false)
       }, [])
 
-      const 正在这条 = 播放态.messageId === messageId && (播放态.phase === 'synth' || 播放态.phase === 'playing')
-      const 合成中 = 正在这条 && 播放态.phase === 'synth'
-      const 播放中 = 正在这条 && 播放态.phase === 'playing'
-      const 自动朗读 = 读会话自动朗读(偏好态.config, 会话键)
-      const 后台朗读 = 读后台自动朗读(偏好态.config)
-      const 全局自动朗读开 = 界面开关开(偏好态.config, '自动朗读')
+      const ongoingThis = playState.messageId === messageId && (playState.phase === 'synth' || playState.phase === 'playing')
+      const synthesizing = ongoingThis && playState.phase === 'synth'
+      const playing = ongoingThis && playState.phase === 'playing'
+      const autoRead = readAutoReadSessions(prefsState.config, sessionKey)
+      const backgroundRead = readBackgroundAutoRead(prefsState.config)
+      const globalAutoReadOn = uiSwitchOn(prefsState.config, 'autoRead')
 
-      const 取文本 = () => 文本 || DOM取文本(按钮.current)
+      const fetchText = () => text || domFetchText(button.current)
 
-      const 点 = async () => {
-        if (正在这条) {
-          播放.stop()
+      const tap = async () => {
+        if (ongoingThis) {
+          play.stop()
           return
         }
-        const 原文本 = 取文本()
-        if (!原文本) {
-          播放.态.set({ phase: 'error', messageId, error: '这条消息没有可朗读的文字。', index: 0, total: 0 })
+        const sourceText = fetchText()
+        if (!sourceText) {
+          play.state.set({ phase: 'error', messageId, error: '这条消息没有可朗读的文字。', index: 0, total: 0 })
           return
         }
-        await 播放.合成并播放(messageId, 原文本, 偏好.get().config || {})
+        await play.synthesizeAndPlay(messageId, sourceText, prefs.get().config || {})
       }
 
       // 自动朗读：按当前会话的设置判断（未单独设置时回落到全局默认）；
       // 只在「偏好已加载 + 这条是最后一轮」时触发一次。窗口在后台时，
       // 是否朗读由「后台也自动朗读」决定（默认开）。
       React.useEffect(() => {
-        if (!挂载时已载入.current) return
-        if (!偏好态.载入 || !自动朗读 || !全局自动朗读开) return
-        if (!文本 || !位置) return
-        const [轮次文本, 最后] = String(位置).split('|')
-        if (最后 !== '1') return
-        const 轮次 = Number(轮次文本)
-        const 初始 = 会话初始末轮.get(会话键)
-        if (Number.isFinite(轮次) && Number.isFinite(初始) && 轮次 <= 初始) return
-        if (已自动朗读.has(messageId)) return
-        const 页面可见 = typeof document === 'undefined' || document.visibilityState === 'visible'
-        if (!是否自动朗读(偏好态.config, 会话键, 页面可见)) return
-        已自动朗读.add(messageId)
-        void 播放.合成并播放(messageId, 文本, 偏好.get().config || {})
-      }, [文本, 位置, 偏好态.载入, 自动朗读, 后台朗读, 全局自动朗读开, messageId, 会话键])
+        if (!mountedLoaded.current) return
+        if (!prefsState.load || !autoRead || !globalAutoReadOn) return
+        if (!text || !position) return
+        const [roundText, last] = String(position).split('|')
+        if (last !== '1') return
+        const round = Number(roundText)
+        const initial = sessionInitialLastRound.get(sessionKey)
+        if (Number.isFinite(round) && Number.isFinite(initial) && round <= initial) return
+        if (autoReadDone.has(messageId)) return
+        const pageVisible = typeof document === 'undefined' || document.visibilityState === 'visible'
+        if (!shouldAutoRead(prefsState.config, sessionKey, pageVisible)) return
+        autoReadDone.add(messageId)
+        void play.synthesizeAndPlay(messageId, text, prefs.get().config || {})
+      }, [text, position, prefsState.load, autoRead, backgroundRead, globalAutoReadOn, messageId, sessionKey])
 
-      const 标题 = 合成中 ? '正在准备朗读，再点一次可取消'
-        : 播放中 ? '停止朗读'
-          : 偏好态.在线 === false ? '朗读这条回复（本地 AI 未启动）'
+      const title = synthesizing ? '正在准备朗读，再点一次可取消'
+        : playing ? '停止朗读'
+          : prefsState.online === false ? '朗读这条回复（本地 AI 未启动）'
             : '朗读这条回复'
 
-      const 错误 = 播放态.messageId === messageId && 播放态.phase === 'error' ? 播放态.error : ''
-      const 提示 = 播放态.messageId === messageId && 播放态.hint && 播放态.phase !== 'error' ? 播放态.hint : ''
+      const error = playState.messageId === messageId && playState.phase === 'error' ? playState.error : ''
+      const prompt = playState.messageId === messageId && playState.hint && playState.phase !== 'error' ? playState.hint : ''
 
       return h(React.Fragment, null,
         h('button', {
-          ref: 按钮,
+          ref: button,
           type: 'button',
           className: 'fish-iconbtn',
-          'data-on': 播放中 ? '1' : undefined,
-          title: 标题,
-          'aria-label': 标题,
-          'aria-busy': 合成中 ? 'true' : undefined,
-          onClick: 点,
+          'data-on': playing ? '1' : undefined,
+          title: title,
+          'aria-label': title,
+          'aria-busy': synthesizing ? 'true' : undefined,
+          onClick: tap,
         },
-          合成中 ? 图标转圈() : 播放中 ? 图标暂停() : 图标发声(),
-          播放中 && 播放态.total > 1 ? h('span', { style: { fontSize: 11 } }, `${播放态.index}/${播放态.total}`) : null),
-        错误 ? h('span', { className: 'fish-err', role: 'status', style: { marginLeft: 6 } }, 错误) : null,
-        提示 ? h('span', { className: 'fish-panel-dim', role: 'status', style: { marginLeft: 6 } }, 提示) : null)
+          synthesizing ? iconSpinner() : playing ? iconPause() : iconSpeak(),
+          playing && playState.total > 1 ? h('span', { style: { fontSize: 11 } }, `${playState.index}/${playState.total}`) : null),
+        error ? h('span', { className: 'fish-err', role: 'status', style: { marginLeft: 6 } }, error) : null,
+        prompt ? h('span', { className: 'fish-panel-dim', role: 'status', style: { marginLeft: 6 } }, prompt) : null)
     }
 
     // ---------------- 框选文字：朗读 / 翻译 ----------------
 
-    const 选中交互ID = 'fish-selection'
-    const 选中播放标识 = 'fish-selection'
+    const selectedInteractionID = 'fish-selection'
+    const selectedPlayId = 'fish-selection'
 
-    function 选中工具条({ readText, dismiss, clearSelection }) {
-      const 偏好态 = useStore(偏好)
-      const 在线 = 偏好态.在线 !== false
-      const [面板, 设面板] = React.useState(null)
-      const 容器 = React.useRef(null)
+    function selectedToolbar({ readText, dismiss, clearSelection }) {
+      const prefsState = useStore(prefs)
+      const online = prefsState.online !== false
+      const [panel, setPanel] = React.useState(null)
+      const container = React.useRef(null)
 
-      const 取文本 = () => {
-        const 文本 = typeof readText === 'function' ? readText() : ''
-        return String(文本 == null ? '' : 文本).trim()
+      const fetchText = () => {
+        const text = typeof readText === 'function' ? readText() : ''
+        return String(text == null ? '' : text).trim()
       }
-      const 收起 = () => {
+      const collapse = () => {
         try { clearSelection?.() } catch { /* 选区已经没了 */ }
         try { dismiss?.() } catch { /* 工具条已经关了 */ }
       }
 
       // 点外面 / Esc 关闭；点工具条内部不触发，避免选区和复制被打断。
       React.useEffect(() => {
-        const 点外面 = (事件) => {
-          if (容器.current && 事件.target instanceof Node && 容器.current.contains(事件.target)) return
+        const tapOutside = (event) => {
+          if (container.current && event.target instanceof Node && container.current.contains(event.target)) return
           try { dismiss?.() } catch { /* 忽略 */ }
         }
-        const 按Esc = (事件) => {
-          if (事件.key !== 'Escape') return
+        const onEscape = (event) => {
+          if (event.key !== 'Escape') return
           try { dismiss?.() } catch { /* 忽略 */ }
         }
-        document.addEventListener('pointerdown', 点外面, true)
-        document.addEventListener('keydown', 按Esc, true)
+        document.addEventListener('pointerdown', tapOutside, true)
+        document.addEventListener('keydown', onEscape, true)
         return () => {
-          document.removeEventListener('pointerdown', 点外面, true)
-          document.removeEventListener('keydown', 按Esc, true)
+          document.removeEventListener('pointerdown', tapOutside, true)
+          document.removeEventListener('keydown', onEscape, true)
         }
       }, [dismiss])
 
-      const 朗读 = () => {
-        const 文本 = 取文本()
-        if (!文本) return
-        void 播放.合成并播放(选中播放标识, 文本, 偏好.get().config || {})
-        收起()
+      const read = () => {
+        const text = fetchText()
+        if (!text) return
+        void play.synthesizeAndPlay(selectedPlayId, text, prefs.get().config || {})
+        collapse()
       }
 
-      const 翻译 = async (原文) => {
-        const 文本 = String(原文 || 取文本()).trim()
-        if (!文本) return
-        设面板({ 原文: 文本, 载入中: true, 错误: '', 译文: '', 已复制: false })
-        const 结果 = await post('/translate', { text: 文本 })
-        if (!结果 || !结果.ok) {
-          设面板({
-            原文: 文本,
-            载入中: false,
-            错误: (结果 && 结果.hint) || '翻译失败，请稍后重试。',
-            译文: '',
-            已复制: false,
+      const translation = async (original) => {
+        const text = String(original || fetchText()).trim()
+        if (!text) return
+        setPanel({ original: text, loading: true, error: '', translated: '', copied: false })
+        const result = await post('/translate', { text: text })
+        if (!result || !result.ok) {
+          setPanel({
+            original: text,
+            loading: false,
+            error: (result && result.hint) || '翻译失败，请稍后重试。',
+            translated: '',
+            copied: false,
           })
           return
         }
-        设面板({ 原文: 文本, 载入中: false, 错误: '', 译文: String(结果.text || ''), 已复制: false })
+        setPanel({ original: text, loading: false, error: '', translated: String(result.text || ''), copied: false })
       }
 
-      const 复制 = async () => {
-        if (!面板?.译文) return
+      const copy = async () => {
+        if (!panel?.translated) return
         try {
-          await navigator.clipboard.writeText(面板.译文)
-          设面板((旧) => (旧 ? { ...旧, 已复制: true, 错误: '' } : 旧))
+          await navigator.clipboard.writeText(panel.translated)
+          setPanel((prev) => (prev ? { ...prev, copied: true, error: '' } : prev))
         } catch {
-          设面板((旧) => (旧 ? { ...旧, 错误: '复制失败，请手动选中译文复制。' } : 旧))
+          setPanel((prev) => (prev ? { ...prev, error: '复制失败，请手动选中译文复制。' } : prev))
         }
       }
 
       return h('div', {
-        ref: 容器,
+        ref: container,
         className: 'fish-selbar',
         role: 'toolbar',
         'aria-label': '选中文字操作',
         // 保住当前选区：点按钮时不把选区换成按钮上的文字。
-        onPointerDown: (事件) => 事件.preventDefault(),
+        onPointerDown: (event) => event.preventDefault(),
       },
         h('button', {
           type: 'button',
-          disabled: !在线,
-          title: 在线 ? '朗读选中的文字' : '本地 AI 未启动',
-          onClick: 朗读,
+          disabled: !online,
+          title: online ? '朗读选中的文字' : '本地 AI 未启动',
+          onClick: read,
         }, '朗读'),
         h('button', {
           type: 'button',
-          disabled: !在线 || Boolean(面板?.载入中),
-          title: 在线 ? '翻译选中的文字' : '本地 AI 未启动',
-          onClick: () => void 翻译(),
+          disabled: !online || Boolean(panel?.loading),
+          title: online ? '翻译选中的文字' : '本地 AI 未启动',
+          onClick: () => void translation(),
         }, '翻译'),
-        !在线 ? h('span', { className: 'fish-selnote' }, '本地 AI 未启动') : null,
-        面板
+        !online ? h('span', { className: 'fish-selnote' }, '本地 AI 未启动') : null,
+        panel
           ? h('div', { className: 'fish-selpanel' },
-              面板.载入中 ? h('div', { className: 'fish-panel-dim', role: 'status' }, '翻译中…') : null,
-              面板.错误 ? h('div', { className: 'fish-err', role: 'status' }, 面板.错误) : null,
-              面板.译文 ? h('div', { className: 'fish-seltext', role: 'status' }, 面板.译文) : null,
+              panel.loading ? h('div', { className: 'fish-panel-dim', role: 'status' }, '翻译中…') : null,
+              panel.error ? h('div', { className: 'fish-err', role: 'status' }, panel.error) : null,
+              panel.translated ? h('div', { className: 'fish-seltext', role: 'status' }, panel.translated) : null,
               h('div', { className: 'fish-selrow' },
-                !面板.载入中 && 面板.错误
-                  ? h('button', { type: 'button', onClick: () => void 翻译(面板.原文) }, '重试')
+                !panel.loading && panel.error
+                  ? h('button', { type: 'button', onClick: () => void translation(panel.original) }, '重试')
                   : null,
-                面板.译文 ? h('button', { type: 'button', onClick: 复制 }, 面板.已复制 ? '已复制' : '复制') : null,
-                h('button', { type: 'button', onClick: () => 设面板(null) }, '关闭')))
+                panel.translated ? h('button', { type: 'button', onClick: copy }, panel.copied ? '已复制' : '复制') : null,
+                h('button', { type: 'button', onClick: () => setPanel(null) }, '关闭')))
           : null)
     }
 
     // ---------------- 输入设备（纯函数，便于单测） ----------------
 
     /** 录音约束：空标识 = 跟随系统默认；非空则精确指定该设备。 */
-    function 构建录音约束(deviceId) {
-      const 设备标识 = typeof deviceId === 'string' ? deviceId.trim() : ''
-      const 音频 = { echoCancellation: true, noiseSuppression: true }
-      if (设备标识) 音频.deviceId = { exact: 设备标识 }
-      return { audio: 音频 }
+    function buildRecordingConstraint(deviceId) {
+      const deviceKey = typeof deviceId === 'string' ? deviceId.trim() : ''
+      const audio = { echoCancellation: true, noiseSuppression: true }
+      if (deviceKey) audio.deviceId = { exact: deviceKey }
+      return { audio: audio }
     }
 
     /** 设备被拔掉、改名或约束不满足时，浏览器报这几个错误。 */
-    function 设备不可用错误(错误) {
-      const 名 = String(错误?.name || '')
-      return 名 === 'OverconstrainedError' || 名 === 'NotFoundError' || 名 === 'DevicesNotFoundError'
+    function deviceUnavailableError(error) {
+      const name = String(error?.name || '')
+      return name === 'OverconstrainedError' || name === 'NotFoundError' || name === 'DevicesNotFoundError'
     }
 
     /**
@@ -948,250 +948,250 @@ select.fish-select option:checked {
      * getUserMedia 由调用方注入，便于单测模拟浏览器行为。
      * 返回 { stream, fellBack }。
      */
-    async function 打开麦克风(deviceId, getUserMedia) {
-      const 已选 = typeof deviceId === 'string' ? deviceId.trim() : ''
-      const 申请 = typeof getUserMedia === 'function'
+    async function openMic(deviceId, getUserMedia) {
+      const selected = typeof deviceId === 'string' ? deviceId.trim() : ''
+      const request = typeof getUserMedia === 'function'
         ? getUserMedia
-        : (约束) => navigator.mediaDevices.getUserMedia(约束)
+        : (constraint) => navigator.mediaDevices.getUserMedia(constraint)
       try {
-        return { stream: await 申请(构建录音约束(已选)), fellBack: false }
-      } catch (错误) {
-        if (!已选 || !设备不可用错误(错误)) throw 错误
-        return { stream: await 申请(构建录音约束('')), fellBack: true }
+        return { stream: await request(buildRecordingConstraint(selected)), fellBack: false }
+      } catch (error) {
+        if (!selected || !deviceUnavailableError(error)) throw error
+        return { stream: await request(buildRecordingConstraint('')), fellBack: true }
       }
     }
 
     /** 设备名像虚拟声卡/采集卡时，提醒用户改选真实麦克风。 */
-    const 虚拟设备特征 = /stream|virtual|cable|voicemeeter|vb-audio|loopback|stereo\s*mix|立体声混音/i
+    const virtualDeviceTrait = /stream|virtual|cable|voicemeeter|vb-audio|loopback|stereo\s*mix|立体声混音/i
 
-    function 是虚拟设备名称(名称) {
-      return typeof 名称 === 'string' && 虚拟设备特征.test(名称)
+    function isVirtualDeviceName(label) {
+      return typeof label === 'string' && virtualDeviceTrait.test(label)
     }
 
-    function 虚拟设备提示(名称) {
-      return 是虚拟设备名称(名称)
+    function virtualDevicePrompt(label) {
+      return isVirtualDeviceName(label)
         ? '当前输入设备可能是虚拟设备，请在设置里改选真实麦克风。'
         : ''
     }
 
-    function 补设备提示(文本, 名称) {
-      const 提示 = 虚拟设备提示(名称)
-      return 提示 ? `${文本} ${提示}` : 文本
+    function padDevicePrompt(text, label) {
+      const prompt = virtualDevicePrompt(label)
+      return prompt ? `${text} ${prompt}` : text
     }
 
     // 输入设备列表与最近一次录音实际使用的设备（只在本次页面会话里，不持久化）。
-    const 设备 = 造store({
-      列表: [],
-      最近名称: '',
-      最近标识: '',
-      枚举中: false,
-      提示: '',
+    const device = makeStore({
+      list: [],
+      recentLabel: '',
+      recentId: '',
+      enumerating: false,
+      prompt: '',
     })
 
-    async function 已有麦克风权限() {
+    async function existingMicPermission() {
       try {
         if (!navigator.permissions?.query) return false
-        const 状态 = await navigator.permissions.query({ name: 'microphone' })
-        return 状态.state === 'granted'
+        const status = await navigator.permissions.query({ name: 'microphone' })
+        return status.state === 'granted'
       } catch {
         return false
       }
     }
 
     /** 先申请权限（已有权限就直接枚举），再列出音频输入设备。 */
-    async function 刷新设备列表() {
-      if (设备.get().枚举中) return
-      设备.set((旧) => ({ ...旧, 枚举中: true, 提示: '' }))
+    async function refreshDeviceList() {
+      if (device.get().enumerating) return
+      device.set((prev) => ({ ...prev, enumerating: true, prompt: '' }))
       try {
         if (typeof navigator === 'undefined' || !navigator.mediaDevices?.enumerateDevices) {
-          设备.set((旧) => ({ ...旧, 枚举中: false, 提示: '当前浏览器不支持选择麦克风。' }))
+          device.set((prev) => ({ ...prev, enumerating: false, prompt: '当前浏览器不支持选择麦克风。' }))
           return
         }
-        if (!(await 已有麦克风权限())) {
-          let 流
+        if (!(await existingMicPermission())) {
+          let stream
           try {
-            流 = await navigator.mediaDevices.getUserMedia({ audio: true })
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true })
           } catch {
-            设备.set((旧) => ({ ...旧, 列表: [], 枚举中: false, 提示: '未获得麦克风权限，无法列出设备。' }))
+            device.set((prev) => ({ ...prev, list: [], enumerating: false, prompt: '未获得麦克风权限，无法列出设备。' }))
             return
           }
-          try { 流?.getTracks?.().forEach((轨) => 轨.stop()) } catch { /* 忽略 */ }
+          try { stream?.getTracks?.().forEach((track) => track.stop()) } catch { /* 忽略 */ }
         }
-        let 全部 = []
-        try { 全部 = await navigator.mediaDevices.enumerateDevices() } catch { 全部 = [] }
-        const 列表 = []
-        for (const 项 of Array.isArray(全部) ? 全部 : []) {
-          if (!项 || 项.kind !== 'audioinput') continue
-          const 标识 = String(项.deviceId || '')
-          if (!标识) continue
-          const 名称 = String(项.label || '').trim() || `麦克风 ${列表.length + 1}`
-          列表.push({ deviceId: 标识, label: 名称 })
+        let all = []
+        try { all = await navigator.mediaDevices.enumerateDevices() } catch { all = [] }
+        const list = []
+        for (const item of Array.isArray(all) ? all : []) {
+          if (!item || item.kind !== 'audioinput') continue
+          const id = String(item.deviceId || '')
+          if (!id) continue
+          const label = String(item.label || '').trim() || `麦克风 ${list.length + 1}`
+          list.push({ deviceId: id, label: label })
         }
-        if (!列表.length) {
-          设备.set((旧) => ({ ...旧, 列表: [], 枚举中: false, 提示: '未获得麦克风权限，无法列出设备。' }))
+        if (!list.length) {
+          device.set((prev) => ({ ...prev, list: [], enumerating: false, prompt: '未获得麦克风权限，无法列出设备。' }))
           return
         }
-        设备.set((旧) => ({ ...旧, 列表, 枚举中: false, 提示: '' }))
+        device.set((prev) => ({ ...prev, list, enumerating: false, prompt: '' }))
       } catch {
-        设备.set((旧) => ({ ...旧, 枚举中: false, 提示: '未获得麦克风权限，无法列出设备。' }))
+        device.set((prev) => ({ ...prev, enumerating: false, prompt: '未获得麦克风权限，无法列出设备。' }))
       }
     }
 
     // ---------------- 录音器（MediaRecorder 优先，退化到 PCM/WAV） ----------------
 
-    function 停流(流) {
-      try { 流?.getTracks?.().forEach((轨) => 轨.stop()) } catch { /* 忽略 */ }
+    function haltStream(stream) {
+      try { stream?.getTracks?.().forEach((track) => track.stop()) } catch { /* 忽略 */ }
     }
 
-    function 造电平(流) {
+    function makeLevel(stream) {
       try {
         const Ctx = window.AudioContext || window.webkitAudioContext
         if (!Ctx) throw new Error('no audio context')
-        const 上下文 = new Ctx()
-        try { void 上下文.resume?.() } catch { /* 有些浏览器不需要/不允许 */ }
-        const 源 = 上下文.createMediaStreamSource(流)
-        const 分析 = 上下文.createAnalyser()
-        分析.fftSize = 256
-        源.connect(分析)
-        const 缓冲 = new Uint8Array(分析.frequencyBinCount)
+        const context = new Ctx()
+        try { void context.resume?.() } catch { /* 有些浏览器不需要/不允许 */ }
+        const source = context.createMediaStreamSource(stream)
+        const analyze = context.createAnalyser()
+        analyze.fftSize = 256
+        source.connect(analyze)
+        const buffer = new Uint8Array(analyze.frequencyBinCount)
         return {
-          读取() {
+          readOut() {
             try {
-              分析.getByteTimeDomainData(缓冲)
-              let 峰 = 0
-              for (const v of 缓冲) {
+              analyze.getByteTimeDomainData(buffer)
+              let peak = 0
+              for (const v of buffer) {
                 const d = Math.abs(v - 128) / 128
-                if (d > 峰) 峰 = d
+                if (d > peak) peak = d
               }
-              return Math.min(1, 峰 * 2.2)
+              return Math.min(1, peak * 2.2)
             } catch { return 0 }
           },
-          关闭() {
-            try { 源.disconnect(); 分析.disconnect(); 上下文.close() } catch { /* 忽略 */ }
+          close() {
+            try { source.disconnect(); analyze.disconnect(); context.close() } catch { /* 忽略 */ }
           },
         }
       } catch {
-        return { 读取: () => 0, 关闭() {} }
+        return { readOut: () => 0, close() {} }
       }
     }
 
-    function 用MediaRecorder(流, mime) {
-      const 录制 = new MediaRecorder(流, { mimeType: mime })
-      const 块 = []
-      录制.ondataavailable = (事件) => { if (事件.data && 事件.data.size) 块.push(事件.data) }
-      const 电平 = 造电平(流)
-      录制.start(250)
-      let 停止 = false
+    function useMediaRecorder(stream, mime) {
+      const record = new MediaRecorder(stream, { mimeType: mime })
+      const chunk = []
+      record.ondataavailable = (event) => { if (event.data && event.data.size) chunk.push(event.data) }
+      const level = makeLevel(stream)
+      record.start(250)
+      let stop = false
       return {
         mime,
-        读取电平: () => 电平.读取(),
+        readOutLevel: () => level.readOut(),
         async stop() {
-          if (!停止) {
-            停止 = true
+          if (!stop) {
+            stop = true
             await new Promise((resolve) => {
-              录制.onstop = resolve
-              try { 录制.stop() } catch { resolve() }
+              record.onstop = resolve
+              try { record.stop() } catch { resolve() }
             })
           }
-          电平.关闭()
-          停流(流)
-          return { blob: new Blob(块, { type: mime }), mime }
+          level.close()
+          haltStream(stream)
+          return { blob: new Blob(chunk, { type: mime }), mime }
         },
         cancel() {
-          try { 停止 = true; 录制.stop() } catch { /* 忽略 */ }
-          电平.关闭()
-          停流(流)
+          try { stop = true; record.stop() } catch { /* 忽略 */ }
+          level.close()
+          haltStream(stream)
         },
       }
     }
 
-    function 编码WAV(采样, 采样率) {
-      const 数据长度 = 采样.length
-      const 缓冲 = new ArrayBuffer(44 + 数据长度 * 2)
-      const 视 = new DataView(缓冲)
-      const 写文 = (偏移, 文) => { for (let i = 0; i < 文.length; i++) 视.setUint8(偏移 + i, 文.charCodeAt(i)) }
-      写文(0, 'RIFF')
-      视.setUint32(4, 36 + 数据长度 * 2, true)
-      写文(8, 'WAVE')
-      写文(12, 'fmt ')
-      视.setUint32(16, 16, true)
-      视.setUint16(20, 1, true)
-      视.setUint16(22, 1, true)
-      视.setUint32(24, 采样率, true)
-      视.setUint32(28, 采样率 * 2, true)
-      视.setUint16(32, 2, true)
-      视.setUint16(34, 16, true)
-      写文(36, 'data')
-      视.setUint32(40, 数据长度 * 2, true)
-      let 偏移 = 44
-      for (let i = 0; i < 数据长度; i++) {
-        const s = Math.max(-1, Math.min(1, 采样[i]))
-        视.setInt16(偏移, s < 0 ? s * 0x8000 : s * 0x7fff, true)
-        偏移 += 2
+    function encodeWAV(sample, sampleRate) {
+      const dataLen = sample.length
+      const buffer = new ArrayBuffer(44 + dataLen * 2)
+      const view = new DataView(buffer)
+      const writeText = (offset, text) => { for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i)) }
+      writeText(0, 'RIFF')
+      view.setUint32(4, 36 + dataLen * 2, true)
+      writeText(8, 'WAVE')
+      writeText(12, 'fmt ')
+      view.setUint32(16, 16, true)
+      view.setUint16(20, 1, true)
+      view.setUint16(22, 1, true)
+      view.setUint32(24, sampleRate, true)
+      view.setUint32(28, sampleRate * 2, true)
+      view.setUint16(32, 2, true)
+      view.setUint16(34, 16, true)
+      writeText(36, 'data')
+      view.setUint32(40, dataLen * 2, true)
+      let offset = 44
+      for (let i = 0; i < dataLen; i++) {
+        const s = Math.max(-1, Math.min(1, sample[i]))
+        view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true)
+        offset += 2
       }
-      return new Uint8Array(缓冲)
+      return new Uint8Array(buffer)
     }
 
-    function 用WAV(流) {
+    function useWAV(stream) {
       const Ctx = window.AudioContext || window.webkitAudioContext
       if (!Ctx) return Promise.reject(new Error('浏览器不支持 WebAudio 录音'))
-      const 上下文 = new Ctx()
-      try { void 上下文.resume?.() } catch { /* 忽略 */ }
-      const 源 = 上下文.createMediaStreamSource(流)
-      const 节点 = 上下文.createScriptProcessor(4096, 1, 1)
-      const 块 = []
-      let 峰 = 0
-      节点.onaudioprocess = (事件) => {
-        const 数据 = 事件.inputBuffer.getChannelData(0)
-        块.push(new Float32Array(数据))
-        let 本帧 = 0
-        for (let i = 0; i < 数据.length; i++) {
-          const d = Math.abs(数据[i])
-          if (d > 本帧) 本帧 = d
+      const context = new Ctx()
+      try { void context.resume?.() } catch { /* 忽略 */ }
+      const source = context.createMediaStreamSource(stream)
+      const node = context.createScriptProcessor(4096, 1, 1)
+      const chunk = []
+      let peak = 0
+      node.onaudioprocess = (event) => {
+        const data = event.inputBuffer.getChannelData(0)
+        chunk.push(new Float32Array(data))
+        let currentFrame = 0
+        for (let i = 0; i < data.length; i++) {
+          const d = Math.abs(data[i])
+          if (d > currentFrame) currentFrame = d
         }
-        峰 = Math.max(峰, 本帧)
+        peak = Math.max(peak, currentFrame)
       }
-      源.connect(节点)
-      节点.connect(上下文.destination)
-      const 采样率 = 上下文.sampleRate
-      let 停止 = false
-      const 收尾 = () => {
-        try { 节点.disconnect(); 源.disconnect(); 上下文.close() } catch { /* 忽略 */ }
-        停流(流)
+      source.connect(node)
+      node.connect(context.destination)
+      const sampleRate = context.sampleRate
+      let stop = false
+      const collectTail = () => {
+        try { node.disconnect(); source.disconnect(); context.close() } catch { /* 忽略 */ }
+        haltStream(stream)
       }
       return Promise.resolve({
         mime: 'audio/wav',
-        读取电平: () => { const v = 峰; 峰 = 0; return Math.min(1, v * 2.2) },
+        readOutLevel: () => { const v = peak; peak = 0; return Math.min(1, v * 2.2) },
         async stop() {
-          if (!停止) { 停止 = true; 收尾() }
-          const 总长 = 块.reduce((和, x) => 和 + x.length, 0)
-          const 合并 = new Float32Array(总长)
-          let 偏移 = 0
-          for (const x of 块) { 合并.set(x, 偏移); 偏移 += x.length }
-          return { blob: new Blob([编码WAV(合并, 采样率)], { type: 'audio/wav' }), mime: 'audio/wav' }
+          if (!stop) { stop = true; collectTail() }
+          const totalLength = chunk.reduce((and, x) => and + x.length, 0)
+          const merge = new Float32Array(totalLength)
+          let offset = 0
+          for (const x of chunk) { merge.set(x, offset); offset += x.length }
+          return { blob: new Blob([encodeWAV(merge, sampleRate)], { type: 'audio/wav' }), mime: 'audio/wav' }
         },
         cancel() {
-          if (!停止) { 停止 = true; 收尾() }
+          if (!stop) { stop = true; collectTail() }
         },
       })
     }
 
-    async function 创建录音器(流, 格式) {
-      const 偏好mime = 格式 === 'webm' ? 'audio/webm;codecs=opus' : null
-      const 候选 = 偏好mime ? [偏好mime] : ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4']
-      if (格式 !== 'wav' && typeof window.MediaRecorder === 'function') {
-        const mime = 候选.find((x) => {
+    async function createRecorder(stream, format) {
+      const prefsMime = format === 'webm' ? 'audio/webm;codecs=opus' : null
+      const candidate = prefsMime ? [prefsMime] : ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4']
+      if (format !== 'wav' && typeof window.MediaRecorder === 'function') {
+        const mime = candidate.find((x) => {
           try { return window.MediaRecorder.isTypeSupported(x) } catch { return false }
         })
-        if (mime) return 用MediaRecorder(流, mime)
+        if (mime) return useMediaRecorder(stream, mime)
       }
-      return 用WAV(流)
+      return useWAV(stream)
     }
 
     // ---------------- 语音输入状态机 ----------------
 
-    const 语音 = {
-      态: 造store({
+    const speech = {
+      state: makeStore({
         phase: 'idle', // idle | requesting | recording | choose | uploading | transcribing | done | error
         sessionId: '',
         startedAt: 0,
@@ -1210,85 +1210,85 @@ select.fish-select option:checked {
         path: '',
         elapsedMs: 0,
       }),
-      录音器: null,
-      计时器: null,
-      关闭定时: null,
-      片段: null,
-      插入位: null,
+      recorder: null,
+      timer: null,
+      closeTimer: null,
+      fragment: null,
+      insertIndex: null,
       // 录音有异步步骤（要等用户点「允许麦克风」）；取消/关闭时递增它，
       // 晚到的 getUserMedia 结果发现代号变了就自己收掉，不会在关掉面板后又开始录。
-      代: 0,
+      generation: 0,
     }
 
-    const 选择键 = 'dsh-fish-service.voice-choice'
+    const choiceKey = 'dsh-fish-service.voice-choice'
 
-    function 记住的选择() {
+    function rememberedChoice() {
       try {
-        const v = window.localStorage.getItem(选择键)
+        const v = window.localStorage.getItem(choiceKey)
         return ['text', 'audio', 'cancel'].includes(v) ? v : ''
       } catch { return '' }
     }
 
-    function 记住选择(选择) {
-      if (偏好.get().config.rememberVoiceChoice === false) return
-      try { window.localStorage.setItem(选择键, 选择) } catch { /* 无痕模式 */ }
+    function rememberChoice(select) {
+      if (prefs.get().config.rememberVoiceChoice === false) return
+      try { window.localStorage.setItem(choiceKey, select) } catch { /* 无痕模式 */ }
     }
 
-    function 麦克风错误(错误) {
-      const 名 = String(错误?.name || '')
-      if (名 === 'NotAllowedError' || 名 === 'SecurityError') return '未获得麦克风权限，请允许浏览器使用麦克风后重试。'
-      if (名 === 'NotFoundError' || 名 === 'DevicesNotFoundError') return '未找到麦克风，请连接麦克风后重试。'
-      if (名 === 'NotReadableError') return '麦克风正被其他程序占用，请关闭会议或录音软件后重试。'
-      if (名 === 'OverconstrainedError') return '麦克风不支持当前的录音设置，请改用系统默认设备后重试。'
+    function micError(error) {
+      const name = String(error?.name || '')
+      if (name === 'NotAllowedError' || name === 'SecurityError') return '未获得麦克风权限，请允许浏览器使用麦克风后重试。'
+      if (name === 'NotFoundError' || name === 'DevicesNotFoundError') return '未找到麦克风，请连接麦克风后重试。'
+      if (name === 'NotReadableError') return '麦克风正被其他程序占用，请关闭会议或录音软件后重试。'
+      if (name === 'OverconstrainedError') return '麦克风不支持当前的录音设置，请改用系统默认设备后重试。'
       return '无法打开麦克风，请检查设备后重试。'
     }
 
-    function 清理录音() {
-      if (语音.计时器) { clearInterval(语音.计时器); 语音.计时器 = null }
-      if (语音.录音器) {
-        try { 语音.录音器.cancel?.() } catch { /* 忽略 */ }
-        语音.录音器 = null
+    function cleanupRecording() {
+      if (speech.timer) { clearInterval(speech.timer); speech.timer = null }
+      if (speech.recorder) {
+        try { speech.recorder.cancel?.() } catch { /* 忽略 */ }
+        speech.recorder = null
       }
     }
 
-    function 安排关闭(毫秒 = 6000) {
-      if (语音.关闭定时) clearTimeout(语音.关闭定时)
-      语音.关闭定时 = setTimeout(() => {
-        语音.关闭定时 = null
-        关闭语音面板()
-      }, 毫秒)
+    function scheduleClose(ms = 6000) {
+      if (speech.closeTimer) clearTimeout(speech.closeTimer)
+      speech.closeTimer = setTimeout(() => {
+        speech.closeTimer = null
+        closeSpeechPanel()
+      }, ms)
     }
 
     // 录音上限：计时器到 300 秒就自动停，stop() 收尾还会多出几十毫秒。
     // 略超上限是正常的，按上限截断；只有明显超出（用户拿着录音没停）才判超限。
-    const 录音上限毫秒 = 5 * 60 * 1000
-    const 录音上限容差毫秒 = 3000
-    function 规整录音时长(时长, 上限 = 录音上限毫秒, 容差 = 录音上限容差毫秒) {
-      const 值 = Math.max(0, Number(时长) || 0)
-      if (值 > 上限 + 容差) return { ok: false, durationMs: 值, capped: false }
-      return { ok: true, durationMs: Math.min(值, 上限), capped: 值 >= 上限 }
+    const recordLimitMs = 5 * 60 * 1000
+    const recordingLimitToleranceMs = 3000
+    function clampRecordingDuration(duration, limit = recordLimitMs, tolerance = recordingLimitToleranceMs) {
+      const value = Math.max(0, Number(duration) || 0)
+      if (value > limit + tolerance) return { ok: false, durationMs: value, capped: false }
+      return { ok: true, durationMs: Math.min(value, limit), capped: value >= limit }
     }
 
-    async function 开始录音(props) {
+    async function startRecording(props) {
       // 语音识别总开关关掉时录音功能不可用（按钮已隐藏，这里再兜一次）。
-      if (!界面开关开(偏好.get().config, '语音识别')) return
-      const 当前 = 语音.态.get().phase
-      if (当前 !== 'idle' && 当前 !== 'error') return
-      if (语音.关闭定时) { clearTimeout(语音.关闭定时); 语音.关闭定时 = null }
-      清理录音()
-      const 代 = ++语音.代
+      if (!uiSwitchOn(prefs.get().config, 'speechRecognition')) return
+      const current = speech.state.get().phase
+      if (current !== 'idle' && current !== 'error') return
+      if (speech.closeTimer) { clearTimeout(speech.closeTimer); speech.closeTimer = null }
+      cleanupRecording()
+      const generation = ++speech.generation
       if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
-        语音.态.set((旧) => ({ ...旧, phase: 'error', error: '当前浏览器不支持录音，请换用其他浏览器后重试。' }))
-        安排关闭()
+        speech.state.set((prev) => ({ ...prev, phase: 'error', error: '当前浏览器不支持录音，请换用其他浏览器后重试。' }))
+        scheduleClose()
         return
       }
-      const 配置 = 偏好.get().config || {}
-      const 插入位 = (() => {
+      const config = prefs.get().config || {}
+      const insertIndex = (() => {
         try { return props?.inputActions?.captureInsertion?.() ?? null } catch { return null }
       })()
-      语音.插入位 = 插入位
-      语音.态.set({
-        ...语音.态.get(),
+      speech.insertIndex = insertIndex
+      speech.state.set({
+        ...speech.state.get(),
         phase: 'requesting',
         sessionId: String(props?.sessionId || ''),
         startedAt: Date.now(),
@@ -1305,847 +1305,847 @@ select.fish-select option:checked {
         path: '',
         elapsedMs: 0,
       })
-      语音.片段 = null
-      let 流
-      let 回退默认 = false
+      speech.fragment = null
+      let stream
+      let revertDefault = false
       try {
-        const 打开 = await 打开麦克风(配置.recordDeviceId || '')
-        流 = 打开.stream
-        回退默认 = 打开.fellBack === true
-      } catch (错误) {
-        语音.态.set((旧) => ({ ...旧, phase: 'error', error: 麦克风错误(错误) }))
-        安排关闭(8000)
+        const open = await openMic(config.recordDeviceId || '')
+        stream = open.stream
+        revertDefault = open.fellBack === true
+      } catch (error) {
+        speech.state.set((prev) => ({ ...prev, phase: 'error', error: micError(error) }))
+        scheduleClose(8000)
         return
       }
-      if (代 !== 语音.代) {
-        停流(流)
+      if (generation !== speech.generation) {
+        haltStream(stream)
         return
       }
-      let 麦克风名 = ''
-      let 麦克风标识 = ''
+      let micName = ''
+      let micId = ''
       try {
-        const 轨 = 流.getAudioTracks?.()[0]
-        麦克风名 = String(轨?.label || '')
-        麦克风标识 = String(轨?.getSettings?.()?.deviceId || '')
-      } catch { 麦克风名 = ''; 麦克风标识 = '' }
-      语音.态.set((旧位) => ({
-        ...旧位,
-        micLabel: 麦克风名,
-        hint: 回退默认 ? '所选麦克风不可用，已改用系统默认设备。' : '',
+        const track = stream.getAudioTracks?.()[0]
+        micName = String(track?.label || '')
+        micId = String(track?.getSettings?.()?.deviceId || '')
+      } catch { micName = ''; micId = '' }
+      speech.state.set((prevPos) => ({
+        ...prevPos,
+        micLabel: micName,
+        hint: revertDefault ? '所选麦克风不可用，已改用系统默认设备。' : '',
       }))
-      设备.set((旧位) => ({
-        ...旧位,
-        最近名称: 麦克风名 || 旧位.最近名称,
-        最近标识: 麦克风标识 || 旧位.最近标识,
+      device.set((prevPos) => ({
+        ...prevPos,
+        recentLabel: micName || prevPos.recentLabel,
+        recentId: micId || prevPos.recentId,
       }))
       try {
-        const 录音器 = await 创建录音器(流, 配置.recordMime || 'auto')
-        if (代 !== 语音.代) {
-          录音器.cancel?.()
-          停流(流)
+        const recorder = await createRecorder(stream, config.recordMime || 'auto')
+        if (generation !== speech.generation) {
+          recorder.cancel?.()
+          haltStream(stream)
           return
         }
-        语音.录音器 = 录音器
-        const 开始 = Date.now()
-        语音.态.set((旧) => ({ ...旧, phase: 'recording', startedAt: 开始, mime: 录音器.mime }))
-        语音.计时器 = setInterval(() => {
-          const 秒 = Math.floor((Date.now() - 开始) / 1000)
-          const 电平值 = 录音器.读取电平()
-        语音.态.set((旧) => (旧.phase === 'recording'
-          ? { ...旧, seconds: 秒, level: 电平值, peak: Math.max(旧.peak || 0, 电平值) }
-          : 旧))
-          if (秒 >= 300) void 停止录音()
+        speech.recorder = recorder
+        const begin = Date.now()
+        speech.state.set((prev) => ({ ...prev, phase: 'recording', startedAt: begin, mime: recorder.mime }))
+        speech.timer = setInterval(() => {
+          const seconds = Math.floor((Date.now() - begin) / 1000)
+          const levelValue = recorder.readOutLevel()
+        speech.state.set((prev) => (prev.phase === 'recording'
+          ? { ...prev, seconds: seconds, level: levelValue, peak: Math.max(prev.peak || 0, levelValue) }
+          : prev))
+          if (seconds >= 300) void stopRecording()
         }, 200)
       } catch {
-        清理录音()
-        停流(流)
-        语音.态.set((旧) => ({ ...旧, phase: 'error', error: '录音启动失败，请检查麦克风后重试。' }))
-        安排关闭(8000)
+        cleanupRecording()
+        haltStream(stream)
+        speech.state.set((prev) => ({ ...prev, phase: 'error', error: '录音启动失败，请检查麦克风后重试。' }))
+        scheduleClose(8000)
       }
     }
 
-    async function 停止录音() {
-      const 态 = 语音.态.get()
-      if (态.phase !== 'recording' || !语音.录音器) return
-      const 代 = 语音.代
-      if (语音.计时器) { clearInterval(语音.计时器); 语音.计时器 = null }
-      const 录音器 = 语音.录音器
-      语音.录音器 = null
-      let 结果
+    async function stopRecording() {
+      const state = speech.state.get()
+      if (state.phase !== 'recording' || !speech.recorder) return
+      const generation = speech.generation
+      if (speech.timer) { clearInterval(speech.timer); speech.timer = null }
+      const recorder = speech.recorder
+      speech.recorder = null
+      let result
       try {
-        结果 = await 录音器.stop()
+        result = await recorder.stop()
       } catch {
-        语音.态.set((旧) => ({ ...旧, phase: 'error', error: '结束录音失败，请重试。' }))
-        安排关闭(8000)
+        speech.state.set((prev) => ({ ...prev, phase: 'error', error: '结束录音失败，请重试。' }))
+        scheduleClose(8000)
         return
       }
       // 等待 MediaRecorder 收尾期间用户可能已经取消/关了面板。
-      if (代 !== 语音.代) return
-      const 规整 = 规整录音时长(Date.now() - Number(态.startedAt || Date.now()))
-      if (!规整.ok) {
-        语音.态.set((旧) => ({ ...旧, phase: 'error', error: '录音超过 5 分钟已停止，请分段录制。' }))
-        安排关闭(8000)
+      if (generation !== speech.generation) return
+      const clamp = clampRecordingDuration(Date.now() - Number(state.startedAt || Date.now()))
+      if (!clamp.ok) {
+        speech.state.set((prev) => ({ ...prev, phase: 'error', error: '录音超过 5 分钟已停止，请分段录制。' }))
+        scheduleClose(8000)
         return
       }
-      const 时长 = 规整.durationMs
-      const 大小 = 结果.blob.size
-      if (大小 > 25 * 1024 * 1024) {
-        语音.态.set((旧) => ({ ...旧, phase: 'error', error: '录音超过 25MB 已停止，请缩短录音时长。' }))
-        安排关闭(8000)
+      const duration = clamp.durationMs
+      const size = result.blob.size
+      if (size > 25 * 1024 * 1024) {
+        speech.state.set((prev) => ({ ...prev, phase: 'error', error: '录音超过 25MB 已停止，请缩短录音时长。' }))
+        scheduleClose(8000)
         return
       }
-      if (大小 < 600) {
-        语音.态.set((旧) => ({ ...旧, phase: 'error', error: '没有录到声音（录音过短），请点「重新录」重试。' }))
-        安排关闭(8000)
+      if (size < 600) {
+        speech.state.set((prev) => ({ ...prev, phase: 'error', error: '没有录到声音（录音过短），请点「重新录」重试。' }))
+        scheduleClose(8000)
         return
       }
-      if (!结果.blob || 结果.blob.size < 1500) {
-        语音.态.set((旧) => ({ ...旧, phase: 'error', error: '没有采集到声音，请检查麦克风是否可用后重试。' }))
+      if (!result.blob || result.blob.size < 1500) {
+        speech.state.set((prev) => ({ ...prev, phase: 'error', error: '没有采集到声音，请检查麦克风是否可用后重试。' }))
         return
       }
-      if (时长 < 300) {
-        语音.态.set((旧) => ({ ...旧, phase: 'error', error: '录音太短，请多说几秒再停止。' }))
+      if (duration < 300) {
+        speech.state.set((prev) => ({ ...prev, phase: 'error', error: '录音太短，请多说几秒再停止。' }))
         return
       }
       // 峰值一直贴着 0：麦克风多半被静音 / 选成了虚拟设备 / 系统输入源不对。
-      if ((态.peak || 0) < 0.008) {
-        语音.态.set((旧) => ({
-          ...旧,
+      if ((state.peak || 0) < 0.008) {
+        speech.state.set((prev) => ({
+          ...prev,
           phase: 'error',
-          error: 补设备提示(`没有检测到声音${态.micLabel ? `（当前麦克风：${态.micLabel}）` : ''}。请检查系统声音设置里的输入设备是否被静音，或改为默认麦克风后重试。`, 态.micLabel),
+          error: padDevicePrompt(`没有检测到声音${state.micLabel ? `（当前麦克风：${state.micLabel}）` : ''}。请检查系统声音设置里的输入设备是否被静音，或改为默认麦克风后重试。`, state.micLabel),
         }))
-        安排关闭(10000)
+        scheduleClose(10000)
         return
       }
-      语音.片段 = { blob: 结果.blob, mime: 结果.mime, durationMs: 时长 }
-      语音.态.set((旧) => ({
-        ...旧,
+      speech.fragment = { blob: result.blob, mime: result.mime, durationMs: duration }
+      speech.state.set((prev) => ({
+        ...prev,
         phase: 'choose',
-        durationMs: 时长,
-        bytes: 大小,
-        mime: 结果.mime,
-        choice: 偏好.get().config.rememberVoiceChoice === false ? '' : 记住的选择(),
+        durationMs: duration,
+        bytes: size,
+        mime: result.mime,
+        choice: prefs.get().config.rememberVoiceChoice === false ? '' : rememberedChoice(),
         error: '',
         hint: '',
       }))
     }
 
-    function 取消录音() {
-      语音.代 += 1
-      清理录音()
-      语音.片段 = null
-      语音.插入位 = null
-      if (语音.关闭定时) { clearTimeout(语音.关闭定时); 语音.关闭定时 = null }
-      语音.态.set({ ...语音.态.get(), phase: 'idle', seconds: 0, level: 0, hint: '', error: '', text: '', pendingText: '', path: '' })
+    function cancelRecording() {
+      speech.generation += 1
+      cleanupRecording()
+      speech.fragment = null
+      speech.insertIndex = null
+      if (speech.closeTimer) { clearTimeout(speech.closeTimer); speech.closeTimer = null }
+      speech.state.set({ ...speech.state.get(), phase: 'idle', seconds: 0, level: 0, hint: '', error: '', text: '', pendingText: '', path: '' })
     }
 
-    function 关闭语音面板() {
-      语音.代 += 1
-      清理录音()
-      语音.片段 = null
-      语音.插入位 = null
-      if (语音.关闭定时) { clearTimeout(语音.关闭定时); 语音.关闭定时 = null }
-      语音.态.set({ ...语音.态.get(), phase: 'idle', seconds: 0, level: 0, hint: '', error: '', text: '', pendingText: '', path: '' })
+    function closeSpeechPanel() {
+      speech.generation += 1
+      cleanupRecording()
+      speech.fragment = null
+      speech.insertIndex = null
+      if (speech.closeTimer) { clearTimeout(speech.closeTimer); speech.closeTimer = null }
+      speech.state.set({ ...speech.state.get(), phase: 'idle', seconds: 0, level: 0, hint: '', error: '', text: '', pendingText: '', path: '' })
     }
 
     /** 往输入框插文字：先按录音开始时的光标，再按当前光标；都不行就复制到剪贴板。 */
-    function 插入文本(inputActions, 文本) {
-      const 值 = String(文本 == null ? '' : 文本)
-      if (!值) return false
-      const 试 = (位) => {
-        try { return inputActions?.insertText?.(值, 位) === true } catch { return false }
+    function insertText(inputActions, text) {
+      const value = String(text == null ? '' : text)
+      if (!value) return false
+      const attempt = (pos) => {
+        try { return inputActions?.insertText?.(value, pos) === true } catch { return false }
       }
-      if (试(语音.插入位)) return true
-      let 当前 = null
-      try { 当前 = inputActions?.captureInsertion?.() ?? null } catch { 当前 = null }
-      if (试(当前)) return true
-      try { navigator.clipboard?.writeText?.(值) } catch { /* 剪贴板也可能被拒 */ }
+      if (attempt(speech.insertIndex)) return true
+      let current = null
+      try { current = inputActions?.captureInsertion?.() ?? null } catch { current = null }
+      if (attempt(current)) return true
+      try { navigator.clipboard?.writeText?.(value) } catch { /* 剪贴板也可能被拒 */ }
       return false
     }
 
     /** 语音文件附件名：语音-YYYYMMDD-HHMMSS.webm（给人看的、可读的）。 */
-    function 语音附件名(时间, mime) {
-      const 两 = (数) => String(数).padStart(2, '0')
-      const 时刻 = new Date(时间 || Date.now())
-      const 日期 = `${时刻.getFullYear()}${两(时刻.getMonth() + 1)}${两(时刻.getDate())}`
-      const 时钟 = `${两(时刻.getHours())}${两(时刻.getMinutes())}${两(时刻.getSeconds())}`
-      return `语音-${日期}-${时钟}${语音扩展(mime)}`
+    function speechAttachmentName(time, mime) {
+      const pad2 = (count) => String(count).padStart(2, '0')
+      const timestamp = new Date(time || Date.now())
+      const date = `${timestamp.getFullYear()}${pad2(timestamp.getMonth() + 1)}${pad2(timestamp.getDate())}`
+      const clock = `${pad2(timestamp.getHours())}${pad2(timestamp.getMinutes())}${pad2(timestamp.getSeconds())}`
+      return `语音-${date}-${clock}${speechExt(mime)}`
     }
 
     // 浏览器侧的内核会话服务；apply 时拿到上下文后才能解析。
-    let 插件上下文 = null
+    let pluginContext = null
 
     /** 取会话作用域里的 conversation 服务（内核的草稿附件都挂在这里）。 */
-    function 取会话对话(sessionId, 上下文 = 插件上下文) {
+    function fetchSessionConversation(sessionId, context = pluginContext) {
       try {
-        const 会话 = 上下文?.get?.('sessions')
-        if (会话 && typeof 会话.scope === 'function' && sessionId) {
-          const 作用域 = 会话.scope(String(sessionId))
-          const 对话 = 作用域?.get?.('conversation')
-          if (对话) return 对话
+        const session = context?.get?.('sessions')
+        if (session && typeof session.scope === 'function' && sessionId) {
+          const scope = session.scope(String(sessionId))
+          const conversation = scope?.get?.('conversation')
+          if (conversation) return conversation
         }
       } catch { /* 不同版本的内核可能没有 sessions */ }
-      try { return 上下文?.get?.('conversation') ?? null } catch { return null }
+      try { return context?.get?.('conversation') ?? null } catch { return null }
     }
 
     /**
      * 把录音作为「文件」挂到输入框草稿里（内核 ComposerAttachments 支持 file 卡片）。
      * 成功返回 true；任何一步不成立都返回 false，调用方退回「插入路径文字」。
      */
-    function 挂语音附件(inputActions, sessionId, blob, mime, 文件名, 上下文 = 插件上下文) {
+    function attachSpeechAttachment(inputActions, sessionId, blob, mime, fileName, context = pluginContext) {
       try {
         if (!blob || typeof File !== 'function') return false
         if (!inputActions || typeof inputActions.addAttachments !== 'function') return false
-        const 对话 = 取会话对话(sessionId, 上下文)
-        if (!对话 || typeof 对话.createDrafts !== 'function') return false
-        const 文件 = new File([blob], 文件名 || 语音附件名(Date.now(), mime), { type: mime || 'audio/webm' })
-        const 草稿们 = 对话.createDrafts(String(sessionId), [文件], true)
-        const 标识们 = Array.isArray(草稿们) ? 草稿们.map((项) => 项 && 项.id).filter(Boolean) : []
-        if (标识们.length === 0) return false
-        return inputActions.addAttachments(标识们) === true
-      } catch (错误) {
-        try { console.warn('[dsh-fish-service] 语音附件失败', 错误) } catch { /* 忽略 */ }
+        const conversation = fetchSessionConversation(sessionId, context)
+        if (!conversation || typeof conversation.createDrafts !== 'function') return false
+        const file = new File([blob], fileName || speechAttachmentName(Date.now(), mime), { type: mime || 'audio/webm' })
+        const drafts = conversation.createDrafts(String(sessionId), [file], true)
+        const ids = Array.isArray(drafts) ? drafts.map((item) => item && item.id).filter(Boolean) : []
+        if (ids.length === 0) return false
+        return inputActions.addAttachments(ids) === true
+      } catch (error) {
+        try { console.warn('[dsh-fish-service] 语音附件失败', error) } catch { /* 忽略 */ }
         return false
       }
     }
 
-    function 语音扩展(mime) {
-      const 类型 = String(mime || '').toLowerCase()
-      if (类型.includes('wav')) return '.wav'
-      if (类型.includes('ogg') || 类型.includes('opus')) return '.ogg'
-      if (类型.includes('mp4') || 类型.includes('m4a')) return '.m4a'
+    function speechExt(mime) {
+      const type = String(mime || '').toLowerCase()
+      if (type.includes('wav')) return '.wav'
+      if (type.includes('ogg') || type.includes('opus')) return '.ogg'
+      if (type.includes('mp4') || type.includes('m4a')) return '.m4a'
       return '.webm'
     }
 
-    async function 转文字(inputActions) {
-      const 态 = 语音.态.get()
-      if (!语音.片段 || 态.phase === 'transcribing' || 态.phase === 'uploading') return
-      const 代 = 语音.代
-      const 配置 = 偏好.get().config || {}
-      语音.态.set((旧) => ({ ...旧, phase: 'transcribing', error: '', hint: '' }))
-      const 表单 = new FormData()
-      表单.append('file', 语音.片段.blob, `voice${语音扩展(语音.片段.mime)}`)
-      表单.append('durationMs', String(语音.片段.durationMs || 0))
-      表单.append('language', 配置.asrLanguage || 'auto')
-      const r = await postForm('/transcribe-upload', 表单)
-      if (代 !== 语音.代) return
+    async function toText(inputActions) {
+      const state = speech.state.get()
+      if (!speech.fragment || state.phase === 'transcribing' || state.phase === 'uploading') return
+      const generation = speech.generation
+      const config = prefs.get().config || {}
+      speech.state.set((prev) => ({ ...prev, phase: 'transcribing', error: '', hint: '' }))
+      const form = new FormData()
+      form.append('file', speech.fragment.blob, `voice${speechExt(speech.fragment.mime)}`)
+      form.append('durationMs', String(speech.fragment.durationMs || 0))
+      form.append('language', config.asrLanguage || 'auto')
+      const r = await postForm('/transcribe-upload', form)
+      if (generation !== speech.generation) return
       if (!r || !r.ok) {
-        语音.态.set((旧) => ({
-          ...旧,
+        speech.state.set((prev) => ({
+          ...prev,
           phase: 'choose',
-          error: 补设备提示((r && r.hint) || '转写失败，请稍后重试。', 旧.micLabel),
+          error: padDevicePrompt((r && r.hint) || '转写失败，请稍后重试。', prev.micLabel),
         }))
         return
       }
-      const 文本 = String(r.text || '').trim()
-      if (!文本) {
-        语音.态.set((旧) => ({
-          ...旧,
+      const text = String(r.text || '').trim()
+      if (!text) {
+        speech.state.set((prev) => ({
+          ...prev,
           phase: 'choose',
-          error: 补设备提示('没有识别出文字，可以重新录制。', 旧.micLabel),
+          error: padDevicePrompt('没有识别出文字，可以重新录制。', prev.micLabel),
         }))
         return
       }
-      const 插入成功 = 插入文本(inputActions, 文本)
-      记住选择('text')
+      const insertSuccess = insertText(inputActions, text)
+      rememberChoice('text')
       // 文字已经在输入框里了，面板不必再弹出来。
-      if (插入成功) {
-        关闭语音面板()
+      if (insertSuccess) {
+        closeSpeechPanel()
         return
       }
-      语音.片段 = null
-      语音.插入位 = null
-      语音.态.set((旧) => ({
-        ...旧,
+      speech.fragment = null
+      speech.insertIndex = null
+      speech.state.set((prev) => ({
+        ...prev,
         phase: 'done',
-        text: 文本,
-        pendingText: 文本,
+        text: text,
+        pendingText: text,
         elapsedMs: Number(r.ms) || 0,
         choice: 'text',
         error: '',
-        hint: `已转写 ${文本.length} 字，但没能插进输入框；文字已复制到剪贴板，也可点「重试插入」。`,
+        hint: `已转写 ${text.length} 字，但没能插进输入框；文字已复制到剪贴板，也可点「重试插入」。`,
       }))
-      安排关闭(12000)
+      scheduleClose(12000)
     }
 
-    async function 保留语音(inputActions, sessionId) {
-      if (!语音.片段) return
-      const 代 = 语音.代
-      const 目标会话 = String(sessionId || 语音.态.get().sessionId || '')
-      语音.态.set((旧) => ({ ...旧, phase: 'uploading', error: '', hint: '' }))
-      const 表单 = new FormData()
-      表单.append('file', 语音.片段.blob, `voice${语音扩展(语音.片段.mime)}`)
-      表单.append('durationMs', String(语音.片段.durationMs || 0))
-      const r = await postForm('/voice-upload', 表单)
-      if (代 !== 语音.代) return
+    async function keepSpeech(inputActions, sessionId) {
+      if (!speech.fragment) return
+      const generation = speech.generation
+      const targetSession = String(sessionId || speech.state.get().sessionId || '')
+      speech.state.set((prev) => ({ ...prev, phase: 'uploading', error: '', hint: '' }))
+      const form = new FormData()
+      form.append('file', speech.fragment.blob, `voice${speechExt(speech.fragment.mime)}`)
+      form.append('durationMs', String(speech.fragment.durationMs || 0))
+      const r = await postForm('/voice-upload', form)
+      if (generation !== speech.generation) return
       if (!r || !r.ok) {
-        语音.态.set((旧) => ({ ...旧, phase: 'choose', error: (r && r.hint) || '音频保存失败，请稍后重试。' }))
+        speech.state.set((prev) => ({ ...prev, phase: 'choose', error: (r && r.hint) || '音频保存失败，请稍后重试。' }))
         return
       }
-      const 路径 = String(r.path || '')
-      const 文件名 = 语音附件名(Date.now(), 语音.片段.mime)
-      const 附件成功 = 挂语音附件(inputActions, 目标会话, 语音.片段.blob, 语音.片段.mime, 文件名)
-      const 插入成功 = 附件成功 ? false : 插入文本(inputActions, `（语音附件：${路径}）\n`)
-      记住选择('audio')
+      const path = String(r.path || '')
+      const fileName = speechAttachmentName(Date.now(), speech.fragment.mime)
+      const attachmentSuccess = attachSpeechAttachment(inputActions, targetSession, speech.fragment.blob, speech.fragment.mime, fileName)
+      const insertSuccess = attachmentSuccess ? false : insertText(inputActions, `（语音附件：${path}）\n`)
+      rememberChoice('audio')
       // 附件卡片已经出现在输入框里，面板不必再弹。
-      if (附件成功) {
-        关闭语音面板()
+      if (attachmentSuccess) {
+        closeSpeechPanel()
         return
       }
-      语音.插入位 = null
-      语音.态.set((旧) => ({
-        ...旧,
+      speech.insertIndex = null
+      speech.state.set((prev) => ({
+        ...prev,
         phase: 'done',
-        path: 路径,
+        path: path,
         text: '',
         pendingText: '',
         choice: 'audio',
         error: '',
-        hint: 插入成功
-          ? `录音已保存在本机：${路径}\n没能加到输入框附件，已把保存位置插入输入框（可删除）。`
-          : `录音已保存在本机：${路径}\n保存位置未能插入输入框，已复制到剪贴板。`,
+        hint: insertSuccess
+          ? `录音已保存在本机：${path}\n没能加到输入框附件，已把保存位置插入输入框（可删除）。`
+          : `录音已保存在本机：${path}\n保存位置未能插入输入框，已复制到剪贴板。`,
       }))
-      安排关闭(12000)
+      scheduleClose(12000)
     }
 
     // ---------------- 语音输入：麦克风按钮 ----------------
 
-    function 麦克风按钮(props) {
+    function micButton(props) {
       const { sessionId, inputActions } = props || {}
-      const 态 = useStore(语音.态)
-      const 偏好态 = useStore(偏好)
-      const 语音开 = 界面开关开(偏好态.config, '语音识别')
+      const state = useStore(speech.state)
+      const prefsState = useStore(prefs)
+      const speechOn = uiSwitchOn(prefsState.config, 'speechRecognition')
 
       React.useEffect(() => {
-        保活(true)
-        if (!偏好.get().载入) void 载入偏好()
-        return () => 保活(false)
+        keepAlive(true)
+        if (!prefs.get().load) void loadPrefs()
+        return () => keepAlive(false)
       }, [])
 
       // 本地识图的最后一步：按钮把「文件名 + 描述」入队，这里负责插进草稿。
       // 拦截组件不依赖 inputActions 是否透传，走模块级队列 + input.right 组件消费；
       // 插入失败沿用 插入文本 的剪贴板兜底，并回填一行提示。
-      const 视觉待办 = useStore(视觉通知)
+      const visualTodo = useStore(visualNotice)
       React.useEffect(() => {
         if (!sessionId || !inputActions) return
-        const 结果 = 消费待插入(sessionId, (文本) => 插入文本(inputActions, 文本))
-        if (结果.失败 > 0) 写识图提示(sessionId, '识图结果没能插入输入框，已复制到剪贴板。')
-      }, [视觉待办, sessionId, inputActions])
+        const result = consumePendingInsert(sessionId, (text) => insertText(inputActions, text))
+        if (result.fail > 0) writeVisionPrompt(sessionId, '识图结果没能插入输入框，已复制到剪贴板。')
+      }, [visualTodo, sessionId, inputActions])
       // 通知偶尔丢失（组件刚挂载 / 切换会话）时再兜一次底。
       React.useEffect(() => {
         if (!sessionId || !inputActions) return undefined
-        const 定时 = setInterval(() => {
-          if (!待插入.length) return
-          const 结果 = 消费待插入(sessionId, (文本) => 插入文本(inputActions, 文本))
-          if (结果.失败 > 0) 写识图提示(sessionId, '识图结果没能插入输入框，已复制到剪贴板。')
+        const timer = setInterval(() => {
+          if (!pendingInsert.length) return
+          const result = consumePendingInsert(sessionId, (text) => insertText(inputActions, text))
+          if (result.fail > 0) writeVisionPrompt(sessionId, '识图结果没能插入输入框，已复制到剪贴板。')
         }, 1500)
-        return () => clearInterval(定时)
+        return () => clearInterval(timer)
       }, [sessionId, inputActions])
 
       // 总开关关掉时立刻停掉正在进行的录音并收起面板；框选朗读/翻译不受影响。
       React.useEffect(() => {
-        if (语音开) return
-        const 现 = 语音.态.get()
-        if (现.phase === 'recording') void 停止录音()
-        else if (现.phase !== 'idle') 取消录音()
-        关闭语音面板()
-      }, [语音开])
+        if (speechOn) return
+        const present = speech.state.get()
+        if (present.phase === 'recording') void stopRecording()
+        else if (present.phase !== 'idle') cancelRecording()
+        closeSpeechPanel()
+      }, [speechOn])
 
-      if (!语音开) return null
+      if (!speechOn) return null
 
-      const 本会话 = !态.sessionId || !sessionId || 态.sessionId === sessionId
-      const 录音中 = 本会话 && 态.phase === 'recording'
-      const 请求中 = 本会话 && 态.phase === 'requesting'
-      const 离线 = 偏好态.在线 === false
+      const thisSession = !state.sessionId || !sessionId || state.sessionId === sessionId
+      const recording = thisSession && state.phase === 'recording'
+      const requesting = thisSession && state.phase === 'requesting'
+      const offline = prefsState.online === false
 
-      const 点 = () => {
-        if (录音中) { void 停止录音(); return }
-        if (态.phase === 'recording') return
-        if (态.phase === 'idle' || 态.phase === 'error') { void 开始录音({ sessionId, inputActions }); return }
+      const tap = () => {
+        if (recording) { void stopRecording(); return }
+        if (state.phase === 'recording') return
+        if (state.phase === 'idle' || state.phase === 'error') { void startRecording({ sessionId, inputActions }); return }
         // 面板开着时再点麦克风 = 关掉面板（录音中除外，上面已处理）。
-        if (!录音中) 关闭语音面板()
+        if (!recording) closeSpeechPanel()
       }
 
-      const 标题 = 录音中 ? `正在录音 ${格式时间(态.seconds)}，点击结束`
-        : 请求中 ? '正在请求麦克风…'
-          : 离线 ? '语音输入（本地 AI 未启动）'
+      const title = recording ? `正在录音 ${formatTime(state.seconds)}，点击结束`
+        : requesting ? '正在请求麦克风…'
+          : offline ? '语音输入（本地 AI 未启动）'
             : '语音输入：点击开始录音'
 
       return h(React.Fragment, null,
         h('button', {
           type: 'button',
           className: 'fish-iconbtn',
-          'data-rec': 录音中 ? '1' : undefined,
-          title: 标题,
-          'aria-label': 标题,
-          'aria-pressed': 录音中 ? 'true' : 'false',
+          'data-rec': recording ? '1' : undefined,
+          title: title,
+          'aria-label': title,
+          'aria-pressed': recording ? 'true' : 'false',
           // 别让点击按钮夺走编辑器焦点：captureInsertion() 要拿的是当前草稿选区。
-          onMouseDown: (事件) => { try { 事件.preventDefault() } catch { /* 忽略 */ } },
-          onClick: 点,
+          onMouseDown: (event) => { try { event.preventDefault() } catch { /* 忽略 */ } },
+          onClick: tap,
         },
-          录音中 ? h('span', { className: 'fish-dot' }) : 请求中 ? 图标转圈() : 图标麦克风(),
-          录音中 ? h('span', { style: { fontSize: 11, fontVariantNumeric: 'tabular-nums' } }, 格式时间(态.seconds)) : null))
+          recording ? h('span', { className: 'fish-dot' }) : requesting ? iconSpinner() : iconMic(),
+          recording ? h('span', { style: { fontSize: 11, fontVariantNumeric: 'tabular-nums' } }, formatTime(state.seconds)) : null))
     }
 
     // ---------------- 本地识图：输入框旁的独立按钮 ----------------
     // 点按钮选图片，在本机识别成文字后按顺序插入输入框；
     // 图片不进草稿、不上传、不进模型。官方附件栏保持原样，不注册、不顶替。
 
-    function 识图扩展(mime) {
-      const 类型 = String(mime || '').toLowerCase()
-      if (类型.includes('png')) return '.png'
-      if (类型.includes('webp')) return '.webp'
-      if (类型.includes('gif')) return '.gif'
-      if (类型.includes('bmp')) return '.bmp'
+    function visionExt(mime) {
+      const type = String(mime || '').toLowerCase()
+      if (type.includes('png')) return '.png'
+      if (type.includes('webp')) return '.webp'
+      if (type.includes('gif')) return '.gif'
+      if (type.includes('bmp')) return '.bmp'
       return '.jpg'
     }
 
-    const 图片扩展们 = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp']
+    const imageExts = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp']
 
     /** 浏览器 File 是不是图片：先看 MIME，再看扩展名（有些来源的 type 是空的）。 */
-    function 是图片文件(文件) {
-      if (!文件) return false
-      const 类型 = String(文件.type || '').toLowerCase()
-      if (类型.startsWith('image/')) return true
-      const 名 = String(文件.name || '').toLowerCase()
-      return 图片扩展们.some((扩展) => 名.endsWith(扩展))
+    function isImageFile(file) {
+      if (!file) return false
+      const type = String(file.type || '').toLowerCase()
+      if (type.startsWith('image/')) return true
+      const name = String(file.name || '').toLowerCase()
+      return imageExts.some((ext) => name.endsWith(ext))
     }
 
     /** 偏好里的「本地识图」是否开着（默认开）。 */
-    function 本地识图开(配置) {
-      return !(配置 && 配置.localDescribe === false)
+    function localVisionOn(config) {
+      return !(config && config.localDescribe === false)
     }
 
     // 界面注入开关：设置页「界面」分区的四个勾选；配置里明确关闭才关，旧配置缺字段按开。
-    const 界面开关键 = {
-      语音识别: 'uiVoiceInput',
-      本地识图: 'uiVision',
-      性能监控: 'uiMetrics',
-      自动朗读: 'uiAutoRead',
+    const uiSwitchKey = {
+      speechRecognition: 'uiVoiceInput',
+      localVision: 'uiVision',
+      performanceMonitor: 'uiMetrics',
+      autoRead: 'uiAutoRead',
     }
 
-    /** 某个界面注入功能是否开着（名称可写中文名或配置键；默认开）。 */
-    function 界面开关开(配置, 名称) {
-      const 键 = 界面开关键[名称] || 名称
-      const 值 = 配置 && typeof 配置 === 'object' ? 配置[键] : undefined
-      if (值 === false || 值 === 'false' || 值 === 0 || 值 === '0') return false
+    /** 某个界面注入功能是否开着（名称写组件名或配置键；默认开）。 */
+    function uiSwitchOn(config, label) {
+      const key = uiSwitchKey[label] || label
+      const value = config && typeof config === 'object' ? config[key] : undefined
+      if (value === false || value === 'false' || value === 0 || value === '0') return false
       return true
     }
 
     // 识图档位：与服务端 lib/vision-presets.js 对齐；客户端只用它做下拉和参数兜底。
-    const 识图档位们 = [
-      { id: 'brief', 名: '简短' },
-      { id: 'standard', 名: '标准' },
-      { id: 'detailed', 名: '详细' },
-      { id: 'text', 名: '只看文字' },
+    const visionPresets = [
+      { id: 'brief', name: '简短' },
+      { id: 'standard', name: '标准' },
+      { id: 'detailed', name: '详细' },
+      { id: 'text', name: '只看文字' },
     ]
-    const 识图档位选项 = 识图档位们.map((档) => ({ value: 档.id, label: 档.名 }))
+    const visionPresetOption = visionPresets.map((preset) => ({ value: preset.id, label: preset.name }))
 
     /** 把档位 id 或中文名收成 id；认不出来返回空串，由调用方回落默认档。 */
-    function 规范识图档位(值) {
-      const 文 = String(值 == null ? '' : 值).trim().toLowerCase()
-      if (!文) return ''
-      const 按id = 识图档位们.find((档) => 档.id === 文)
-      if (按id) return 按id.id
-      const 按名 = 识图档位们.find((档) => 档.名 === 文)
-      return 按名 ? 按名.id : ''
+    function normalizeVisionPreset(value) {
+      const text = String(value == null ? '' : value).trim().toLowerCase()
+      if (!text) return ''
+      const byId = visionPresets.find((preset) => preset.id === text)
+      if (byId) return byId.id
+      const byName = visionPresets.find((preset) => preset.name === text)
+      return byName ? byName.id : ''
     }
 
     /** 点了识图按钮却不能识别时给一句短提示；能识别返回空串。 */
-    function 识图阻塞原因(状态) {
-      if (!本地识图开(状态 && 状态.config ? 状态.config : {})) return '本地识图已关闭，可在本地 AI 设置里打开。'
-      if (状态 && 状态.载入 === true && 状态.在线 === false) return '本地 AI 未连接，请先启动。'
+    function visionBlockReason(status) {
+      if (!localVisionOn(status && status.config ? status.config : {})) return '本地识图已关闭，可在本地 AI 设置里打开。'
+      if (status && status.load === true && status.online === false) return '本地 AI 未连接，请先启动。'
       return ''
     }
 
     /** 拼一段插进输入框的文字：文件名 + 描述；描述为空返回空串。 */
-    function 拼图片描述(文件名, 描述) {
-      const 名 = String(文件名 || '').trim() || '图片'
-      const 文 = String(描述 == null ? '' : 描述).trim()
-      return 文 ? `［图片：${名}］\n${文}\n` : ''
+    function composeImageDesc(fileName, desc) {
+      const name = String(fileName || '').trim() || '图片'
+      const text = String(desc == null ? '' : desc).trim()
+      return text ? `［图片：${name}］\n${text}\n` : ''
     }
 
     // 待插入队列：识图按钮识别后先入队（{sessionId, text, at}），由输入框右侧组件消费插入。
-    const 待插入 = []
-    const 待插入上限 = 8
+    const pendingInsert = []
+    const pendingInsertLimit = 8
     // 入队后通知 input.right 组件来消费（订阅计数）。
-    const 视觉通知 = 造store(0)
+    const visualNotice = makeStore(0)
     // 输入框右侧组件回填的提示（例如插入失败）。
-    const 识图提示 = 造store({ 会话: '', 文案: '' })
-    let 识图提示代 = 0
-    function 写识图提示(会话, 文案, 毫秒 = 8000) {
-      const 代 = (识图提示代 += 1)
-      识图提示.set({ 会话: String(会话 || ''), 文案: String(文案 || '') })
-      if (!文案) return
+    const visionPrompt = makeStore({ session: '', copy: '' })
+    let visionPromptGeneration = 0
+    function writeVisionPrompt(session, copy, ms = 8000) {
+      const generation = (visionPromptGeneration += 1)
+      visionPrompt.set({ session: String(session || ''), copy: String(copy || '') })
+      if (!copy) return
       setTimeout(() => {
-        if (代 === 识图提示代) 识图提示.set({ 会话: '', 文案: '' })
-      }, Math.max(1200, 毫秒))
+        if (generation === visionPromptGeneration) visionPrompt.set({ session: '', copy: '' })
+      }, Math.max(1200, ms))
     }
 
-    function 入队待插入(项) {
-      const 文本 = String((项 && 项.text) || '')
-      if (!文本) return false
-      if (待插入.length >= 待插入上限) 待插入.shift()
-      待插入.push({ sessionId: String((项 && 项.sessionId) || ''), text: 文本, at: Date.now() })
+    function enqueuePendingInsert(item) {
+      const text = String((item && item.text) || '')
+      if (!text) return false
+      if (pendingInsert.length >= pendingInsertLimit) pendingInsert.shift()
+      pendingInsert.push({ sessionId: String((item && item.sessionId) || ''), text: text, at: Date.now() })
       return true
     }
 
     /** 取走属于本会话（或没标会话）的待插入文字；取出即删除。 */
-    function 取待插入(sessionId) {
-      const 出 = []
-      for (let 序 = 待插入.length - 1; 序 >= 0; 序 -= 1) {
-        const 项 = 待插入[序]
-        if (项.sessionId && sessionId && 项.sessionId !== sessionId) continue
-        出.unshift(项.text)
-        待插入.splice(序, 1)
+    function fetchPendingInsert(sessionId) {
+      const output = []
+      for (let order = pendingInsert.length - 1; order >= 0; order -= 1) {
+        const item = pendingInsert[order]
+        if (item.sessionId && sessionId && item.sessionId !== sessionId) continue
+        output.unshift(item.text)
+        pendingInsert.splice(order, 1)
       }
-      return 出
+      return output
     }
 
     /** 消费队列：逐条交给插入函数；失败的文字已在插入函数里走剪贴板兜底。 */
-    function 消费待插入(sessionId, 插入) {
-      let 成功 = 0
-      let 失败 = 0
-      for (const 文本 of 取待插入(sessionId)) {
-        let 好 = false
-        try { 好 = 插入(文本) === true } catch { 好 = false }
-        if (好) 成功 += 1
-        else 失败 += 1
+    function consumePendingInsert(sessionId, insert) {
+      let success = 0
+      let fail = 0
+      for (const text of fetchPendingInsert(sessionId)) {
+        let ok = false
+        try { ok = insert(text) === true } catch { ok = false }
+        if (ok) success += 1
+        else fail += 1
       }
-      return { 成功, 失败 }
+      return { success, fail }
     }
 
     /** 认一张图：把字节交给 /describe-upload；会话识图用单独的提示词，不传档位。 */
-    async function 本地识别一张(图) {
-      const 表单 = new FormData()
-      表单.append('file', new Blob([图.字节], { type: 图.类型 || 'application/octet-stream' }), 图.名 || `image${识图扩展(图.类型)}`)
-      表单.append('mode', 'caption')
-      表单.append('scope', 'session')
-      const 结果 = await postForm('/describe-upload', 表单)
-      const 文字 = String((结果 && 结果.text) || '').trim()
-      if (!结果 || !结果.ok || !文字) {
-        return { ok: false, hint: String((结果 && 结果.hint) || '识图失败') }
+    async function localRecognizeOne(image) {
+      const form = new FormData()
+      form.append('file', new Blob([image.byte], { type: image.type || 'application/octet-stream' }), image.name || `image${visionExt(image.type)}`)
+      form.append('mode', 'caption')
+      form.append('scope', 'session')
+      const result = await postForm('/describe-upload', form)
+      const text = String((result && result.text) || '').trim()
+      if (!result || !result.ok || !text) {
+        return { ok: false, hint: String((result && result.hint) || '识图失败') }
       }
-      return { ok: true, 文字 }
+      return { ok: true, text }
     }
 
     // ---------------- 本地识图：输入框旁的独立按钮 ----------------
     // 点按钮选图片；图片只在本机识别，不进草稿、不上传、不进模型。
     // 每张图的「文件名 + 描述」按顺序进待插入队列，由输入框右侧组件（麦克风）统一消费插入。
 
-    function 本地识图按钮(props) {
+    function localVisionButton(props) {
       const { sessionId } = props || {}
-      const 偏好态 = useStore(偏好)
-      const 识图开 = 界面开关开(偏好态.config, '本地识图')
-      const 提示态 = useStore(识图提示)
-      const [忙, 设忙] = React.useState(false)
-      const [说, 设说] = React.useState('')
-      const 文件框 = React.useRef(null)
-      const 计时 = React.useRef(null)
+      const prefsState = useStore(prefs)
+      const visionOn = uiSwitchOn(prefsState.config, 'localVision')
+      const promptState = useStore(visionPrompt)
+      const [busy, setBusy] = React.useState(false)
+      const [say, setSay] = React.useState('')
+      const fileInput = React.useRef(null)
+      const tick = React.useRef(null)
 
       React.useEffect(() => {
-        载入偏好()
-        return () => { if (计时.current) clearTimeout(计时.current) }
+        loadPrefs()
+        return () => { if (tick.current) clearTimeout(tick.current) }
       }, [])
 
-      if (!识图开) return null
+      if (!visionOn) return null
 
-      const 告诉 = (文案) => {
-        设说(文案)
-        if (计时.current) clearTimeout(计时.current)
-        if (文案) 计时.current = setTimeout(() => 设说(''), 6000)
+      const tell = (copy) => {
+        setSay(copy)
+        if (tick.current) clearTimeout(tick.current)
+        if (copy) tick.current = setTimeout(() => setSay(''), 6000)
       }
 
-      const 选文件 = () => {
-        try { 文件框.current && 文件框.current.click() } catch { /* 忽略 */ }
+      const pickFile = () => {
+        try { fileInput.current && fileInput.current.click() } catch { /* 忽略 */ }
       }
 
-      const 处理 = async (文件们) => {
-        if (忙) return
-        const 原因 = 识图阻塞原因(偏好态)
-        if (原因) { 告诉(原因); return }
-        if (!sessionId) { 告诉('当前会话还不能插入文字。'); return }
-        const 图们 = Array.from(文件们 || []).filter(是图片文件)
-        if (!图们.length) { 告诉('只支持图片文件。'); return }
-        设忙(true)
-        let 成功 = 0
-        let 失败 = 0
+      const handle = async (files) => {
+        if (busy) return
+        const reason = visionBlockReason(prefsState)
+        if (reason) { tell(reason); return }
+        if (!sessionId) { tell('当前会话还不能插入文字。'); return }
+        const images = Array.from(files || []).filter(isImageFile)
+        if (!images.length) { tell('只支持图片文件。'); return }
+        setBusy(true)
+        let success = 0
+        let fail = 0
         try {
-          for (let 序 = 0; 序 < 图们.length; 序 += 1) {
-            告诉(`正在本地识别…（${序 + 1} / ${图们.length}）`)
+          for (let order = 0; order < images.length; order += 1) {
+            tell(`正在本地识别…（${order + 1} / ${images.length}）`)
             try {
-              const 文件 = 图们[序]
-              const 图 = {
-                字节: await 文件.arrayBuffer(),
-                类型: String(文件.type || ''),
-                名: String(文件.name || '') || `image${识图扩展(文件.type)}`,
+              const file = images[order]
+              const image = {
+                byte: await file.arrayBuffer(),
+                type: String(file.type || ''),
+                name: String(file.name || '') || `image${visionExt(file.type)}`,
               }
-              const 结果 = await 本地识别一张(图)
-              if (!结果.ok) throw new Error(结果.hint || '识图失败')
-              if (!入队待插入({ sessionId, text: 拼图片描述(图.名, 结果.文字) })) throw new Error('入队失败')
-              视觉通知.set((值) => 值 + 1)
-              成功 += 1
+              const result = await localRecognizeOne(image)
+              if (!result.ok) throw new Error(result.hint || '识图失败')
+              if (!enqueuePendingInsert({ sessionId, text: composeImageDesc(image.name, result.text) })) throw new Error('入队失败')
+              visualNotice.set((value) => value + 1)
+              success += 1
             } catch {
-              失败 += 1
+              fail += 1
             }
           }
         } finally {
-          设忙(false)
-          告诉(失败
-            ? (成功 ? `识图完成：${成功} 张成功，${失败} 张失败。` : '识图失败，请稍后再试。')
-            : `已识别 ${成功} 张。`)
+          setBusy(false)
+          tell(fail
+            ? (success ? `识图完成：${success} 张成功，${fail} 张失败。` : '识图失败，请稍后再试。')
+            : `已识别 ${success} 张。`)
         }
       }
 
-      const 提示文 = 提示态.文案 && (!提示态.会话 || !sessionId || 提示态.会话 === sessionId) ? 提示态.文案 : ''
-      const 文案 = 说 || 提示文
-      const 标题 = 忙 ? '正在本地识图…' : '本地识图：选择图片'
+      const promptText = promptState.copy && (!promptState.session || !sessionId || promptState.session === sessionId) ? promptState.copy : ''
+      const copy = say || promptText
+      const title = busy ? '正在本地识图…' : '本地识图：选择图片'
 
       return h(React.Fragment, null,
         h('input', {
-          ref: 文件框,
+          ref: fileInput,
           type: 'file',
           accept: 'image/*',
           multiple: true,
           tabIndex: -1,
           style: { display: 'none' },
-          onChange: (事件) => {
-            const 文件们 = 事件.target.files ? Array.from(事件.target.files) : []
-            事件.target.value = ''
-            if (文件们.length) void 处理(文件们)
+          onChange: (event) => {
+            const files = event.target.files ? Array.from(event.target.files) : []
+            event.target.value = ''
+            if (files.length) void handle(files)
           },
         }),
         h('button', {
           type: 'button',
           className: 'fish-iconbtn',
-          disabled: 忙,
-          title: 标题,
+          disabled: busy,
+          title: title,
           'aria-label': '本地识图',
           // 别抢走输入框的焦点，否则插入位置会跳。
-          onMouseDown: (事件) => { try { 事件.preventDefault() } catch { /* 忽略 */ } },
-          onClick: 选文件,
-        }, 忙 ? 图标转圈() : 图标图片()),
-        文案 ? h('div', { className: 'fish-vision-toast', role: 'status' }, 文案) : null)
+          onMouseDown: (event) => { try { event.preventDefault() } catch { /* 忽略 */ } },
+          onClick: pickFile,
+        }, busy ? iconSpinner() : iconImage()),
+        copy ? h('div', { className: 'fish-vision-toast', role: 'status' }, copy) : null)
     }
 
-    function 格式时间(秒数) {
-      const 总 = Math.max(0, Math.trunc(Number(秒数) || 0))
-      const 分 = Math.floor(总 / 60)
-      const 秒 = 总 % 60
-      return `${分}:${String(秒).padStart(2, '0')}`
+    function formatTime(secondsCount) {
+      const total = Math.max(0, Math.trunc(Number(secondsCount) || 0))
+      const minutes = Math.floor(total / 60)
+      const seconds = total % 60
+      return `${minutes}:${String(seconds).padStart(2, '0')}`
     }
 
     // ---------------- 语音输入：三选一面板（composer overlay） ----------------
 
-    function 波形({ 电平, 录音中 }) {
-      const 条 = []
+    function waveform({ level, recording }) {
+      const entry = []
       for (let i = 0; i < 18; i++) {
-        const 起伏 = 0.35 + ((i * 37) % 10) / 14
-        const 高 = 3 + Math.min(1, (录音中 ? 电平 : 0) * 起伏) * 19
-        条.push(h('i', { key: i, style: { height: `${Math.max(3, 高)}px` } }))
+        const wobble = 0.35 + ((i * 37) % 10) / 14
+        const high = 3 + Math.min(1, (recording ? level : 0) * wobble) * 19
+        entry.push(h('i', { key: i, style: { height: `${Math.max(3, high)}px` } }))
       }
-      return h('span', { className: 'fish-wave', 'aria-hidden': true }, 条)
+      return h('span', { className: 'fish-wave', 'aria-hidden': true }, entry)
     }
 
-    function 语音面板(props) {
+    function speechPanel(props) {
       const { sessionId, inputActions } = props || {}
-      const 态 = useStore(语音.态)
-      const 偏好态 = useStore(偏好)
-      const 语音开 = 界面开关开(偏好态.config, '语音识别')
+      const state = useStore(speech.state)
+      const prefsState = useStore(prefs)
+      const speechOn = uiSwitchOn(prefsState.config, 'speechRecognition')
 
       React.useEffect(() => {
-        保活(true)
+        keepAlive(true)
         return () => {
-          保活(false)
+          keepAlive(false)
           // 切换会话/卸载输入框时别把录音丢在后台跑（最多能录 5 分钟）。
-          const 现 = 语音.态.get()
-          if (现.phase === 'recording' && (!sessionId || 现.sessionId === sessionId)) 取消录音()
+          const present = speech.state.get()
+          if (present.phase === 'recording' && (!sessionId || present.sessionId === sessionId)) cancelRecording()
         }
       }, [sessionId])
 
       // 总开关关掉时面板不再出现，正在录的音也一并停掉。
       React.useEffect(() => {
-        if (语音开) return
-        const 现 = 语音.态.get()
-        if (现.phase === 'recording') void 停止录音()
-        关闭语音面板()
-      }, [语音开])
+        if (speechOn) return
+        const present = speech.state.get()
+        if (present.phase === 'recording') void stopRecording()
+        closeSpeechPanel()
+      }, [speechOn])
 
-      if (!语音开) return null
+      if (!speechOn) return null
 
       // 录音中没有 sessionId 也要显示（会话说变就变），面板只服务当前会话。
-      if (态.phase === 'idle') return null
-      if (态.sessionId && sessionId && 态.sessionId !== sessionId) return null
+      if (state.phase === 'idle') return null
+      if (state.sessionId && sessionId && state.sessionId !== sessionId) return null
 
-      const 记住 = 偏好.get().config.rememberVoiceChoice !== false ? 记住的选择() : ''
-      const 高亮 = (选择) => (态.choice || 记住) === 选择
-      const 忙碌 = 态.phase === 'uploading' || 态.phase === 'transcribing'
-      const 可取消 = 态.phase !== 'recording' && !忙碌
+      const remember = prefs.get().config.rememberVoiceChoice !== false ? rememberedChoice() : ''
+      const highlight = (select) => (state.choice || remember) === select
+      const busy = state.phase === 'uploading' || state.phase === 'transcribing'
+      const cancellable = state.phase !== 'recording' && !busy
 
-      const 标题 = 态.phase === 'requesting' ? '正在请求麦克风…'
-        : 态.phase === 'recording' ? '正在录音'
-          : 态.phase === 'choose' ? `录音已完成（${格式时间(Math.round((态.durationMs || 0) / 1000))}）`
-            : 态.phase === 'transcribing' ? '正在转写…'
-              : 态.phase === 'uploading' ? '正在保存录音…'
-                : 态.phase === 'done' ? '完成'
+      const title = state.phase === 'requesting' ? '正在请求麦克风…'
+        : state.phase === 'recording' ? '正在录音'
+          : state.phase === 'choose' ? `录音已完成（${formatTime(Math.round((state.durationMs || 0) / 1000))}）`
+            : state.phase === 'transcribing' ? '正在转写…'
+              : state.phase === 'uploading' ? '正在保存录音…'
+                : state.phase === 'done' ? '完成'
                   : '语音输入'
 
-      const 行 = []
+      const line = []
 
-      if (态.phase === 'requesting') {
-        行.push(h('div', { key: 'req', className: 'fish-panel-dim' }, '浏览器会询问是否允许使用麦克风，允许后开始录音。'))
+      if (state.phase === 'requesting') {
+        line.push(h('div', { key: 'req', className: 'fish-panel-dim' }, '浏览器会询问是否允许使用麦克风，允许后开始录音。'))
       }
 
-      if (态.phase === 'recording') {
-        行.push(h('div', { key: 'rec', style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
+      if (state.phase === 'recording') {
+        line.push(h('div', { key: 'rec', style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
           h('span', { className: 'fish-dot' }),
-          h('span', { style: { fontVariantNumeric: 'tabular-nums', fontWeight: 600 } }, 格式时间(态.seconds)),
-          h(波形, { 电平: 态.level, 录音中: true }),
+          h('span', { style: { fontVariantNumeric: 'tabular-nums', fontWeight: 600 } }, formatTime(state.seconds)),
+          h(waveform, { level: state.level, recording: true }),
           h('span', { className: 'fish-panel-dim' }, '录音中｜最长 5 分钟')))
-        行.push(h('div', { key: 'mic', className: 'fish-panel-dim', style: { marginTop: 4 } },
-          `音量 ${Math.min(100, Math.round((态.level || 0) * 100))}%`
-            + (态.micLabel ? `｜麦克风：${态.micLabel}` : '')
-            + ((态.level || 0) < 0.01 && (态.seconds || 0) > 1 ? '（几乎没有声音，请检查麦克风）' : '')))
-        if (态.hint) {
-          行.push(h('div', { key: 'mic-hint', className: 'fish-panel-dim', style: { marginTop: 4 } }, 态.hint))
+        line.push(h('div', { key: 'mic', className: 'fish-panel-dim', style: { marginTop: 4 } },
+          `音量 ${Math.min(100, Math.round((state.level || 0) * 100))}%`
+            + (state.micLabel ? `｜麦克风：${state.micLabel}` : '')
+            + ((state.level || 0) < 0.01 && (state.seconds || 0) > 1 ? '（几乎没有声音，请检查麦克风）' : '')))
+        if (state.hint) {
+          line.push(h('div', { key: 'mic-hint', className: 'fish-panel-dim', style: { marginTop: 4 } }, state.hint))
         }
-        行.push(h('div', { key: 'acts', className: 'fish-panel-row' },
-          h('button', { type: 'button', className: 'fish-btn', 'data-primary': '1', onClick: () => void 停止录音() }, '停止并选择'),
-          h('button', { type: 'button', className: 'fish-btn', onClick: 取消录音 }, '取消录音')))
+        line.push(h('div', { key: 'acts', className: 'fish-panel-row' },
+          h('button', { type: 'button', className: 'fish-btn', 'data-primary': '1', onClick: () => void stopRecording() }, '停止并选择'),
+          h('button', { type: 'button', className: 'fish-btn', onClick: cancelRecording }, '取消录音')))
       }
 
-      if (态.phase === 'choose') {
-        行.push(h('div', { key: 'tip', className: 'fish-panel-dim' }, '请选择这段录音的用法。'))
-        行.push(h('div', { key: 'choose', className: 'fish-panel-row' },
+      if (state.phase === 'choose') {
+        line.push(h('div', { key: 'tip', className: 'fish-panel-dim' }, '请选择这段录音的用法。'))
+        line.push(h('div', { key: 'choose', className: 'fish-panel-row' },
           h('button', {
             type: 'button',
             className: 'fish-btn',
-            'data-primary': 高亮('text') ? '1' : undefined,
-            onClick: () => void 转文字(inputActions),
+            'data-primary': highlight('text') ? '1' : undefined,
+            onClick: () => void toText(inputActions),
           }, '转文字'),
           h('button', {
             type: 'button',
             className: 'fish-btn',
-            'data-primary': 高亮('audio') ? '1' : undefined,
-            onClick: () => void 保留语音(inputActions, sessionId),
+            'data-primary': highlight('audio') ? '1' : undefined,
+            onClick: () => void keepSpeech(inputActions, sessionId),
           }, '作为附件'),
           h('button', {
             type: 'button',
             className: 'fish-btn',
-            'data-primary': 高亮('cancel') ? '1' : undefined,
-            onClick: () => { 记住选择('cancel'); 取消录音() },
+            'data-primary': highlight('cancel') ? '1' : undefined,
+            onClick: () => { rememberChoice('cancel'); cancelRecording() },
           }, '取消')))
-        行.push(h('div', { key: 'sub', className: 'fish-panel-dim' }, '上次的选择会高亮，但不会自动执行；转成的文字会插入光标处，「作为附件」会把录音作为文件加到输入框。'))
+        line.push(h('div', { key: 'sub', className: 'fish-panel-dim' }, '上次的选择会高亮，但不会自动执行；转成的文字会插入光标处，「作为附件」会把录音作为文件加到输入框。'))
       }
 
-      if (忙碌) {
-        行.push(h('div', { key: 'busy', style: { display: 'flex', alignItems: 'center', gap: 8 } },
-          h('span', { className: 'fish-spin', style: { display: 'inline-flex' } }, 图标转圈()),
-          h('span', null, 态.phase === 'transcribing' ? '正在转写，首次使用需要加载模型，可能要等一会儿…' : '正在保存录音…')))
-        行.push(h('div', { key: 'busy-acts', className: 'fish-panel-row' },
-          h('button', { type: 'button', className: 'fish-btn', onClick: 关闭语音面板 }, '关闭面板（转写继续在后台进行）')))
+      if (busy) {
+        line.push(h('div', { key: 'busy', style: { display: 'flex', alignItems: 'center', gap: 8 } },
+          h('span', { className: 'fish-spin', style: { display: 'inline-flex' } }, iconSpinner()),
+          h('span', null, state.phase === 'transcribing' ? '正在转写，首次使用需要加载模型，可能要等一会儿…' : '正在保存录音…')))
+        line.push(h('div', { key: 'busy-acts', className: 'fish-panel-row' },
+          h('button', { type: 'button', className: 'fish-btn', onClick: closeSpeechPanel }, '关闭面板（转写继续在后台进行）')))
       }
 
-        if (态.phase === 'done') {
-        行.push(h('div', { key: 'hint', className: 'fish-ok', style: { whiteSpace: 'pre-wrap', wordBreak: 'break-all' } }, 态.hint))
-        if (态.pendingText) {
-          行.push(h('div', { key: 'pending', className: 'fish-panel-dim', style: { marginTop: 6, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 110, overflow: 'auto' } }, 态.pendingText))
-          行.push(h('div', { key: 'pending-acts', className: 'fish-panel-row' },
+        if (state.phase === 'done') {
+        line.push(h('div', { key: 'hint', className: 'fish-ok', style: { whiteSpace: 'pre-wrap', wordBreak: 'break-all' } }, state.hint))
+        if (state.pendingText) {
+          line.push(h('div', { key: 'pending', className: 'fish-panel-dim', style: { marginTop: 6, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 110, overflow: 'auto' } }, state.pendingText))
+          line.push(h('div', { key: 'pending-acts', className: 'fish-panel-row' },
             h('button', {
               type: 'button', className: 'fish-btn', 'data-primary': '1',
               onClick: () => {
-                const 成 = 插入文本(inputActions, 态.pendingText)
-                语音.态.set((旧) => ({ ...旧, hint: 成 ? `已插入 ${态.pendingText.length} 字。` : '仍无法插入；文字已复制到剪贴板，请按 Ctrl+V 粘贴。', pendingText: 成 ? '' : 态.pendingText }))
+                const made = insertText(inputActions, state.pendingText)
+                speech.state.set((prev) => ({ ...prev, hint: made ? `已插入 ${state.pendingText.length} 字。` : '仍无法插入；文字已复制到剪贴板，请按 Ctrl+V 粘贴。', pendingText: made ? '' : state.pendingText }))
               },
             }, '重试插入'),
             h('button', {
               type: 'button', className: 'fish-btn',
-              onClick: () => { try { navigator.clipboard?.writeText?.(态.pendingText) } catch { /* 忽略 */ } },
+              onClick: () => { try { navigator.clipboard?.writeText?.(state.pendingText) } catch { /* 忽略 */ } },
             }, '复制文字')))
         }
-        行.push(h('div', { key: 'done-acts', className: 'fish-panel-row' },
-          h('button', { type: 'button', className: 'fish-btn', onClick: 关闭语音面板 }, '关闭')))
+        line.push(h('div', { key: 'done-acts', className: 'fish-panel-row' },
+          h('button', { type: 'button', className: 'fish-btn', onClick: closeSpeechPanel }, '关闭')))
       }
 
-      if (态.phase === 'error') {
-        行.push(h('div', { key: 'err', className: 'fish-err', style: { whiteSpace: 'pre-wrap' } }, 态.error || '未能完成'))
-        行.push(h('div', { key: 'err-acts', className: 'fish-panel-row' },
-          h('button', { type: 'button', className: 'fish-btn', onClick: 关闭语音面板 }, '关闭'),
-          h('button', { type: 'button', className: 'fish-btn', 'data-primary': '1', onClick: () => { 关闭语音面板(); void 开始录音({ sessionId, inputActions }) } }, '重新录')))
+      if (state.phase === 'error') {
+        line.push(h('div', { key: 'err', className: 'fish-err', style: { whiteSpace: 'pre-wrap' } }, state.error || '未能完成'))
+        line.push(h('div', { key: 'err-acts', className: 'fish-panel-row' },
+          h('button', { type: 'button', className: 'fish-btn', onClick: closeSpeechPanel }, '关闭'),
+          h('button', { type: 'button', className: 'fish-btn', 'data-primary': '1', onClick: () => { closeSpeechPanel(); void startRecording({ sessionId, inputActions }) } }, '重新录')))
       }
 
-      if (态.error && 态.phase !== 'error' && !忙碌) {
-        行.push(h('div', { key: 'err2', className: 'fish-err', style: { marginTop: 4 } }, 态.error))
+      if (state.error && state.phase !== 'error' && !busy) {
+        line.push(h('div', { key: 'err2', className: 'fish-err', style: { marginTop: 4 } }, state.error))
       }
 
       return h(React.Fragment, null,
         h('div', { className: 'fish-panel', role: 'dialog', 'aria-label': '语音输入' },
           h('div', { className: 'fish-panel-title' },
-            h('span', { style: { display: 'inline-flex' } }, 态.phase === 'recording' ? h('span', { className: 'fish-dot' }) : 图标麦克风(15)),
-            h('span', null, 标题),
+            h('span', { style: { display: 'inline-flex' } }, state.phase === 'recording' ? h('span', { className: 'fish-dot' }) : iconMic(15)),
+            h('span', null, title),
             h('span', { style: { flex: 1 } }),
-            可取消 ? h('button', {
+            cancellable ? h('button', {
               type: 'button', className: 'fish-iconbtn', title: '关闭', 'aria-label': '关闭',
-              onClick: 关闭语音面板,
+              onClick: closeSpeechPanel,
             }, h('span', { style: { fontSize: 15, lineHeight: 1 } }, '×')) : null),
-          行,
+          line,
           h('div', { className: 'fish-panel-dim', style: { marginTop: 8 } },
-            偏好态.在线 === false
+            prefsState.online === false
               ? '本地 AI 未启动，转写暂不可用，请先启动。'
               : '录音只在本机处理，不联网，也不产生额外费用。')))
     }
 
     // ---------------- 自动朗读开关（输入框左侧） ----------------
 
-    function 自动朗读开关(props) {
-      const 偏好态 = useStore(偏好)
-      const 自动朗读开 = 界面开关开(偏好态.config, '自动朗读')
-      const [忙, 设忙] = React.useState(false)
-      const 会话键 = String(props?.sessionId || '')
-      const 可设置 = 会话键合法(会话键)
+    function autoReadSwitch(props) {
+      const prefsState = useStore(prefs)
+      const autoReadOn = uiSwitchOn(prefsState.config, 'autoRead')
+      const [busy, setBusy] = React.useState(false)
+      const sessionKey = String(props?.sessionId || '')
+      const configurable = validSessionKey(sessionKey)
 
       React.useEffect(() => {
-        保活(true)
-        if (!偏好.get().载入) void 载入偏好()
-        return () => 保活(false)
+        keepAlive(true)
+        if (!prefs.get().load) void loadPrefs()
+        return () => keepAlive(false)
       }, [])
 
-      if (!自动朗读开) return null
+      if (!autoReadOn) return null
 
-      const 开 = 读会话自动朗读(偏好态.config, 会话键)
+      const on = readAutoReadSessions(prefsState.config, sessionKey)
       // 偏好还没读回来时不写：否则空表会把其它会话已有的设置覆盖掉。
-      const 就绪 = 可设置 && 偏好态.载入
-      const 切 = async () => {
-        if (忙 || !就绪) return
-        设忙(true)
-        const 新配置 = 写会话自动朗读(偏好.get().config || {}, 会话键, !开)
-        const r = await post('/save', { config: { autoReadSessions: 新配置.autoReadSessions } })
-        设忙(false)
+      const ready = configurable && prefsState.load
+      const toggle = async () => {
+        if (busy || !ready) return
+        setBusy(true)
+        const nextConfig = writeAutoReadSessions(prefs.get().config || {}, sessionKey, !on)
+        const r = await post('/save', { config: { autoReadSessions: nextConfig.autoReadSessions } })
+        setBusy(false)
         if (r && r.ok) {
-          偏好.set((旧) => ({
-            ...旧,
+          prefs.set((prev) => ({
+            ...prev,
             config: r.config
-              ? { ...(旧.config || {}), ...r.config }
-              : { ...(旧.config || {}), autoReadSessions: 新配置.autoReadSessions },
+              ? { ...(prev.config || {}), ...r.config }
+              : { ...(prev.config || {}), autoReadSessions: nextConfig.autoReadSessions },
           }))
         }
       }
-      const 标题 = !可设置 ? '当前会话暂不支持单独设置自动朗读'
-        : !偏好态.载入 ? '正在读取自动朗读设置…'
-          : 开 ? '本会话自动朗读已开启，点击关闭'
+      const title = !configurable ? '当前会话暂不支持单独设置自动朗读'
+        : !prefsState.load ? '正在读取自动朗读设置…'
+          : on ? '本会话自动朗读已开启，点击关闭'
             : '本会话自动朗读已关闭，点击开启'
 
       return h(React.Fragment, null,
         h('button', {
           type: 'button',
           className: 'fish-iconbtn',
-          'data-on': 开 ? '1' : undefined,
-          title: 标题,
-          'aria-label': 标题,
-          'aria-pressed': 开 ? 'true' : 'false',
-          disabled: 忙 || !就绪,
-          onClick: 切,
-        }, 图标发声(14), h('span', { style: { fontSize: 11.5 } }, 开 ? '自动朗读 开' : '自动朗读 关')))
+          'data-on': on ? '1' : undefined,
+          title: title,
+          'aria-label': title,
+          'aria-pressed': on ? 'true' : 'false',
+          disabled: busy || !ready,
+          onClick: toggle,
+        }, iconSpeak(14), h('span', { style: { fontSize: 11.5 } }, on ? '自动朗读 开' : '自动朗读 关')))
     }
 
     // ================================================================
@@ -2286,7 +2286,7 @@ select.fish-select option:checked {
       },
     }
 
-    const 能力中文 = {
+    const capabilityLabelZh = {
       tts: '文字转语音',
       asr: '语音识别',
       translate: '翻译',
@@ -2296,7 +2296,7 @@ select.fish-select option:checked {
       download: '下载',
       jobs: '任务队列',
     }
-    const 翻译语言下拉 = [
+    const translationLanguageDropdown = [
       { value: 'zh', label: '中文' },
       { value: 'en', label: '英文' },
       { value: 'ja', label: '日文' },
@@ -2304,7 +2304,7 @@ select.fish-select option:checked {
       { value: 'yue', label: '粤语' },
     ]
 
-    const 原因中文 = {
+    const reasonLabelZh = {
       service_down: '本地 AI 未启动',
       model_missing: '模型未下载',
       not_supported: '当前版本不支持',
@@ -2312,7 +2312,7 @@ select.fish-select option:checked {
     }
 
     // 设置页给用户看的字段名；环境变量覆盖提示只显示中文名。
-    const 配置中文 = {
+    const configLabelZh = {
       baseUrl: '服务地址',
       apiVersion: '服务版本',
       requestTimeoutMs: '请求超时',
@@ -2356,15 +2356,15 @@ select.fish-select option:checked {
       fontFamily: 'inherit',
     }
 
-    const 提示 = (文本) => h('div', { style: S.hint }, 文本)
+    const prompt = (text) => h('div', { style: S.hint }, text)
 
     /** 「?」提示控件：文案短了说不清时，鼠标悬浮（或键盘聚焦）展开完整说明。 */
-    const 问号 = (说明) => h('span', {
+    const questionMark = (description) => h('span', {
       style: S.ask,
       role: 'img',
       tabIndex: 0,
-      title: 说明,
-      'aria-label': 说明,
+      title: description,
+      'aria-label': description,
     }, '?')
 
     /**
@@ -2372,1522 +2372,1522 @@ select.fish-select option:checked {
      *   字符串        → 控件下方一行短句；
      *   { 问: '…' }   → 标签后的「?」，悬浮展开。
      */
-    const 行 = (标签, 控件, 说明) => {
-      const 问文 = 说明 && typeof 说明 === 'object' && typeof 说明.问 === 'string' ? 说明.问 : ''
-      const 短句 = typeof 说明 === 'string' ? 说明 : ''
+    const line = (tag, widget, description) => {
+      const askText = description && typeof description === 'object' && typeof description.ask === 'string' ? description.ask : ''
+      const shortSentence = typeof description === 'string' ? description : ''
       return h('div', { style: S.row },
         h('div', { style: S.lab },
-          h('span', null, 标签),
-          问文 ? 问号(问文) : null),
-        h('div', { style: S.ctl }, 控件, 短句 ? 提示(短句) : null))
+          h('span', null, tag),
+          askText ? questionMark(askText) : null),
+        h('div', { style: S.ctl }, widget, shortSentence ? prompt(shortSentence) : null))
     }
 
     /** 可折叠的一块内容：默认收起，标题旁给一行摘要，避免大段内容铺满设置页。 */
-    function 折叠块(props) {
-      const { 摘要, 默认展开 = false, 展开字样 = '展开', 收起字样 = '收起', children } = props || {}
-      const [开, 设开] = React.useState(默认展开)
+    function foldChunk(props) {
+      const { digest, defaultExpand = false, expandLabel = '展开', collapseLabel = '收起', children } = props || {}
+      const [on, setOn] = React.useState(defaultExpand)
       return h('div', null,
         h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
-          h('span', { style: S.dim }, 摘要 || ''),
+          h('span', { style: S.dim }, digest || ''),
           h('span', { style: { flex: 1 } }),
           h('button', {
             type: 'button',
             style: S.link,
-            'aria-expanded': 开 ? 'true' : 'false',
-            onClick: () => 设开(!开),
-          }, 开 ? 收起字样 : 展开字样)),
-        h('div', { style: { display: 开 ? 'block' : 'none', marginTop: 8 } }, children))
+            'aria-expanded': on ? 'true' : 'false',
+            onClick: () => setOn(!on),
+          }, on ? collapseLabel : expandLabel)),
+        h('div', { style: { display: on ? 'block' : 'none', marginTop: 8 } }, children))
     }
 
-    function 输入(值, onChange, 占位 = '', 类型 = 'text') {
+    function input(value, onChange, placeholder = '', type = 'text') {
       return h('input', {
         style: S.input,
-        type: 类型,
-        value: 值 == null ? '' : String(值),
-        placeholder: 占位,
+        type: type,
+        value: value == null ? '' : String(value),
+        placeholder: placeholder,
         onChange: (e) => onChange(e.target.value),
       })
     }
 
-    function 多行(值, onChange, 占位 = '') {
+    function multiline(value, onChange, placeholder = '') {
       return h('textarea', {
         style: S.text,
         rows: 4,
-        value: 值 == null ? '' : String(值),
-        placeholder: 占位,
+        value: value == null ? '' : String(value),
+        placeholder: placeholder,
         onChange: (e) => onChange(e.target.value),
       })
     }
 
-    function 下拉(值, 选项, onChange) {
+    function dropdown(value, option, onChange) {
       return h('select', {
         className: 'fish-select',
         style: S.small,
-        value: 值 == null ? '' : String(值),
+        value: value == null ? '' : String(value),
         onChange: (e) => onChange(e.target.value),
-      }, 选项.map((项) => h('option', { key: 项.value, value: 项.value }, 项.label)))
+      }, option.map((item) => h('option', { key: item.value, value: item.value }, item.label)))
     }
 
-    function 勾(值, onChange) {
-      return h('input', { type: 'checkbox', checked: Boolean(值), onChange: (e) => onChange(e.target.checked) })
+    function check(value, onChange) {
+      return h('input', { type: 'checkbox', checked: Boolean(value), onChange: (e) => onChange(e.target.checked) })
     }
 
-    function 状态点(ok, 文本) {
-      return h('span', { style: { ...S.badge, ...(ok ? S.ok : S.danger) } }, 文本)
+    function statusTap(ok, text) {
+      return h('span', { style: { ...S.badge, ...(ok ? S.ok : S.danger) } }, text)
     }
 
     function Section() {
-      const [态, 设态] = React.useState(null)
-      const [脏, 设脏] = React.useState(false)
-      const [忙, 设忙] = React.useState(false)
+      const [state, setState] = React.useState(null)
+      const [dirty, setDirty] = React.useState(false)
+      const [busy, setBusy] = React.useState(false)
       // 当前正在执行的动作，让吸顶按钮显示「正在保存…」这类状态。
-      const [动作, 设动作] = React.useState('')
-      const [说, 设说] = React.useState('')
-      const [日志, 设日志] = React.useState(null)
-      const [缓存统计, 设缓存统计] = React.useState(null)
-      const 语音态 = useStore(语音.态)
-      const 设备态 = useStore(设备)
+      const [action, setAction] = React.useState('')
+      const [say, setSay] = React.useState('')
+      const [log, setLog] = React.useState(null)
+      const [cacheStats, setCacheStats] = React.useState(null)
+      const speechState = useStore(speech.state)
+      const deviceState = useStore(device)
 
-      const 拉 = async () => {
+      const pull = async () => {
         const s = await get('/state')
         if (s && s.ok) {
-          设态(s)
-          偏好.set((旧) => ({
-            ...旧,
-            载入: true,
-            在线: Boolean(s.health && s.health.reachable),
+          setState(s)
+          prefs.set((prev) => ({
+            ...prev,
+            load: true,
+            online: Boolean(s.health && s.health.reachable),
             config: s.config || {},
-            健康: s.health || null,
-            音色: Array.isArray(s.voices) ? s.voices : [],
-            插件: s.plugin || {},
+            health: s.health || null,
+            voice: Array.isArray(s.voices) ? s.voices : [],
+            plugin: s.plugin || {},
           }))
         }
       }
-      React.useEffect(() => { 拉() }, [])
+      React.useEffect(() => { pull() }, [])
       React.useEffect(() => {
-        if (脏) return undefined
-        const t = setInterval(拉, 5000)
+        if (dirty) return undefined
+        const t = setInterval(pull, 5000)
         return () => clearInterval(t)
-      }, [脏])
-      const 配置 = (态 && 态.config) || {}
-      const 健康 = (态 && 态.health) || {}
-      const 缓存 = (态 && 态.cache) || {}
-      const 能力表 = (态 && 态.capabilities) || {}
-      const 音色们 = Array.isArray(态 && 态.voices) ? 态.voices : []
-      const 在线 = Boolean(健康.reachable)
-      const 兼容 = 健康.compatible !== false
+      }, [dirty])
+      const config = (state && state.config) || {}
+      const health = (state && state.health) || {}
+      const cache = (state && state.cache) || {}
+      const capabilityTable = (state && state.capabilities) || {}
+      const voices = Array.isArray(state && state.voices) ? state.voices : []
+      const online = Boolean(health.reachable)
+      const compatible = health.compatible !== false
 
-      const 改 = (键, 值) => {
-        设态((旧) => (旧 ? { ...旧, config: { ...(旧.config || {}), [键]: 值 } } : 旧))
-        设脏(true)
+      const update = (key, value) => {
+        setState((prev) => (prev ? { ...prev, config: { ...(prev.config || {}), [key]: value } } : prev))
+        setDirty(true)
       }
 
-      const 存 = async () => {
-        设忙(true); 设动作('保存'); 设说('正在保存…')
-        const r = await post('/save', { config: 配置 })
-        设忙(false); 设动作('')
+      const storeValue = async () => {
+        setBusy(true); setAction('保存'); setSay('正在保存…')
+        const r = await post('/save', { config: config })
+        setBusy(false); setAction('')
         if (r && r.ok) {
-          设脏(false)
-          设说((r.warnings && r.warnings.length) ? `已保存（${r.warnings.join('；')}）` : '已保存。')
+          setDirty(false)
+          setSay((r.warnings && r.warnings.length) ? `已保存（${r.warnings.join('；')}）` : '已保存。')
           if (r.config) {
-            偏好.set((旧) => ({ ...旧, config: { ...r.config } }))
+            prefs.set((prev) => ({ ...prev, config: { ...r.config } }))
           }
-          await 拉()
+          await pull()
         } else {
-          设说('保存失败：' + String((r && (r.hint || r.message)) || '请稍后重试。'))
+          setSay('保存失败：' + String((r && (r.hint || r.message)) || '请稍后重试。'))
         }
       }
 
-      const 测试 = async () => {
-        设忙(true); 设动作('测试'); 设说('正在测试连接…')
+      const service = async () => {
+        setBusy(true); setAction('测试'); setSay('正在测试连接…')
         const r = await post('/test', { timeoutMs: 4000 })
-        设忙(false); 设动作('')
-        if (r && r.ok) 设说(`连接正常，延迟 ${r.latencyMs || 0} 毫秒。`)
-        else 设说(`连接失败：${(r && r.hint) || '本地 AI 未启动，请先启动。'}`)
-        await 拉()
+        setBusy(false); setAction('')
+        if (r && r.ok) setSay(`连接正常，延迟 ${r.latencyMs || 0} 毫秒。`)
+        else setSay(`连接失败：${(r && r.hint) || '本地 AI 未启动，请先启动。'}`)
+        await pull()
       }
 
       // 重新读取：把服务状态和缓存统计重新取一遍，按钮上显示正在读取。
-      const 重读 = async () => {
-        设忙(true); 设动作('读取'); 设说('正在重新读取…')
-        await 拉()
-        await 拉缓存统计()
-        设忙(false); 设动作(''); 设说('')
+      const reread = async () => {
+        setBusy(true); setAction('读取'); setSay('正在重新读取…')
+        await pull()
+        await pullCacheStats()
+        setBusy(false); setAction(''); setSay('')
       }
 
-      const 看日志 = async () => {
-        设忙(true)
+      const viewLog = async () => {
+        setBusy(true)
         const r = await get('/logs?lines=200')
-        设忙(false)
-        设日志(r && r.ok ? r.lines : null)
+        setBusy(false)
+        setLog(r && r.ok ? r.lines : null)
       }
 
-      const 拉缓存统计 = async () => {
+      const pullCacheStats = async () => {
         const r = await get('/cache/stats')
-        if (r && r.ok) 设缓存统计(r)
+        if (r && r.ok) setCacheStats(r)
       }
 
-      const 清缓存 = async () => {
-        设忙(true)
+      const clearCache = async () => {
+        setBusy(true)
         const r = await post('/cache/clear', { kind: 'tts' })
-        设忙(false)
+        setBusy(false)
         if (r && r.ok) {
           const mb = Math.round(((r.bytes || 0) / 1024 / 1024) * 10) / 10
-          设说(`已清空朗读缓存（${r.files || 0} 个文件，释放 ${mb} MB）。下次朗读会重新生成语音。`)
+          setSay(`已清空朗读缓存（${r.files || 0} 个文件，释放 ${mb} MB）。下次朗读会重新生成语音。`)
         } else {
-          设说(`清空缓存失败：${(r && r.hint) || '请稍后重试。'}`)
+          setSay(`清空缓存失败：${(r && r.hint) || '请稍后重试。'}`)
         }
-        await 拉()
-        await 拉缓存统计()
+        await pull()
+        await pullCacheStats()
       }
 
-      const 清过期 = async () => {
-        设忙(true)
+      const clearExpired = async () => {
+        setBusy(true)
         const r = await post('/cache/cleanup', {})
-        设忙(false)
+        setBusy(false)
         if (r && r.ok) {
           const mb = Math.round(((r.bytesFreed || 0) / 1024 / 1024) * 10) / 10
-          设说(`已清理过期缓存 ${r.expired || 0} 个、超出上限 ${r.lru || 0} 个，释放 ${mb} MB。`)
+          setSay(`已清理过期缓存 ${r.expired || 0} 个、超出上限 ${r.lru || 0} 个，释放 ${mb} MB。`)
         } else {
-          设说(`清理缓存失败：${(r && r.hint) || '请稍后重试。'}`)
+          setSay(`清理缓存失败：${(r && r.hint) || '请稍后重试。'}`)
         }
-        await 拉()
-        await 拉缓存统计()
+        await pull()
+        await pullCacheStats()
       }
 
-      React.useEffect(() => { void 拉缓存统计() }, [])
+      React.useEffect(() => { void pullCacheStats() }, [])
 
-      const 音色目录 = (态 && typeof 态.voicesDirectory === 'string') ? 态.voicesDirectory : ''
+      const voiceDir = (state && typeof state.voicesDirectory === 'string') ? state.voicesDirectory : ''
 
-      const 打开缓存目录 = async () => {
-        const r = await post('/open-folder', { path: String(配置.cacheDir || 缓存.dir || '').trim() })
-        if (r && r.ok) 设说('已在文件管理器中打开缓存目录。')
-        else 设说(`打开文件夹失败：${(r && r.hint) || '请手动打开。'}`)
+      const openCacheDir = async () => {
+        const r = await post('/open-folder', { path: String(config.cacheDir || cache.dir || '').trim() })
+        if (r && r.ok) setSay('已在文件管理器中打开缓存目录。')
+        else setSay(`打开文件夹失败：${(r && r.hint) || '请手动打开。'}`)
       }
 
       // 音色目录只从服务实时取；服务离线时按钮禁用，不缓存路径。
-      const 打开音色目录 = async () => {
-        if (!音色目录 || !在线) return
-        const r = await post('/open-folder', { path: 音色目录 })
-        if (r && r.ok) 设说('已在文件管理器中打开音色目录。')
-        else 设说(`打开文件夹失败：${(r && r.hint) || '请手动打开。'}`)
+      const openVoiceDir = async () => {
+        if (!voiceDir || !online) return
+        const r = await post('/open-folder', { path: voiceDir })
+        if (r && r.ok) setSay('已在文件管理器中打开音色目录。')
+        else setSay(`打开文件夹失败：${(r && r.hint) || '请手动打开。'}`)
       }
 
-      const 打开管理界面 = async () => {
+      const openAdminUi = async () => {
         const r = await post('/open-webui', {})
-        if (r && r.ok) 设说('已在默认浏览器中打开管理界面。')
-        else 设说(`打开管理界面失败：${(r && r.hint) || '请稍后重试。'}`)
+        if (r && r.ok) setSay('已在默认浏览器中打开管理界面。')
+        else setSay(`打开管理界面失败：${(r && r.hint) || '请稍后重试。'}`)
       }
 
-      if (!态) {
+      if (!state) {
         return h('div', { className: 'fish-service-settings', style: S.wrap },
           h('div', { style: S.h1 }, '本地 AI'),
           h('div', { style: S.dim }, '正在读取状态…'))
       }
 
-      const 能力名们 = Object.keys(能力中文)
-      const 可用数 = 能力名们.filter((名) => 能力表[名] && 能力表[名].available).length
-      const 能力块 = h('div', { style: S.card },
+      const capabilityNames = Object.keys(capabilityLabelZh)
+      const availableCount = capabilityNames.filter((name) => capabilityTable[name] && capabilityTable[name].available).length
+      const capabilityChunk = h('div', { style: S.card },
         h('div', { style: S.h2 }, '能力'),
         h('div', { style: { ...S.dim, marginBottom: 6 } },
-          `${可用数} / ${能力名们.length} 项可用`),
-        h(折叠块, {
-          摘要: '',
-          默认展开: 可用数 < 能力名们.length,
-          展开字样: '查看各项',
-          收起字样: '收起',
+          `${availableCount} / ${capabilityNames.length} 项可用`),
+        h(foldChunk, {
+          digest: '',
+          defaultExpand: availableCount < capabilityNames.length,
+          expandLabel: '查看各项',
+          collapseLabel: '收起',
         },
-          h('div', { style: S.chips }, 能力名们.map((名) => {
-            const 信息 = 能力表[名] || {}
-            const 可用 = Boolean(信息.available)
-            const 原因 = 信息.reason ? (原因中文[信息.reason] || '原因未知') : ''
-            return h('div', { key: 名, style: S.chip },
-              h('div', { style: { fontWeight: 600 } }, 能力中文[名]),
-              h('div', { style: 可用 ? S.ok : S.danger },
-                可用 ? `可用${信息.loaded ? '（已加载）' : ''}` : `不可用（${原因 || '原因未知'}）`))
+          h('div', { style: S.chips }, capabilityNames.map((name) => {
+            const info = capabilityTable[name] || {}
+            const available = Boolean(info.available)
+            const reason = info.reason ? (reasonLabelZh[info.reason] || '原因未知') : ''
+            return h('div', { key: name, style: S.chip },
+              h('div', { style: { fontWeight: 600 } }, capabilityLabelZh[name]),
+              h('div', { style: available ? S.ok : S.danger },
+                available ? `可用${info.loaded ? '（已加载）' : ''}` : `不可用（${reason || '原因未知'}）`))
           })),
-          能力表.tts && !能力表.tts.available && 能力表.tts.reason === 'service_down'
+          capabilityTable.tts && !capabilityTable.tts.available && capabilityTable.tts.reason === 'service_down'
             ? h('div', { style: { ...S.danger, marginTop: 8 } }, '本地 AI 未启动，请先启动。')
             : null))
 
       // 识图：开关控制输入框旁的「本地识图」按钮；会话识图与工具识图各用各的提示词，互不覆盖。
-      const 预设表 = 配置.visionPresets && typeof 配置.visionPresets === 'object'
-        && !Array.isArray(配置.visionPresets) ? 配置.visionPresets : {}
+      const presetsTable = config.visionPresets && typeof config.visionPresets === 'object'
+        && !Array.isArray(config.visionPresets) ? config.visionPresets : {}
       // 「留空 = 用内置默认」，所以把默认提示词直接显示成占位文字。
-      const 识图默认 = (态 && 态.visionDefaults && typeof 态.visionDefaults === 'object') ? 态.visionDefaults : {}
-      const 会话识图默认 = typeof 识图默认.session === 'string' ? 识图默认.session : ''
-      const 档位默认 = (档) => (识图默认.presets && typeof 识图默认.presets[档.id] === 'string' ? 识图默认.presets[档.id] : '')
-      const 改提示词 = (档, 值) => {
-        改('visionPresets', { ...预设表, [档]: 值 })
+      const visionDefault = (state && state.visionDefaults && typeof state.visionDefaults === 'object') ? state.visionDefaults : {}
+      const sessionVisionDefault = typeof visionDefault.session === 'string' ? visionDefault.session : ''
+      const presetLevelDefault = (preset) => (visionDefault.presets && typeof visionDefault.presets[preset.id] === 'string' ? visionDefault.presets[preset.id] : '')
+      const updatePrompt = (preset, value) => {
+        update('visionPresets', { ...presetsTable, [preset]: value })
       }
-      const 识图块 = h('div', { style: S.card },
+      const visionChunk = h('div', { style: S.card },
         h('div', { style: S.h2 }, '识图'),
-        行('本地识图', 勾(配置.localDescribe !== false, (值) => 改('localDescribe', 值)),
+        line('本地识图', check(config.localDescribe !== false, (value) => update('localDescribe', value)),
           '打开后，输入框旁的「本地识图」按钮可用。第一次识别要等模型加载。'),
-        行('会话识图',
-          多行(配置.visionSessionPrompt, (值) => 改('visionSessionPrompt', 值), 会话识图默认),
+        line('会话识图',
+          multiline(config.visionSessionPrompt, (value) => update('visionSessionPrompt', value), sessionVisionDefault),
           '输入框旁的按钮识图时用这段提示词；留空用内置默认。'),
-        行('工具默认档位', 下拉(规范识图档位(配置.visionDefaultPreset) || 'detailed', 识图档位选项,
-          (值) => 改('visionDefaultPreset', 值)),
+        line('工具默认档位', dropdown(normalizeVisionPreset(config.visionDefaultPreset) || 'detailed', visionPresetOption,
+          (value) => update('visionDefaultPreset', value)),
         '工具识图没指定档位时用这一档。'),
-        h(折叠块, { 摘要: '工具提示词', 展开字样: '修改', 收起字样: '收起' },
-          h('div', null, 识图档位们.map((档) => h('div', { key: 档.id, style: { marginBottom: 10 } },
-            h('div', { style: { fontSize: 12.5, marginBottom: 2 } }, 档.名),
-            多行(预设表[档.id], (值) => 改提示词(档.id, 值), 档位默认(档)))))))
+        h(foldChunk, { digest: '工具提示词', expandLabel: '修改', collapseLabel: '收起' },
+          h('div', null, visionPresets.map((preset) => h('div', { key: preset.id, style: { marginBottom: 10 } },
+            h('div', { style: { fontSize: 12.5, marginBottom: 2 } }, preset.name),
+            multiline(presetsTable[preset.id], (value) => updatePrompt(preset.id, value), presetLevelDefault(preset)))))))
 
-      const 音色选项 = [{ value: 配置.ttsVoice || 'dafeiyu', label: 配置.ttsVoice || 'dafeiyu' }]
-      for (const 名 of 音色们) {
-        if (!音色选项.some((x) => x.value === 名)) 音色选项.push({ value: 名, label: 名 })
+      const voiceOption = [{ value: config.ttsVoice || 'dafeiyu', label: config.ttsVoice || 'dafeiyu' }]
+      for (const name of voices) {
+        if (!voiceOption.some((x) => x.value === name)) voiceOption.push({ value: name, label: name })
       }
 
-      const 服务块 = h('div', { style: S.card },
+      const serviceChunk = h('div', { style: S.card },
         h('div', { style: S.h2 }, '服务连接'),
-        行('服务地址', 输入(配置.baseUrl, (v) => 改('baseUrl', v), ''),
-          { 问: '一般不用改；改了地址后点「测试连接」确认。' }),
-        行('请求超时（秒）', h('input', {
+        line('服务地址', input(config.baseUrl, (v) => update('baseUrl', v), ''),
+          { ask: '一般不用改；改了地址后点「测试连接」确认。' }),
+        line('请求超时（秒）', h('input', {
           style: S.small, type: 'number', min: 1, max: 1800,
-          value: Math.round((Number(配置.requestTimeoutMs) || 180000) / 1000),
-          onChange: (e) => 改('requestTimeoutMs', Number(e.target.value) * 1000),
-        }), { 问: '只影响一般请求；识别、分离与视觉分析另有更长的等待时间。' }),
-        行('总开关', 勾(配置.enabled !== false, (v) => 改('enabled', v)),
+          value: Math.round((Number(config.requestTimeoutMs) || 180000) / 1000),
+          onChange: (e) => update('requestTimeoutMs', Number(e.target.value) * 1000),
+        }), { ask: '只影响一般请求；识别、分离与视觉分析另有更长的等待时间。' }),
+        line('总开关', check(config.enabled !== false, (v) => update('enabled', v)),
           '关闭后朗读与语音输入都不可用。'),
-        行('管理界面',
+        line('管理界面',
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
             h('button', {
               type: 'button',
               style: S.btn,
-              onClick: 打开管理界面,
-              disabled: !在线 || 忙,
+              onClick: openAdminUi,
+              disabled: !online || busy,
             }, '打开管理界面'),
-            状态点(在线, 在线 ? '在线' : '离线')),
-          在线 ? '' : '先启动本地 AI 再打开。'),
-        (态.envOverrides && 态.envOverrides.length)
+            statusTap(online, online ? '在线' : '离线')),
+          online ? '' : '先启动本地 AI 再打开。'),
+        (state.envOverrides && state.envOverrides.length)
           ? h('div', { style: { ...S.danger, marginTop: 4 } },
-              `以下设置已由系统统一指定，在设置页修改不会生效：${态.envOverrides.map((名) => 配置中文[名] || '其他设置').join('、')}`)
+              `以下设置已由系统统一指定，在设置页修改不会生效：${state.envOverrides.map((name) => configLabelZh[name] || '其他设置').join('、')}`)
           : null)
 
-      const 朗读块 = h('div', { style: S.card },
+      const readChunk = h('div', { style: S.card },
         h('div', { style: S.h2 }, '朗读'),
-        行('默认音色',
+        line('默认音色',
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-            下拉(配置.ttsVoice || 'dafeiyu', 音色选项, (v) => 改('ttsVoice', v)),
+            dropdown(config.ttsVoice || 'dafeiyu', voiceOption, (v) => update('ttsVoice', v)),
             h('button', {
               type: 'button',
               style: S.btn,
-              disabled: !在线 || !音色目录 || 忙,
-              title: !在线 ? '本地 AI 未启动' : (!音色目录 ? '还没读到音色目录' : '在文件管理器中打开音色文件夹'),
-              onClick: 打开音色目录,
+              disabled: !online || !voiceDir || busy,
+              title: !online ? '本地 AI 未启动' : (!voiceDir ? '还没读到音色目录' : '在文件管理器中打开音色文件夹'),
+              onClick: openVoiceDir,
             }, '打开文件夹')),
-         在线 ? '把音色文件放进去，列表会自动更新。' : '本地 AI 未启动，启动后可打开音色文件夹。'),
-        行('语速', h('input', {
+         online ? '把音色文件放进去，列表会自动更新。' : '本地 AI 未启动，启动后可打开音色文件夹。'),
+        line('语速', h('input', {
           style: S.small, type: 'number', min: 0.5, max: 2, step: 0.05,
-          value: 配置.ttsSpeed ?? 1,
-          onChange: (e) => 改('ttsSpeed', Number(e.target.value)),
+          value: config.ttsSpeed ?? 1,
+          onChange: (e) => update('ttsSpeed', Number(e.target.value)),
         })),
-        行('去掉代码块', 勾(配置.readSkipCode !== false, (v) => 改('readSkipCode', v)),
+        line('去掉代码块', check(config.readSkipCode !== false, (v) => update('readSkipCode', v)),
           '关闭后只提示「代码块，共 N 行」。'),
-        行('单次最大字数', h('input', {
+        line('单次最大字数', h('input', {
           style: S.small, type: 'number', min: 200, max: 5000, step: 100,
-          value: 配置.readMaxChars ?? 2000,
-          onChange: (e) => 改('readMaxChars', Number(e.target.value)),
-        }), { 问: '超过 2 万字的部分不朗读；长内容会自动分段。' }),
-        行('同时生成', h('input', {
+          value: config.readMaxChars ?? 2000,
+          onChange: (e) => update('readMaxChars', Number(e.target.value)),
+        }), { ask: '超过 2 万字的部分不朗读；长内容会自动分段。' }),
+        line('同时生成', h('input', {
           style: S.small, type: 'number', min: 1, max: 4, step: 1,
-          value: 配置.readConcurrency ?? 2,
-          onChange: (e) => 改('readConcurrency', Number(e.target.value)),
-        }), { 问: '数值越大出声越快、更占显存；卡顿时调低。' }),
-        行('新会话默认自动朗读', 勾(配置.autoRead === true, (v) => 改('autoRead', v)),
-          { 问: '只影响未单独设置过的会话；每个会话可单独开关。' }),
-        行('后台也自动朗读', 勾(配置.autoReadInBackground !== false, (v) => 改('autoReadInBackground', v)),
+          value: config.readConcurrency ?? 2,
+          onChange: (e) => update('readConcurrency', Number(e.target.value)),
+        }), { ask: '数值越大出声越快、更占显存；卡顿时调低。' }),
+        line('新会话默认自动朗读', check(config.autoRead === true, (v) => update('autoRead', v)),
+          { ask: '只影响未单独设置过的会话；每个会话可单独开关。' }),
+        line('后台也自动朗读', check(config.autoReadInBackground !== false, (v) => update('autoReadInBackground', v)),
           '切到后台或最小化时仍会朗读，会占用扬声器，可能打扰他人。'))
 
-      const 已选设备标识 = String(配置.recordDeviceId || '')
-      const 设备选项 = [{ value: '', label: '系统默认' }]
-      for (const 项 of 设备态.列表) {
-        if (!设备选项.some((x) => x.value === 项.deviceId)) 设备选项.push({ value: 项.deviceId, label: 项.label })
+      const selectedDeviceId = String(config.recordDeviceId || '')
+      const deviceOption = [{ value: '', label: '系统默认' }]
+      for (const item of deviceState.list) {
+        if (!deviceOption.some((x) => x.value === item.deviceId)) deviceOption.push({ value: item.deviceId, label: item.label })
       }
-      let 已选设备名 = '系统默认'
-      if (已选设备标识) {
-        const 命中 = 设备选项.find((x) => x.value === 已选设备标识)
-        已选设备名 = (命中 && 命中.label)
-          || (设备态.最近标识 === 已选设备标识 ? 设备态.最近名称 : '')
+      let selectedDeviceName = '系统默认'
+      if (selectedDeviceId) {
+        const hit = deviceOption.find((x) => x.value === selectedDeviceId)
+        selectedDeviceName = (hit && hit.label)
+          || (deviceState.recentId === selectedDeviceId ? deviceState.recentLabel : '')
           || '名称未确认（请刷新设备列表）'
-        if (!命中) 设备选项.push({ value: 已选设备标识, label: 已选设备名 })
+        if (!hit) deviceOption.push({ value: selectedDeviceId, label: selectedDeviceName })
       }
-      const 录音中 = 语音态.phase === 'recording'
-      const 输入音量 = 录音中 ? `${Math.min(100, Math.round((语音态.level || 0) * 100))}%` : '—'
-      const 设备状态 = `已选：${已选设备名}｜上次录音：${设备态.最近名称 || '—'}｜当前音量：${输入音量}`
+      const recording = speechState.phase === 'recording'
+      const inputVolume = recording ? `${Math.min(100, Math.round((speechState.level || 0) * 100))}%` : '—'
+      const deviceStatus = `已选：${selectedDeviceName}｜上次录音：${deviceState.recentLabel || '—'}｜当前音量：${inputVolume}`
 
-      const 语音块 = h('div', { style: S.card },
+      const speechChunk = h('div', { style: S.card },
         h('div', { style: S.h2 }, '语音输入'),
-        行('输入设备',
+        line('输入设备',
           h('div', null,
             h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-              下拉(已选设备标识, 设备选项, (v) => 改('recordDeviceId', v)),
+              dropdown(selectedDeviceId, deviceOption, (v) => update('recordDeviceId', v)),
               h('button', {
                 type: 'button',
                 style: S.btn,
-                disabled: 设备态.枚举中,
-                onClick: () => { void 刷新设备列表() },
-              }, 设备态.枚举中 ? '读取中…' : '刷新设备列表')),
+                disabled: deviceState.enumerating,
+                onClick: () => { void refreshDeviceList() },
+              }, deviceState.enumerating ? '读取中…' : '刷新设备列表')),
             h('div', { style: { marginTop: 2 } },
-              设备状态,
-              设备态.提示 ? h('div', { style: { marginTop: 2 } }, 设备态.提示) : null)),
-          { 问: '有多支麦克风或录音无声时可指定；虚拟设备常录不到人声。' }),
-        行('录音格式', 下拉(配置.recordMime || 'auto', [
+              deviceStatus,
+              deviceState.prompt ? h('div', { style: { marginTop: 2 } }, deviceState.prompt) : null)),
+          { ask: '有多支麦克风或录音无声时可指定；虚拟设备常录不到人声。' }),
+        line('录音格式', dropdown(config.recordMime || 'auto', [
           { value: 'auto', label: '自动（推荐）' },
           { value: 'webm', label: '体积较小' },
           { value: 'wav', label: '体积较大' },
-        ], (v) => 改('recordMime', v)), { 问: '转写结果异常时，换一种格式再试。' }),
-        行('识别语言', 下拉(配置.asrLanguage || 'auto', [
+        ], (v) => update('recordMime', v)), { ask: '转写结果异常时，换一种格式再试。' }),
+        line('识别语言', dropdown(config.asrLanguage || 'auto', [
           { value: 'auto', label: '自动判断' },
           { value: 'zh', label: '中文' },
           { value: 'en', label: '英文' },
           { value: 'ja', label: '日文' },
-        ], (v) => 改('asrLanguage', v))),
-        行('记住上次选择', 勾(配置.rememberVoiceChoice !== false, (v) => 改('rememberVoiceChoice', v)),
+        ], (v) => update('asrLanguage', v))),
+        line('记住上次选择', check(config.rememberVoiceChoice !== false, (v) => update('rememberVoiceChoice', v)),
           '只高亮上次的选项，不会自动执行。'),
         h('div', { style: { ...S.dim, marginTop: 2 } },
           '录音最长 5 分钟、最大 25MB。'))
 
-      const 缓存块 = h('div', { style: S.card },
+      const cacheChunk = h('div', { style: S.card },
         h('div', { style: S.h2 }, '缓存'),
         h('div', { style: S.dim },
-          `当前占用 ${缓存.mb || 0} MB，共 ${缓存.files || 0} 个文件。`),
-        h(折叠块, {
-          摘要: 缓存统计
-            ? `已复用 ${缓存统计.hits || 0} 次，复用率 ${Math.round((缓存统计.hitRate || 0) * 1000) / 10}%`
+          `当前占用 ${cache.mb || 0} MB，共 ${cache.files || 0} 个文件。`),
+        h(foldChunk, {
+          digest: cacheStats
+            ? `已复用 ${cacheStats.hits || 0} 次，复用率 ${Math.round((cacheStats.hitRate || 0) * 1000) / 10}%`
             : '统计读取中…',
-          展开字样: '查看明细',
-          收起字样: '收起明细',
+          expandLabel: '查看明细',
+          collapseLabel: '收起明细',
         },
-          行('保存位置',
+          line('保存位置',
             h('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
-              输入(配置.cacheDir, (v) => 改('cacheDir', v), ''),
-              h('button', { type: 'button', style: S.btn, onClick: 打开缓存目录, disabled: 忙 }, '打开文件夹')),
-            { 问: '朗读音频、分离音轨、关键帧和保留的录音都在这里。' }),
-          行('缓存上限（MB）', h('input', {
+              input(config.cacheDir, (v) => update('cacheDir', v), ''),
+              h('button', { type: 'button', style: S.btn, onClick: openCacheDir, disabled: busy }, '打开文件夹')),
+            { ask: '朗读音频、分离音轨、关键帧和保留的录音都在这里。' }),
+          line('缓存上限（MB）', h('input', {
             style: S.small, type: 'number', min: 256, max: 10240, step: 256,
-            value: 配置.cacheMaxMb ?? 2048,
-            onChange: (e) => 改('cacheMaxMb', Number(e.target.value)),
+            value: config.cacheMaxMb ?? 2048,
+            onChange: (e) => update('cacheMaxMb', Number(e.target.value)),
           }), '超出上限时先删最久没用的文件。'),
-          行('保留时长（小时）', h('input', {
+          line('保留时长（小时）', h('input', {
             style: S.small, type: 'number', min: 1, max: 720, step: 1,
-            value: 配置.cacheTtlHours ?? 72,
-            onChange: (e) => 改('cacheTtlHours', Number(e.target.value)),
+            value: config.cacheTtlHours ?? 72,
+            onChange: (e) => update('cacheTtlHours', Number(e.target.value)),
           }), '过期的文件会自动清理。'),
           h('div', { style: { ...S.dim, marginTop: 4 } },
-            '已缓存音频：' + (缓存统计
-              ? `${缓存统计.files || 0} 段 / ${(Math.round(((缓存统计.bytes || 0) / 1024 / 1024) * 10) / 10)} MB；`
-                + `复用 ${缓存统计.hits || 0} 次、重新生成 ${缓存统计.misses || 0} 次（本次运行以来）`
+            '已缓存音频：' + (cacheStats
+              ? `${cacheStats.files || 0} 段 / ${(Math.round(((cacheStats.bytes || 0) / 1024 / 1024) * 10) / 10)} MB；`
+                + `复用 ${cacheStats.hits || 0} 次、重新生成 ${cacheStats.misses || 0} 次（本次运行以来）`
               : '统计读取中…'))),
         h('div', { style: { display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' } },
-          h('button', { type: 'button', style: S.btn, onClick: 清缓存, disabled: 忙 }, '清空朗读缓存'),
-          h('button', { type: 'button', style: S.btn, onClick: 清过期, disabled: 忙 }, '清理过期缓存')),
+          h('button', { type: 'button', style: S.btn, onClick: clearCache, disabled: busy }, '清空朗读缓存'),
+          h('button', { type: 'button', style: S.btn, onClick: clearExpired, disabled: busy }, '清理过期缓存')),
         h('div', { style: { ...S.dim, marginTop: 4 } },
           '清空后下次朗读会重新生成。'))
 
-      const 翻译块 = h('div', { style: S.card },
+      const translationChunk = h('div', { style: S.card },
         h('div', { style: S.h2 }, '翻译'),
-        行('第一语言',
-          下拉(配置.primaryLanguage || 'zh', 翻译语言下拉, (v) => 改('primaryLanguage', v)),
+        line('第一语言',
+          dropdown(config.primaryLanguage || 'zh', translationLanguageDropdown, (v) => update('primaryLanguage', v)),
           '原文不是第一语言时，译成第一语言。'),
-        行('第二语言',
-          下拉(配置.secondaryLanguage || 'en', 翻译语言下拉, (v) => 改('secondaryLanguage', v)),
+        line('第二语言',
+          dropdown(config.secondaryLanguage || 'en', translationLanguageDropdown, (v) => update('secondaryLanguage', v)),
           '原文已经是第一语言时，译成第二语言。'),
         h('div', { style: { ...S.dim, marginTop: 4 } },
           '没指定目标语言时按上面的规则自动选择。'))
 
       // 界面：四个注入开关放一个可折叠分区，避免设置页一上来就很长。
-      const 界面块 = h('div', { style: S.card },
+      const uiChunk = h('div', { style: S.card },
         h('div', { style: S.h2 }, '界面'),
-        h(折叠块, {
-          摘要: '输入框里的按钮与状态',
-          展开字样: '查看开关',
-          收起字样: '收起',
+        h(foldChunk, {
+          digest: '输入框里的按钮与状态',
+          expandLabel: '查看开关',
+          collapseLabel: '收起',
         },
-          行('语音识别', 勾(配置.uiVoiceInput !== false, (v) => 改('uiVoiceInput', v)),
+          line('语音识别', check(config.uiVoiceInput !== false, (v) => update('uiVoiceInput', v)),
             '关闭后输入框不再显示麦克风按钮。'),
-          行('本地识图', 勾(配置.uiVision !== false, (v) => 改('uiVision', v)),
+          line('本地识图', check(config.uiVision !== false, (v) => update('uiVision', v)),
             '关闭后输入框不再显示识图按钮。'),
-          行('性能监控', 勾(配置.uiMetrics !== false, (v) => 改('uiMetrics', v)),
+          line('性能监控', check(config.uiMetrics !== false, (v) => update('uiMetrics', v)),
             '关闭后输入框不再显示显存与任务状态。'),
-          行('自动朗读', 勾(配置.uiAutoRead !== false, (v) => 改('uiAutoRead', v)),
+          line('自动朗读', check(config.uiAutoRead !== false, (v) => update('uiAutoRead', v)),
             '关闭后所有会话都不再自动朗读，手动朗读不受影响。')))
 
       // 吸顶操作条：标题、在线状态和页面级按钮都在这里，内容在它下面滚动。
-      const 操作条 = h('div', { style: S.bar },
+      const actionBar = h('div', { style: S.bar },
         h('div', { style: S.barRow },
           h('div', { style: { display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap', minWidth: 0 } },
             h('div', { style: { ...S.h1, margin: 0 } }, '本地 AI'),
-            h('span', { style: { ...S.badge, ...(在线 ? S.ok : S.danger) } },
-              在线 ? `在线${兼容 ? '' : '（版本不兼容）'} · v${健康.serviceVersion || '?'}` : '未启动'),
-            h('span', { style: S.dim }, `插件 v${(态.plugin && 态.plugin.version) || '?'}`)),
+            h('span', { style: { ...S.badge, ...(online ? S.ok : S.danger) } },
+              online ? `在线${compatible ? '' : '（版本不兼容）'} · v${health.serviceVersion || '?'}` : '未启动'),
+            h('span', { style: S.dim }, `插件 v${(state.plugin && state.plugin.version) || '?'}`)),
           h('div', { style: S.barActions },
-            h('button', { type: 'button', style: S.btnOn, onClick: 存, disabled: 忙 },
-              忙 && 动作 === '保存' ? '正在保存…' : '保存设置'),
-            h('button', { type: 'button', style: S.btn, onClick: 测试, disabled: 忙 },
-              忙 && 动作 === '测试' ? '正在测试…' : '测试连接'),
-            h('button', { type: 'button', style: S.btn, onClick: 重读, disabled: 忙 },
-              忙 && 动作 === '读取' ? '正在读取…' : '重新读取'))),
+            h('button', { type: 'button', style: S.btnOn, onClick: storeValue, disabled: busy },
+              busy && action === '保存' ? '正在保存…' : '保存设置'),
+            h('button', { type: 'button', style: S.btn, onClick: service, disabled: busy },
+              busy && action === '测试' ? '正在测试…' : '测试连接'),
+            h('button', { type: 'button', style: S.btn, onClick: reread, disabled: busy },
+              busy && action === '读取' ? '正在读取…' : '重新读取'))),
         h('div', { style: S.dim }, '保存后立即生效，不用重启。'),
-        说 ? h('div', { style: { ...(/失败|无法|错误|不可用|不能/.test(String(说)) ? S.danger : S.ok), marginTop: 2 } }, 说) : null)
+        say ? h('div', { style: { ...(/失败|无法|错误|不可用|不能/.test(String(say)) ? S.danger : S.ok), marginTop: 2 } }, say) : null)
 
-      const 状态块 = h('div', { style: S.card },
+      const statusChunk = h('div', { style: S.card },
         h('div', { style: S.dim },
-          `延迟 ${健康.latencyMs || 0} 毫秒`
-          + (健康.vram ? `｜显存 ${健康.vram.freeMb || 0}/${健康.vram.totalMb || 0} MB` : '')
-          + `｜最近检查 ${健康.checkedAt ? new Date(健康.checkedAt).toLocaleTimeString('zh-CN', { hour12: false }) : '—'}`),
+          `延迟 ${health.latencyMs || 0} 毫秒`
+          + (health.vram ? `｜显存 ${health.vram.freeMb || 0}/${health.vram.totalMb || 0} MB` : '')
+          + `｜最近检查 ${health.checkedAt ? new Date(health.checkedAt).toLocaleTimeString('zh-CN', { hour12: false }) : '—'}`),
         h('div', { style: { ...S.dim, marginTop: 2 } },
           '朗读、语音输入与各项能力都在本机完成，不联网，也不产生额外费用。'),
-        (健康.lastError && 健康.lastError.hint)
-          ? h('div', { style: { ...S.danger, marginTop: 4 } }, `最近错误：${健康.lastError.hint}`)
+        (health.lastError && health.lastError.hint)
+          ? h('div', { style: { ...S.danger, marginTop: 4 } }, `最近错误：${health.lastError.hint}`)
           : null,
-        (态.errors && 态.errors.length)
+        (state.errors && state.errors.length)
           ? h('div', { style: { ...S.dim, marginTop: 4 } },
-              `最近有 ${态.errors.length} 条错误，最新：${态.errors[态.errors.length - 1].hint || '未知错误'}`)
+              `最近有 ${state.errors.length} 条错误，最新：${state.errors[state.errors.length - 1].hint || '未知错误'}`)
           : null)
 
-      const 日志块 = h('div', { style: S.card },
+      const logChunk = h('div', { style: S.card },
         h('div', { style: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' } },
           h('div', { style: { ...S.h2, margin: 0 } }, '运行日志'),
           h('span', { style: S.dim }, '最近 200 行'),
           h('span', { style: { flex: 1 } }),
           h('span', { style: S.dim }, '日志级别'),
-          下拉(配置.logLevel || 'info', [
+          dropdown(config.logLevel || 'info', [
             { value: 'debug', label: '详细' },
             { value: 'info', label: '一般' },
             { value: 'warn', label: '仅警告' },
             { value: 'error', label: '仅错误' },
-          ], (v) => 改('logLevel', v)),
-          h('button', { type: 'button', style: S.btn, onClick: 看日志, disabled: 忙 }, '读取日志')),
-        h('pre', { style: S.logs }, 日志 ? 日志.join('\n') : '（点「读取日志」查看）'),
+          ], (v) => update('logLevel', v)),
+          h('button', { type: 'button', style: S.btn, onClick: viewLog, disabled: busy }, '读取日志')),
+        h('pre', { style: S.logs }, log ? log.join('\n') : '（点「读取日志」查看）'),
         h('div', { style: { ...S.dim, marginTop: 4 } },
           '遇到问题时读取并复制给维护者。'))
 
       return h('div', { className: 'fish-service-settings', style: S.wrap },
-        操作条,
-        状态块,
-        界面块,
-        能力块,
-        识图块,
-        朗读块,
-        翻译块,
-        语音块,
-        服务块,
-        缓存块,
-        日志块)
+        actionBar,
+        statusChunk,
+        uiChunk,
+        capabilityChunk,
+        visionChunk,
+        readChunk,
+        translationChunk,
+        speechChunk,
+        serviceChunk,
+        cacheChunk,
+        logChunk)
     }
 
     // ---------------- 本地 AI 状态胶囊（输入框左侧工具行） ----------------
 
-    const 指标轮询毫秒 = 2000
+    const metricsPollMs = 2000
 
     /** MB → GB，一位小数；缺失/非法按 0。 */
-    function 格式化GB(兆字节) {
-      const 数 = Number(兆字节)
-      return (Number.isFinite(数) && 数 > 0 ? 数 / 1024 : 0).toFixed(1)
+    function formatGB(megabyte) {
+      const count = Number(megabyte)
+      return (Number.isFinite(count) && count > 0 ? count / 1024 : 0).toFixed(1)
     }
 
-    function 格式化显存(已用, 总量) {
-      return `${格式化GB(已用)} / ${格式化GB(总量)} GB`
+    function formatVram(used, totalAmount) {
+      return `${formatGB(used)} / ${formatGB(totalAmount)} GB`
     }
 
-    function 格式化模型(模型们) {
-      const 列表 = (Array.isArray(模型们) ? 模型们 : [])
-        .map((项) => String(项 == null ? '' : 项).trim())
+    function formatModel(models) {
+      const list = (Array.isArray(models) ? models : [])
+        .map((item) => String(item == null ? '' : item).trim())
         .filter(Boolean)
-      return 列表.length ? `已加载 ${列表.join(' / ')}` : '无模型'
+      return list.length ? `已加载 ${list.join(' / ')}` : '无模型'
     }
 
-    function 任务总数(队列) {
-      const 排队 = Math.max(0, Math.trunc(Number(队列 && 队列.queued) || 0))
-      const 运行 = Math.max(0, Math.trunc(Number(队列 && 队列.running) || 0))
-      return 排队 + 运行
+    function taskTotalCount(queue) {
+      const queued = Math.max(0, Math.trunc(Number(queue && queue.queued) || 0))
+      const run = Math.max(0, Math.trunc(Number(queue && queue.running) || 0))
+      return queued + run
     }
 
     /** 胶囊文案里的任务段：有任务显示总数，没有显示空闲。 */
-    function 格式化胶囊任务(队列) {
-      const 总数 = 任务总数(队列)
-      return 总数 > 0 ? `${总数} 任务` : '空闲'
+    function formatCapsuleTask(queue) {
+      const totalCount = taskTotalCount(queue)
+      return totalCount > 0 ? `${totalCount} 任务` : '空闲'
     }
 
     /** 浮层里的队列行：「运行 1 · 排队 0」。 */
-    function 格式化任务(队列) {
-      const 排队 = Math.max(0, Math.trunc(Number(队列 && 队列.queued) || 0))
-      const 运行 = Math.max(0, Math.trunc(Number(队列 && 队列.running) || 0))
-      return 排队 + 运行 > 0 ? `运行 ${运行} · 排队 ${排队}` : '空闲'
+    function formatTask(queue) {
+      const queued = Math.max(0, Math.trunc(Number(queue && queue.queued) || 0))
+      const run = Math.max(0, Math.trunc(Number(queue && queue.running) || 0))
+      return queued + run > 0 ? `运行 ${run} · 排队 ${queued}` : '空闲'
     }
 
-    function 格式化时长(秒) {
-      const 总 = Math.max(0, Math.floor(Number(秒) || 0))
-      const 天 = Math.floor(总 / 86400)
-      const 小时 = Math.floor((总 % 86400) / 3600)
-      const 分钟 = Math.floor((总 % 3600) / 60)
-      if (天 > 0) return `${天} 天 ${小时} 小时`
-      if (小时 > 0) return `${小时} 小时 ${分钟} 分`
-      if (分钟 > 0) return `${分钟} 分钟`
-      return `${总} 秒`
+    function formatDuration(seconds) {
+      const total = Math.max(0, Math.floor(Number(seconds) || 0))
+      const days = Math.floor(total / 86400)
+      const hours = Math.floor((total % 86400) / 3600)
+      const minutes = Math.floor((total % 3600) / 60)
+      if (days > 0) return `${days} 天 ${hours} 小时`
+      if (hours > 0) return `${hours} 小时 ${minutes} 分`
+      if (minutes > 0) return `${minutes} 分钟`
+      return `${total} 秒`
     }
 
     /** 按类型分桶 → 「tts 2 · asr 1」；空桶显示「无」。 */
-    function 格式化类型明细(表) {
-      const 项 = []
-      if (表 && typeof 表 === 'object' && !Array.isArray(表)) {
-        for (const [类型, 数] of Object.entries(表)) {
-          const 计数 = Math.trunc(Number(数) || 0)
-          if (计数 > 0) 项.push(`${类型} ${计数}`)
+    function formatTypeDetail(table) {
+      const item = []
+      if (table && typeof table === 'object' && !Array.isArray(table)) {
+        for (const [type, count] of Object.entries(table)) {
+          const counter = Math.trunc(Number(count) || 0)
+          if (counter > 0) item.push(`${type} ${counter}`)
         }
       }
-      return 项.length ? 项.join(' · ') : '无'
+      return item.length ? item.join(' · ') : '无'
     }
 
     /** 显存占比分档：>95 危险、>85 警告，其余正常。 */
-    function 显存色(百分比) {
-      const 数 = Math.max(0, Math.min(100, Number(百分比) || 0))
-      if (数 > 95) return 'danger'
-      if (数 > 85) return 'warn'
+    function vramColor(percent) {
+      const count = Math.max(0, Math.min(100, Number(percent) || 0))
+      if (count > 95) return 'danger'
+      if (count > 85) return 'warn'
       return ''
     }
 
-    function 格式化视觉(视觉) {
-      return `${视觉 && 视觉.loaded === true ? '已加载' : '未加载'} · ${视觉 && 视觉.ready === true ? '已就绪' : '未就绪'}`
+    function formatVisual(visual) {
+      return `${visual && visual.loaded === true ? '已加载' : '未加载'} · ${visual && visual.ready === true ? '已就绪' : '未就绪'}`
     }
 
-    function 指标离线(态) {
-      return Boolean(态 && 态.载入 && (!态.数据 || 态.数据.ok !== true))
+    function metricsOffline(state) {
+      return Boolean(state && state.load && (!state.data || state.data.ok !== true))
     }
 
-    function 指标胶囊() {
-      const 偏好态 = useStore(偏好)
-      const 指标开 = 界面开关开(偏好态.config, '性能监控')
-      const [态, 设态] = React.useState({ 载入: false, 数据: null })
-      const [展开, 设展开] = React.useState(false)
-      const [提示, 设提示] = React.useState('')
-      const [忙, 设忙] = React.useState(false)
-      const 根 = React.useRef(null)
+    function metricsCapsule() {
+      const prefsState = useStore(prefs)
+      const metricsOn = uiSwitchOn(prefsState.config, 'performanceMonitor')
+      const [state, setState] = React.useState({ load: false, data: null })
+      const [expand, setExpand] = React.useState(false)
+      const [prompt, setPrompt] = React.useState('')
+      const [busy, setBusy] = React.useState(false)
+      const root = React.useRef(null)
 
-      const 拉 = React.useCallback(async () => {
+      const pull = React.useCallback(async () => {
         // 页面隐藏时暂停轮询；恢复可见由 visibilitychange 立刻补一次。
         if (typeof document !== 'undefined' && document.hidden) return
-        const 数据 = await get('/metrics')
-        设态({ 载入: true, 数据: 数据 && typeof 数据 === 'object' ? 数据 : null })
+        const data = await get('/metrics')
+        setState({ load: true, data: data && typeof data === 'object' ? data : null })
       }, [])
 
       React.useEffect(() => {
-        if (!指标开) {
-          设态({ 载入: false, 数据: null })
+        if (!metricsOn) {
+          setState({ load: false, data: null })
           return undefined
         }
-        let 定时器 = 0
-        void 拉()
-        定时器 = setInterval(() => { void 拉() }, 指标轮询毫秒)
-        const 页面可见 = () => { if (!document.hidden) void 拉() }
-        if (typeof document !== 'undefined') document.addEventListener('visibilitychange', 页面可见)
+        let timer = 0
+        void pull()
+        timer = setInterval(() => { void pull() }, metricsPollMs)
+        const pageVisible = () => { if (!document.hidden) void pull() }
+        if (typeof document !== 'undefined') document.addEventListener('visibilitychange', pageVisible)
         return () => {
-          clearInterval(定时器)
-          if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', 页面可见)
+          clearInterval(timer)
+          if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', pageVisible)
         }
-      }, [拉, 指标开])
+      }, [pull, metricsOn])
 
       React.useEffect(() => {
-        if (!展开 || typeof document === 'undefined') return undefined
-        const 点外面 = (事件) => {
-          const 节点 = 根.current
-          if (节点 && 事件 && 事件.target && 节点.contains(事件.target)) return
-          设展开(false)
+        if (!expand || typeof document === 'undefined') return undefined
+        const tapOutside = (event) => {
+          const node = root.current
+          if (node && event && event.target && node.contains(event.target)) return
+          setExpand(false)
         }
-        const 按Esc = (事件) => { if (事件 && 事件.key === 'Escape') 设展开(false) }
-        document.addEventListener('pointerdown', 点外面, true)
-        document.addEventListener('keydown', 按Esc, true)
+        const onEscape = (event) => { if (event && event.key === 'Escape') setExpand(false) }
+        document.addEventListener('pointerdown', tapOutside, true)
+        document.addEventListener('keydown', onEscape, true)
         return () => {
-          document.removeEventListener('pointerdown', 点外面, true)
-          document.removeEventListener('keydown', 按Esc, true)
+          document.removeEventListener('pointerdown', tapOutside, true)
+          document.removeEventListener('keydown', onEscape, true)
         }
-      }, [展开])
+      }, [expand])
 
-      if (!指标开) return null
+      if (!metricsOn) return null
 
-      const 打开管理 = async (事件) => {
-        事件?.stopPropagation?.()
-        设忙(true)
-        设提示('')
-        const 结果 = await post('/open-webui', {})
-        设忙(false)
-        if (!结果 || 结果.ok !== true) 设提示((结果 && 结果.hint) || '打开管理界面失败，请稍后再试。')
+      const openAdmin = async (event) => {
+        event?.stopPropagation?.()
+        setBusy(true)
+        setPrompt('')
+        const result = await post('/open-webui', {})
+        setBusy(false)
+        if (!result || result.ok !== true) setPrompt((result && result.hint) || '打开管理界面失败，请稍后再试。')
       }
 
-      const 刷新 = async (事件) => {
-        事件?.stopPropagation?.()
-        设忙(true)
-        设提示('')
-        await 拉()
-        设忙(false)
+      const refresh = async (event) => {
+        event?.stopPropagation?.()
+        setBusy(true)
+        setPrompt('')
+        await pull()
+        setBusy(false)
       }
 
-      const 离线 = 指标离线(态)
-      const 在线 = Boolean(态.载入 && !离线 && 态.数据 && 态.数据.ok === true)
-      const 数据 = (在线 && 态.数据) || {}
-      const gpu = 数据.gpu || {}
-      const 占比 = Math.max(0, Math.min(100, Math.trunc(Number(gpu.percent) || 0)))
-      const 等级 = 显存色(占比)
-      const 胶囊文字 = !态.载入
+      const offline = metricsOffline(state)
+      const online = Boolean(state.load && !offline && state.data && state.data.ok === true)
+      const data = (online && state.data) || {}
+      const gpu = data.gpu || {}
+      const ratio = Math.max(0, Math.min(100, Math.trunc(Number(gpu.percent) || 0)))
+      const grade = vramColor(ratio)
+      const capsuleText = !state.load
         ? '连接中'
-        : 离线
+        : offline
           ? '本地 AI 未启动'
-          : `显存 ${占比}%｜${格式化胶囊任务(数据.queue)}`
+          : `显存 ${ratio}%｜${formatCapsuleTask(data.queue)}`
 
-      const 明细 = (标签, 值) => h('div', { className: 'fish-metrics-row' },
-        h('span', { className: 'fish-metrics-key' }, 标签),
-        h('span', { className: 'fish-metrics-val' }, 值))
+      const detail = (tag, value) => h('div', { className: 'fish-metrics-row' },
+        h('span', { className: 'fish-metrics-key' }, tag),
+        h('span', { className: 'fish-metrics-val' }, value))
 
-      const 浮层 = h('div', {
+      const overlay = h('div', {
         className: 'fish-metrics-pop',
         role: 'dialog',
         'aria-label': '本地 AI 详情',
-        onClick: (事件) => 事件.stopPropagation(),
+        onClick: (event) => event.stopPropagation(),
       },
         h('div', { className: 'fish-metrics-head' },
           h('span', { className: 'fish-metrics-title' }, '本地 AI'),
-          h('span', { className: 'fish-metrics-dim' }, 在线 ? `v${数据.service?.version || '?'}` : '')),
-        !态.载入
+          h('span', { className: 'fish-metrics-dim' }, online ? `v${data.service?.version || '?'}` : '')),
+        !state.load
           ? h('div', { className: 'fish-metrics-empty' }, '正在读取…')
-          : 离线
+          : offline
             ? h('div', { className: 'fish-metrics-empty' }, '启动服务后可查看。')
             : h(React.Fragment, null,
                 h('div', { className: 'fish-metrics-gpu' },
-                  明细('显卡', gpu.name || '未知'),
-                  明细('显存', `${格式化显存(gpu.usedMb, gpu.totalMb)}（${占比}%）`),
-                  h('div', { className: 'fish-metrics-bar', 'data-level': 等级 || undefined },
-                    h('i', { style: { width: `${占比}%` } })),
-                  明细('可用', `${格式化GB(gpu.freeMb)} GB`)),
-                明细('模型', 格式化模型(数据.modelsLoaded)),
-                明细('视觉', 格式化视觉(数据.vision)),
+                  detail('显卡', gpu.name || '未知'),
+                  detail('显存', `${formatVram(gpu.usedMb, gpu.totalMb)}（${ratio}%）`),
+                  h('div', { className: 'fish-metrics-bar', 'data-level': grade || undefined },
+                    h('i', { style: { width: `${ratio}%` } })),
+                  detail('可用', `${formatGB(gpu.freeMb)} GB`)),
+                detail('模型', formatModel(data.modelsLoaded)),
+                detail('视觉', formatVisual(data.vision)),
                 h('div', { className: 'fish-metrics-sep' }),
-                明细('队列', 格式化任务(数据.queue)),
-                明细('排队明细', 格式化类型明细(数据.queue?.queuedByKind)),
-                明细('运行明细', 格式化类型明细(数据.queue?.runningByKind)),
-                明细('当前类型', 数据.scheduler?.currentKind || '无'),
-                明细('调度模型', 数据.scheduler?.loadedModel || '无'),
-                明细('运行时长', 格式化时长(数据.service?.uptimeSeconds))),
-        提示 ? h('div', { className: 'fish-metrics-hint' }, 提示) : null,
+                detail('队列', formatTask(data.queue)),
+                detail('排队明细', formatTypeDetail(data.queue?.queuedByKind)),
+                detail('运行明细', formatTypeDetail(data.queue?.runningByKind)),
+                detail('当前类型', data.scheduler?.currentKind || '无'),
+                detail('调度模型', data.scheduler?.loadedModel || '无'),
+                detail('运行时长', formatDuration(data.service?.uptimeSeconds))),
+        prompt ? h('div', { className: 'fish-metrics-hint' }, prompt) : null,
         h('div', { className: 'fish-metrics-actions' },
-          离线 ? null : h('button', {
+          offline ? null : h('button', {
             type: 'button',
             className: 'fish-btn',
-            disabled: 忙,
-            onClick: 打开管理,
+            disabled: busy,
+            onClick: openAdmin,
           }, '打开管理界面'),
-          h('button', { type: 'button', className: 'fish-btn', disabled: 忙, onClick: 刷新 }, '刷新')))
+          h('button', { type: 'button', className: 'fish-btn', disabled: busy, onClick: refresh }, '刷新')))
 
       return h('div', {
-        ref: 根,
+        ref: root,
         className: 'fish-metrics',
-        'data-offline': 离线 ? '1' : undefined,
+        'data-offline': offline ? '1' : undefined,
       },
         h('button', {
           type: 'button',
           className: 'fish-metrics-pill',
-          'data-level': 等级 || undefined,
-          onClick: () => 设展开((值) => !值),
-          'aria-expanded': 展开 ? 'true' : 'false',
+          'data-level': grade || undefined,
+          onClick: () => setExpand((value) => !value),
+          'aria-expanded': expand ? 'true' : 'false',
           'aria-label': '本地 AI 状态',
-          title: 离线 ? '本地 AI 未启动' : '查看本地 AI 详情',
+          title: offline ? '本地 AI 未启动' : '查看本地 AI 详情',
         },
           h('span', { className: 'fish-metrics-dot', 'aria-hidden': true }),
-          h('span', { className: 'fish-metrics-text' }, 胶囊文字)),
-        展开 ? 浮层 : null)
+          h('span', { className: 'fish-metrics-text' }, capsuleText)),
+        expand ? overlay : null)
     }
 
     // ---------------- 右栏「双语翻译」：分段、缓存、面板 ----------------
 
-    const 翻译TabID = 'dsh-fish-service/translate'
-    const 翻译TabKind = 'fish-translate'
-    const 翻译语言名称 = { zh: '中文', en: '英文', ja: '日文', ko: '韩文', yue: '粤语' }
+    const translationTabID = 'dsh-fish-service/translate'
+    const translationTabKind = 'fish-translate'
+    const translationLanguageNames = { zh: '中文', en: '英文', ja: '日文', ko: '韩文', yue: '粤语' }
 
-    const 段字数上限 = 800
-    const 每批段数上限 = 20
-    const 每批字数上限 = 8000
-    const 翻译缓存上限 = 2000
+    const segmentCharsLimit = 800
+    const perBatchSegmentCountLimit = 20
+    const perBatchCharsLimit = 8000
+    const translationCacheLimit = 2000
     // 后台任务每批更小：模型冷启动时单批耗时可控，串行提交不叠并发。
-    const 任务每批段数 = 6
-    const 任务每批字数 = 1500
-    const 任务轮询毫秒 = 1000
-    const 任务冷启动毫秒 = 8000
-    const 任务总时长上限 = 10 * 60 * 1000
+    const taskPerBatchSegmentCount = 6
+    const taskPerBatchChars = 1500
+    const taskPollMs = 1000
+    const taskColdStartMs = 8000
+    const taskTotalDurationLimit = 10 * 60 * 1000
     // 一次只跑一批：冷启动时多批并发会把模型加载挤在一起。
-    const 可取译文 = 1
+    const canFetchTranslated = 1
 
     // 与 lib/lang.js 的 检测语言 同规则（本地字符范围判断，不请求模型）。
-    function 检测语言(文本) {
-      let 假名 = 0
-      let 谚文 = 0
-      let 汉字 = 0
-      let 拉丁 = 0
-      for (const 字 of String(文本 || '')) {
-        const 码 = 字.codePointAt(0)
-        if ((码 >= 0x3040 && 码 <= 0x30ff) || (码 >= 0x31f0 && 码 <= 0x31ff)) 假名 += 1
-        else if ((码 >= 0xac00 && 码 <= 0xd7af) || (码 >= 0x1100 && 码 <= 0x11ff)) 谚文 += 1
-        else if ((码 >= 0x4e00 && 码 <= 0x9fff) || (码 >= 0x3400 && 码 <= 0x4dbf) || (码 >= 0xf900 && 码 <= 0xfaff)) 汉字 += 1
-        else if ((码 >= 0x41 && 码 <= 0x5a) || (码 >= 0x61 && 码 <= 0x7a) || (码 >= 0xc0 && 码 <= 0x24f)) 拉丁 += 1
+    function detectLanguage(text) {
+      let kana = 0
+      let hangul = 0
+      let han = 0
+      let latin = 0
+      for (const char of String(text || '')) {
+        const code = char.codePointAt(0)
+        if ((code >= 0x3040 && code <= 0x30ff) || (code >= 0x31f0 && code <= 0x31ff)) kana += 1
+        else if ((code >= 0xac00 && code <= 0xd7af) || (code >= 0x1100 && code <= 0x11ff)) hangul += 1
+        else if ((code >= 0x4e00 && code <= 0x9fff) || (code >= 0x3400 && code <= 0x4dbf) || (code >= 0xf900 && code <= 0xfaff)) han += 1
+        else if ((code >= 0x41 && code <= 0x5a) || (code >= 0x61 && code <= 0x7a) || (code >= 0xc0 && code <= 0x24f)) latin += 1
       }
-      if (假名 > 0) return 'ja'
-      if (谚文 > 0) return 'ko'
-      if (汉字 > 0) return 'zh'
-      if (拉丁 > 0) return 'en'
+      if (kana > 0) return 'ja'
+      if (hangul > 0) return 'ko'
+      if (han > 0) return 'zh'
+      if (latin > 0) return 'en'
       return null
     }
 
-    function 翻译语言标签(代码) {
-      return 翻译语言名称[代码] || String(代码 || '')
+    function translationLanguageTag(code) {
+      return translationLanguageNames[code] || String(code || '')
     }
 
-    function 取翻译方向配置(配置) {
-      const 第一 = 翻译语言名称[配置 && 配置.primaryLanguage] ? 配置.primaryLanguage : 'zh'
-      const 第二 = 翻译语言名称[配置 && 配置.secondaryLanguage] ? 配置.secondaryLanguage : 'en'
-      return { 第一, 第二 }
+    function fetchTranslationDirectionConfig(config) {
+      const primary = translationLanguageNames[config && config.primaryLanguage] ? config.primaryLanguage : 'zh'
+      const secondary = translationLanguageNames[config && config.secondaryLanguage] ? config.secondaryLanguage : 'en'
+      return { primary, secondary }
     }
 
     // 需求规则：原文语言不是第一语言就翻成第一语言，否则翻成第二语言；测不出来按第一语言。
-    function 选翻译方向(文本, 配置) {
-      const { 第一, 第二 } = 取翻译方向配置(配置)
-      const 检测到 = 检测语言(文本)
-      const 目标 = !检测到 ? 第一 : 检测到 === 第一 ? 第二 : 第一
-      return { source: 检测到 || 'auto', target: 目标, detected: 检测到 }
+    function pickTranslationDirection(text, config) {
+      const { primary, secondary } = fetchTranslationDirectionConfig(config)
+      const detectTo = detectLanguage(text)
+      const target = !detectTo ? primary : detectTo === primary ? secondary : primary
+      return { source: detectTo || 'auto', target: target, detected: detectTo }
     }
 
-    function 翻译方向文案(方向) {
-      const 源 = 方向 && 方向.source === 'auto' ? '自动检测' : 翻译语言标签(方向 && 方向.source)
-      return `${源} → ${翻译语言标签(方向 && 方向.target)}`
+    function translationDirectionCopy(direction) {
+      const source = direction && direction.source === 'auto' ? '自动检测' : translationLanguageTag(direction && direction.source)
+      return `${source} → ${translationLanguageTag(direction && direction.target)}`
     }
 
     // 按钮下面那行规则说明；lead 要求一行、20 字左右、不可点选。
-    function 翻译规则文案(配置) {
-      const { 第一, 第二 } = 取翻译方向配置(配置)
-      return `自动：非${翻译语言标签(第一)} → ${翻译语言标签(第一)}，${翻译语言标签(第一)} → ${翻译语言标签(第二)}`
+    function translationRuleCopy(config) {
+      const { primary, secondary } = fetchTranslationDirectionConfig(config)
+      return `自动：非${translationLanguageTag(primary)} → ${translationLanguageTag(primary)}，${translationLanguageTag(primary)} → ${translationLanguageTag(secondary)}`
     }
 
-    const 句末标点 = '。！？!?；;…'
-    const 收尾字符 = '」』"”’）)】]'
-    const 最短短语 = 10
+    const sentenceEndPunct = '。！？!?；;…'
+    const collectTailChr = '」』"”’）)】]'
+    const shortestPhrase = 10
 
     // 分段语义与 TTS 的 splitForSpeech 一致：单换行、句末标点都是边界，
     // 标点跟着前一句；不足最短短语的碎片并到相邻段；单片超上限才硬切。
     // 与 TTS 的区别：这里不能改字——不补标点、不吞空白，拼回去必须与原文逐字一致。
     // 返回 [{前导, 文本, 尾}]，组装译文把「前导 + 译文 + 尾」贴回即为原文。
-    function 切段(文本) {
-      const 原文 = String(文本 || '')
-      if (!原文) return []
+    function splitSegment(text) {
+      const original = String(text || '')
+      if (!original) return []
 
       // 1) 基础片段：单换行与句末标点都切开，两侧空白留给前导/尾。
-      const 原始 = []
-      let 片段起 = 0
-      for (let i = 0; i <= 原文.length; i += 1) {
-        const 到末尾 = i === 原文.length
-        const 换行 = !到末尾 && 原文[i] === '\n'
-        const 句末 = !到末尾 && !换行 && 句末标点.includes(原文[i])
-        if (!到末尾 && !换行 && !句末) continue
-        let 止 = i
-        if (句末) {
-          止 = i + 1
-          while (止 < 原文.length && 收尾字符.includes(原文[止])) 止 += 1
+      const raw = []
+      let fragmentStart = 0
+      for (let i = 0; i <= original.length; i += 1) {
+        const toEnd = i === original.length
+        const swapLine = !toEnd && original[i] === '\n'
+        const sentenceEnd = !toEnd && !swapLine && sentenceEndPunct.includes(original[i])
+        if (!toEnd && !swapLine && !sentenceEnd) continue
+        let end = i
+        if (sentenceEnd) {
+          end = i + 1
+          while (end < original.length && collectTailChr.includes(original[end])) end += 1
         }
         // 只保留非空白内容：两端的空白归前导/尾，中间的空白（含换行）留在文本里。
-        let 内容起 = 片段起
-        while (内容起 < 止 && /\s/.test(原文[内容起])) 内容起 += 1
-        let 内容止 = 止
-        while (内容止 > 内容起 && /\s/.test(原文[内容止 - 1])) 内容止 -= 1
-        if (内容起 < 内容止) 原始.push({ 起: 内容起, 止: 内容止 })
-        片段起 = 换行 ? i + 1 : 止
-        if (句末) i = 止 - 1
+        let contentStart = fragmentStart
+        while (contentStart < end && /\s/.test(original[contentStart])) contentStart += 1
+        let contentEnd = end
+        while (contentEnd > contentStart && /\s/.test(original[contentEnd - 1])) contentEnd -= 1
+        if (contentStart < contentEnd) raw.push({ start: contentStart, end: contentEnd })
+        fragmentStart = swapLine ? i + 1 : end
+        if (sentenceEnd) i = end - 1
       }
-      if (!原始.length) return [{ 前导: 原文, 文本: '', 尾: '' }]
+      if (!raw.length) return [{ leading: original, text: '', tail: '' }]
 
       // 2) 太短的碎片不单独成段：优先并下一段，最后一段并到上一段。
-      const 合并 = []
+      const merge = []
       let i = 0
-      while (i < 原始.length) {
-        let 区间 = 原始[i]
+      while (i < raw.length) {
+        let range = raw[i]
         i += 1
-        while (区间.止 - 区间.起 < 最短短语 && i < 原始.length) {
-          区间 = { 起: 区间.起, 止: 原始[i].止 }
+        while (range.end - range.start < shortestPhrase && i < raw.length) {
+          range = { start: range.start, end: raw[i].end }
           i += 1
         }
-        合并.push(区间)
+        merge.push(range)
       }
-      if (合并.length >= 2 && 合并[合并.length - 1].止 - 合并[合并.length - 1].起 < 最短短语) {
-        const 末 = 合并.pop()
-        合并[合并.length - 1].止 = 末.止
+      if (merge.length >= 2 && merge[merge.length - 1].end - merge[merge.length - 1].start < shortestPhrase) {
+        const last = merge.pop()
+        merge[merge.length - 1].end = last.end
       }
 
       // 3) 只有单片超过上限才硬切：尽量在逗号/顿号/空格后断开，实在没有就按字数切。
-      const 区间们 = []
-      for (const 区间 of 合并) {
-        if (区间.止 - 区间.起 <= 段字数上限) {
-          区间们.push(区间)
+      const ranges = []
+      for (const range of merge) {
+        if (range.end - range.start <= segmentCharsLimit) {
+          ranges.push(range)
           continue
         }
-        let 起 = 区间.起
-        while (区间.止 - 起 > 段字数上限) {
-          const 窗口 = 原文.slice(起, 起 + 段字数上限)
-          const 逗号 = Math.max(
-            窗口.lastIndexOf('，'),
-            窗口.lastIndexOf(','),
-            窗口.lastIndexOf('、'),
-            窗口.lastIndexOf(' '),
-            窗口.lastIndexOf('\t'),
-            窗口.lastIndexOf('\n'),
+        let start = range.start
+        while (range.end - start > segmentCharsLimit) {
+          const window = original.slice(start, start + segmentCharsLimit)
+          const commaMark = Math.max(
+            window.lastIndexOf('，'),
+            window.lastIndexOf(','),
+            window.lastIndexOf('、'),
+            window.lastIndexOf(' '),
+            window.lastIndexOf('\t'),
+            window.lastIndexOf('\n'),
           )
-          let 切 = 起 + 段字数上限
-          if (逗号 > 段字数上限 * 0.6) 切 = 起 + 逗号 + 1
-          if (切 > 起 && 切 < 区间.止 && /[\uDC00-\uDFFF]/.test(原文[切]) && /[\uD800-\uDBFF]/.test(原文[切 - 1])) 切 -= 1
-          区间们.push({ 起, 止: 切 })
-          起 = 切
+          let toggle = start + segmentCharsLimit
+          if (commaMark > segmentCharsLimit * 0.6) toggle = start + commaMark + 1
+          if (toggle > start && toggle < range.end && /[\uDC00-\uDFFF]/.test(original[toggle]) && /[\uD800-\uDBFF]/.test(original[toggle - 1])) toggle -= 1
+          ranges.push({ start, end: toggle })
+          start = toggle
         }
-        if (起 < 区间.止) 区间们.push({ 起, 止: 区间.止 })
+        if (start < range.end) ranges.push({ start, end: range.end })
       }
 
       // 4) 区间还原成「前导/文本/尾」：段间空白归前一段的尾，首段前导是最前面的空白。
-      const 段们 = []
-      区间们.forEach((区间, 索引) => {
-        const 前导 = 索引 === 0 ? 原文.slice(0, 区间.起) : ''
-        const 尾 = 索引 + 1 < 区间们.length ? 原文.slice(区间.止, 区间们[索引 + 1].起) : 原文.slice(区间.止)
-        段们.push({ 前导, 文本: 原文.slice(区间.起, 区间.止), 尾 })
+      const segments = []
+      ranges.forEach((range, index) => {
+        const leading = index === 0 ? original.slice(0, range.start) : ''
+        const tail = index + 1 < ranges.length ? original.slice(range.end, ranges[index + 1].start) : original.slice(range.end)
+        segments.push({ leading, text: original.slice(range.start, range.end), tail })
       })
-      return 段们
+      return segments
     }
 
-    function 组装译文(段们, 译文表) {
-      return 段们.map((段, 索引) => `${段.前导 || ''}${译文表[索引] == null ? '' : 译文表[索引]}${段.尾 || ''}`).join('')
+    function assembleTranslated(segments, translatedTable) {
+      return segments.map((segment, index) => `${segment.leading || ''}${translatedTable[index] == null ? '' : translatedTable[index]}${segment.tail || ''}`).join('')
     }
 
     // 缓存键带方向：同一段中文翻英文和翻日文的译文不能混用。
-    const 翻译缓存 = new Map()
+    const translationCache = new Map()
 
-    function 缓存键(方向, 文本) {
-      const 源 = (方向 && 方向.source) || 'auto'
-      const 目标 = (方向 && 方向.target) || ''
-      return `${源}→${目标}\u0000${文本}`
+    function cacheKey(direction, text) {
+      const source = (direction && direction.source) || 'auto'
+      const target = (direction && direction.target) || ''
+      return `${source}→${target}\u0000${text}`
     }
 
-    function 读缓存(方向, 文本) {
-      const 键 = 缓存键(方向, 文本)
-      if (!翻译缓存.has(键)) return undefined
-      const 译文 = 翻译缓存.get(键)
-      翻译缓存.delete(键)
-      翻译缓存.set(键, 译文)
-      return 译文
+    function readCache(direction, text) {
+      const key = cacheKey(direction, text)
+      if (!translationCache.has(key)) return undefined
+      const translated = translationCache.get(key)
+      translationCache.delete(key)
+      translationCache.set(key, translated)
+      return translated
     }
 
-    function 写缓存(方向, 文本, 译文) {
-      const 键 = 缓存键(方向, 文本)
-      翻译缓存.delete(键)
-      翻译缓存.set(键, 译文)
-      while (翻译缓存.size > 翻译缓存上限) {
-        const 最旧 = 翻译缓存.keys().next().value
-        翻译缓存.delete(最旧)
+    function writeCache(direction, text, translated) {
+      const key = cacheKey(direction, text)
+      translationCache.delete(key)
+      translationCache.set(key, translated)
+      while (translationCache.size > translationCacheLimit) {
+        const oldest = translationCache.keys().next().value
+        translationCache.delete(oldest)
       }
     }
 
-    function 清空翻译缓存() {
-      翻译缓存.clear()
+    function clearTranslationCache() {
+      translationCache.clear()
     }
 
     // 规划：空段不翻；命中缓存的段直接用，剩下的才要请求。
-    function 规划翻译(段们, 方向) {
-      const 译文表 = 段们.map(() => '')
-      const 待翻 = []
-      段们.forEach((段, 索引) => {
-        if (!段.文本) return
-        const 命中 = 读缓存(方向, 段.文本)
-        if (命中 !== undefined) {
-          译文表[索引] = 命中
+    function planTranslation(segments, direction) {
+      const translatedTable = segments.map(() => '')
+      const pending = []
+      segments.forEach((segment, index) => {
+        if (!segment.text) return
+        const hit = readCache(direction, segment.text)
+        if (hit !== undefined) {
+          translatedTable[index] = hit
           return
         }
-        待翻.push({ 索引, 文本: 段.文本 })
+        pending.push({ index, text: segment.text })
       })
-      return { 译文表, 待翻 }
+      return { translatedTable, pending }
     }
 
-    function 规划批次(待翻, 段数上限 = 每批段数上限, 字数上限 = 每批字数上限) {
-      const 批们 = []
-      let 当前 = []
-      let 字数 = 0
-      for (const 项 of 待翻) {
-        if (当前.length && (当前.length >= 段数上限 || 字数 + 项.文本.length > 字数上限)) {
-          批们.push(当前)
-          当前 = []
-          字数 = 0
+    function planBatchNo(pending, segmentCountLimit = perBatchSegmentCountLimit, charsLimit = perBatchCharsLimit) {
+      const batches = []
+      let current = []
+      let chars = 0
+      for (const item of pending) {
+        if (current.length && (current.length >= segmentCountLimit || chars + item.text.length > charsLimit)) {
+          batches.push(current)
+          current = []
+          chars = 0
         }
-        当前.push(项)
-        字数 += 项.文本.length
+        current.push(item)
+        chars += item.text.length
       }
-      if (当前.length) 批们.push(当前)
-      return 批们
+      if (current.length) batches.push(current)
+      return batches
     }
 
     // ---------------- 分段映射 ----------------
     //
-    // 分段们[i] = { 原文起, 原文止, 原文快照, 译文起, 译文止, 已译 }
-    //   - 原文起/止：第 i 段正文在「原文侧」文本里的区间（不含前导空白和句尾空白）；
-    //   - 译文起/止：对应译文在另一侧文本里的区间；
-    //   - 原文快照：上次翻译时这段的原文，用来判断这段改没改；
-    //   - 已译：这段是否已经有译文可沿用。
+    // pieces[i] = { originalStart, originalEnd, originalSnapshot, translatedStart, translatedEnd, translated }
+    //   - originalStart/End：第 i 段正文在「原文侧」文本里的区间（不含前导空白和句尾空白）；
+    //   - translatedStart/End：对应译文在另一侧文本里的区间；
+    //   - originalSnapshot：上次翻译时这段的原文，用来判断这段改没改；
+    //   - translated：这段是否已经有译文可沿用。
     // 编辑时只把区间折过去，不重排分段；删除/移动分段时再按区间重建两侧文本。
 
     // 两次文本之间「最小改动区间」：把中间那段换掉。
-    function 求编辑范围(旧文本, 新文本) {
-      const 旧 = String(旧文本 || '')
-      const 新 = String(新文本 || '')
-      const 最短 = Math.min(旧.length, 新.length)
-      let 起 = 0
-      while (起 < 最短 && 旧[起] === 新[起]) 起 += 1
-      let 尾 = 0
-      while (尾 < 最短 - 起 && 旧[旧.length - 1 - 尾] === 新[新.length - 1 - 尾]) 尾 += 1
-      return { 起, 旧止: 旧.length - 尾, 新止: 新.length - 尾 }
+    function getEditRange(prevText, nextText) {
+      const prev = String(prevText || '')
+      const next = String(nextText || '')
+      const shortest = Math.min(prev.length, next.length)
+      let start = 0
+      while (start < shortest && prev[start] === next[start]) start += 1
+      let tail = 0
+      while (tail < shortest - start && prev[prev.length - 1 - tail] === next[next.length - 1 - tail]) tail += 1
+      return { start, prevEnd: prev.length - tail, nextEnd: next.length - tail }
     }
 
     // 把旧文本里的一个下标折到新文本里；改区间内部的边界贴到改动末尾。
-    function 映射位置(位置, 编辑) {
+    function mapPosition(position, edit) {
       // 纯插入：插在 p 之后的所有边界后移；只有整篇最开头（p=0）的插入算进第一段，
       // 否则开头新写的字会掉进前导空白、永远不参与翻译。
-      if (编辑.起 === 编辑.旧止) {
-        if (位置 === 0 && 编辑.起 === 0) return 0
-        return 位置 >= 编辑.起 ? 位置 + (编辑.新止 - 编辑.旧止) : 位置
+      if (edit.start === edit.prevEnd) {
+        if (position === 0 && edit.start === 0) return 0
+        return position >= edit.start ? position + (edit.nextEnd - edit.prevEnd) : position
       }
-      if (位置 <= 编辑.起) return 位置
-      if (位置 >= 编辑.旧止) return 位置 + (编辑.新止 - 编辑.旧止)
-      return 编辑.新止
+      if (position <= edit.start) return position
+      if (position >= edit.prevEnd) return position + (edit.nextEnd - edit.prevEnd)
+      return edit.nextEnd
     }
 
-    // 侧 = '原文' | '译文'：只调这一侧的区间，另一侧不动。
-    function 调整分段偏移(分段们, 侧, 旧文本, 新文本) {
-      if (!Array.isArray(分段们) || !分段们.length) return 分段们
-      const 编辑 = 求编辑范围(旧文本, 新文本)
-      if (编辑.起 === 编辑.旧止 && 编辑.起 === 编辑.新止) return 分段们
-      const 起键 = 侧 === '原文' ? '原文起' : '译文起'
-      const 止键 = 侧 === '原文' ? '原文止' : '译文止'
-      const 长 = String(新文本 || '').length
-      return 分段们.map((项) => {
-        const 起 = Math.min(长, Math.max(0, 映射位置(项[起键], 编辑)))
-        const 止 = Math.min(长, Math.max(起, 映射位置(项[止键], 编辑)))
-        return { ...项, [起键]: 起, [止键]: 止 }
+    // side = 'original' | 'translated'：只调这一侧的区间，另一侧不动。
+    function adjustPieceOffset(pieces, side, prevText, nextText) {
+      if (!Array.isArray(pieces) || !pieces.length) return pieces
+      const edit = getEditRange(prevText, nextText)
+      if (edit.start === edit.prevEnd && edit.start === edit.nextEnd) return pieces
+      const startKey = side === 'original' ? 'originalStart' : 'translatedStart'
+      const endKey = side === 'original' ? 'originalEnd' : 'translatedEnd'
+      const length = String(nextText || '').length
+      return pieces.map((item) => {
+        const start = Math.min(length, Math.max(0, mapPosition(item[startKey], edit)))
+        const end = Math.min(length, Math.max(start, mapPosition(item[endKey], edit)))
+        return { ...item, [startKey]: start, [endKey]: end }
       })
     }
 
     // 把整段文本按分段区间拆成「前导们 + 内容们」；前导们 比 内容们 多一项。
-    function 切片段(文本, 分段们, 起键, 止键) {
-      const 原文 = String(文本 || '')
-      const 前导们 = []
-      const 内容们 = []
-      let 游标 = 0
-      for (const 项 of 分段们) {
-        const 起 = Math.min(原文.length, Math.max(游标, 项[起键]))
-        const 止 = Math.min(原文.length, Math.max(起, 项[止键]))
-        前导们.push(原文.slice(游标, 起))
-        内容们.push(原文.slice(起, 止))
-        游标 = 止
+    function switchFragment(text, pieces, startKey, endKey) {
+      const original = String(text || '')
+      const leadings = []
+      const contents = []
+      let cursor = 0
+      for (const item of pieces) {
+        const start = Math.min(original.length, Math.max(cursor, item[startKey]))
+        const end = Math.min(original.length, Math.max(start, item[endKey]))
+        leadings.push(original.slice(cursor, start))
+        contents.push(original.slice(start, end))
+        cursor = end
       }
-      前导们.push(原文.slice(游标))
-      return { 前导们, 内容们 }
+      leadings.push(original.slice(cursor))
+      return { leadings, contents }
     }
 
     // 取某一侧的渲染片段；没有有效映射时返回 null（此时不显示分段高亮）。
     // 原文坐标记在 映射侧：同步态下 原文侧 为 null，但映射仍然可用。
-    function 取侧片段(状态, 侧) {
-      const 分段们 = 状态 && 状态.分段们
-      const 映射侧 = 状态 && (状态.映射侧 || 状态.原文侧)
-      if (!Array.isArray(分段们) || !分段们.length || !映射侧) return null
-      const 文本 = String(状态[侧] || '')
-      if (侧 === 映射侧) return 切片段(文本, 分段们, '原文起', '原文止')
-      return 切片段(文本, 分段们, '译文起', '译文止')
+    function fetchSideFragment(status, side) {
+      const pieces = status && status.pieces
+      const sideMap = status && (status.sideMap || status.originalSide)
+      if (!Array.isArray(pieces) || !pieces.length || !sideMap) return null
+      const text = String(status[side] || '')
+      if (side === sideMap) return switchFragment(text, pieces, 'originalStart', 'originalEnd')
+      return switchFragment(text, pieces, 'translatedStart', 'translatedEnd')
     }
 
-    function 映射有效(状态) {
-      const 映射侧 = 状态 && (状态.映射侧 || 状态.原文侧)
-      if (!映射侧) return false
-      const 分段们 = 状态.分段们
-      if (!Array.isArray(分段们) || !分段们.length) return false
-      const 另一侧 = 映射侧 === '上' ? '下' : '上'
-      const 原文文本 = String(状态[映射侧] || '')
-      const 译文文本 = String(状态[另一侧] || '')
-      for (const 项 of 分段们) {
-        if (!项 || 项.原文起 > 项.原文止 || 项.译文起 > 项.译文止) return false
-        if (项.原文起 < 0 || 项.译文起 < 0) return false
-        if (项.原文止 > 原文文本.length || 项.译文止 > 译文文本.length) return false
+    function mapValid(status) {
+      const sideMap = status && (status.sideMap || status.originalSide)
+      if (!sideMap) return false
+      const pieces = status.pieces
+      if (!Array.isArray(pieces) || !pieces.length) return false
+      const otherOneSide = sideMap === 'upper' ? 'lower' : 'upper'
+      const originalText = String(status[sideMap] || '')
+      const translatedText = String(status[otherOneSide] || '')
+      for (const item of pieces) {
+        if (!item || item.originalStart > item.originalEnd || item.translatedStart > item.translatedEnd) return false
+        if (item.originalStart < 0 || item.translatedStart < 0) return false
+        if (item.originalEnd > originalText.length || item.translatedEnd > translatedText.length) return false
       }
       return true
     }
 
     // 由「切段结果 + 每段译文」拼出两侧文本和分段映射；已译表决定哪段可沿用。
-    function 拼接分段(段们, 译文表, 已译表) {
-      const 原文块 = []
-      const 译文块 = []
-      const 分段们 = []
-      let 原游标 = 0
-      let 译游标 = 0
-      段们.forEach((段, 索引) => {
-        const 前导 = String(段.前导 || '')
-        const 正文 = String(段.文本 || '')
-        const 尾 = String(段.尾 || '')
-        const 译文 = 译文表[索引] == null ? '' : String(译文表[索引])
-        const 原文起 = 原游标 + 前导.length
-        const 原文止 = 原文起 + 正文.length
-        const 译文起 = 译游标 + 前导.length
-        const 译文止 = 译文起 + 译文.length
-        原文块.push(前导, 正文, 尾)
-        译文块.push(前导, 译文, 尾)
-        原游标 = 原文止 + 尾.length
-        译游标 = 译文止 + 尾.length
-        分段们.push({
-          原文起,
-          原文止,
-          原文快照: 正文,
-          译文起,
-          译文止,
-          已译: 已译表 ? Boolean(已译表[索引]) : true,
+    function joinSegments(segments, translatedTable, translatedSet) {
+      const originalChunk = []
+      const translationChunk = []
+      const pieces = []
+      let origCursor = 0
+      let translateCursor = 0
+      segments.forEach((segment, index) => {
+        const leading = String(segment.leading || '')
+        const bodyText = String(segment.text || '')
+        const tail = String(segment.tail || '')
+        const translated = translatedTable[index] == null ? '' : String(translatedTable[index])
+        const originalStart = origCursor + leading.length
+        const originalEnd = originalStart + bodyText.length
+        const translatedStart = translateCursor + leading.length
+        const translatedEnd = translatedStart + translated.length
+        originalChunk.push(leading, bodyText, tail)
+        translationChunk.push(leading, translated, tail)
+        origCursor = originalEnd + tail.length
+        translateCursor = translatedEnd + tail.length
+        pieces.push({
+          originalStart,
+          originalEnd,
+          originalSnapshot: bodyText,
+          translatedStart,
+          translatedEnd,
+          translated: translatedSet ? Boolean(translatedSet[index]) : true,
         })
       })
-      return { 原文文本: 原文块.join(''), 译文文本: 译文块.join(''), 分段们 }
+      return { originalText: originalChunk.join(''), translatedText: translationChunk.join(''), pieces }
     }
 
-    function 同方向(甲, 乙) {
-      return Boolean(甲 && 乙 && 甲.source === 乙.source && 甲.target === 乙.target)
+    function sameDirection(alpha, beta) {
+      return Boolean(alpha && beta && alpha.source === beta.source && alpha.target === beta.target)
     }
 
     // 这次要翻什么：方向按原文侧现算；没改过的段先沿用 state 里的译文，
     // 再查全局缓存，都没有的才进待翻。待翻的段先用上一版译文占位，
     // 中途失败/取消时框里不会整段变空。
-    function 建翻译计划(状态, 配置) {
-      if (!状态 || !状态.原文侧) return null
-      const 侧 = 状态.原文侧
-      const 另一侧 = 侧 === '上' ? '下' : '上'
-      const 原文 = String(状态[侧] || '')
-      if (!原文.trim()) return null
-      const 方向 = 选翻译方向(原文, 配置)
-      const 段们 = 切段(原文)
-      const 旧分段们 = Array.isArray(状态.分段们) && 状态.分段们.length ? 状态.分段们 : []
-      const 旧译文 = String(状态[另一侧] || '')
-      const 可沿用 = 同方向(状态.方向, 方向) && 旧分段们.length > 0
-      const 译文表 = 段们.map(() => '')
-      const 已译 = 段们.map(() => false)
-      const 待翻 = []
-      const 已用 = new Set()
-      段们.forEach((段, 索引) => {
-        if (!段.文本) {
-          译文表[索引] = ''
-          已译[索引] = true
+    function buildTranslationPlan(status, config) {
+      if (!status || !status.originalSide) return null
+      const side = status.originalSide
+      const otherOneSide = side === 'upper' ? 'lower' : 'upper'
+      const original = String(status[side] || '')
+      if (!original.trim()) return null
+      const direction = pickTranslationDirection(original, config)
+      const segments = splitSegment(original)
+      const prevPieces = Array.isArray(status.pieces) && status.pieces.length ? status.pieces : []
+      const prevTranslated = String(status[otherOneSide] || '')
+      const canReuse = sameDirection(status.direction, direction) && prevPieces.length > 0
+      const translatedTable = segments.map(() => '')
+      const translated = segments.map(() => false)
+      const pending = []
+      const used = new Set()
+      segments.forEach((segment, index) => {
+        if (!segment.text) {
+          translatedTable[index] = ''
+          translated[index] = true
           return
         }
-        if (可沿用) {
-          for (let k = 0; k < 旧分段们.length; k += 1) {
-            const 项 = 旧分段们[k]
-            if (已用.has(k) || !项.已译 || 项.原文快照 !== 段.文本) continue
-            译文表[索引] = 旧译文.slice(项.译文起, 项.译文止)
-            已译[索引] = true
-            已用.add(k)
+        if (canReuse) {
+          for (let k = 0; k < prevPieces.length; k += 1) {
+            const item = prevPieces[k]
+            if (used.has(k) || !item.translated || item.originalSnapshot !== segment.text) continue
+            translatedTable[index] = prevTranslated.slice(item.translatedStart, item.translatedEnd)
+            translated[index] = true
+            used.add(k)
             return
           }
         }
-        const 缓存 = 读缓存(方向, 段.文本)
-        if (缓存 !== undefined) {
-          译文表[索引] = 缓存
-          已译[索引] = true
+        const cache = readCache(direction, segment.text)
+        if (cache !== undefined) {
+          translatedTable[index] = cache
+          translated[index] = true
           return
         }
-        const 旧项 = 旧分段们.length ? 旧分段们[索引] : null
-        if (旧项 && 旧项.已译) 译文表[索引] = 旧译文.slice(旧项.译文起, 旧项.译文止)
-        待翻.push({ 索引, 文本: 段.文本 })
+        const prevItem = prevPieces.length ? prevPieces[index] : null
+        if (prevItem && prevItem.translated) translatedTable[index] = prevTranslated.slice(prevItem.translatedStart, prevItem.translatedEnd)
+        pending.push({ index, text: segment.text })
       })
-      const 总段数 = 段们.filter((段) => 段.文本).length
+      const totalSegmentCount = segments.filter((segment) => segment.text).length
       return {
-        侧,
-        另一侧,
-        原文,
-        方向,
-        段们,
-        译文表,
-        已译,
-        待翻,
-        总段数,
-        沿用数: 总段数 - 待翻.length,
+        side,
+        otherOneSide,
+        original,
+        direction,
+        segments,
+        translatedTable,
+        translated,
+        pending,
+        totalSegmentCount,
+        reuseCount: totalSegmentCount - pending.length,
       }
     }
 
-    function 计划映射(计划) {
-      return 拼接分段(计划.段们, 计划.译文表, 计划.已译)
+    function planMap(plan) {
+      return joinSegments(plan.segments, plan.translatedTable, plan.translated)
     }
 
-    function 翻译开始状态(旧, 计划) {
-      const 结果 = 计划映射(计划)
+    function translationBeginStatus(prev, plan) {
+      const result = planMap(plan)
       return {
-        ...旧,
-        阶段: '翻译中',
-        提示: '',
-        成功: '',
-        方向: 计划.方向,
-        原文侧: 计划.侧,
-        映射侧: 计划.侧,
-        进度: { 完成: 0, 总数: 计划.待翻.length },
-        [计划.侧]: 计划.原文,
-        [计划.另一侧]: 结果.译文文本,
-        分段们: 结果.分段们,
+        ...prev,
+        phase: '翻译中',
+        prompt: '',
+        success: '',
+        direction: plan.direction,
+        originalSide: plan.side,
+        sideMap: plan.side,
+        progress: { done: 0, totalCount: plan.pending.length },
+        [plan.side]: plan.original,
+        [plan.otherOneSide]: result.translatedText,
+        pieces: result.pieces,
       }
     }
 
-    function 翻译成功状态(旧, 计划) {
-      const 结果 = 计划映射(计划)
-      const 沿用文案 = 计划.沿用数 ? `（${计划.沿用数} 段沿用上次）` : ''
+    function translationSuccessStatus(prev, plan) {
+      const result = planMap(plan)
+      const reuseCopy = plan.reuseCount ? `（${plan.reuseCount} 段沿用上次）` : ''
       return {
-        ...旧,
+        ...prev,
         // 翻完回同步态：两框对应且都可编辑，原文侧清空，谁再编辑谁就是新的原文。
-        阶段: '同步',
-        原文侧: null,
-        映射侧: 计划.侧,
-        提示: '',
-        进度: null,
-        方向: 计划.方向,
-        [计划.侧]: 计划.原文,
-        [计划.另一侧]: 结果.译文文本,
-        分段们: 结果.分段们,
-        成功: `${翻译方向文案(计划.方向)} · 已翻译 ${计划.总段数} 段${沿用文案}`,
+        phase: '同步',
+        originalSide: null,
+        sideMap: plan.side,
+        prompt: '',
+        progress: null,
+        direction: plan.direction,
+        [plan.side]: plan.original,
+        [plan.otherOneSide]: result.translatedText,
+        pieces: result.pieces,
+        success: `${translationDirectionCopy(plan.direction)} · 已翻译 ${plan.totalSegmentCount} 段${reuseCopy}`,
       }
     }
 
-    function 翻译中断状态(旧, 计划, _阶段, 提示) {
-      const 结果 = 计划映射(计划)
+    function translationAbortState(prev, plan, _phase, prompt) {
+      const result = planMap(plan)
       return {
-        ...旧,
+        ...prev,
         // 失败 / 取消都退回「修改中」：原文侧保留，已翻好的段留在框里，按钮显示继续翻译。
-        阶段: '修改中',
-        原文侧: 计划.侧,
-        映射侧: 计划.侧,
-        提示: 提示 || '',
-        成功: '',
-        进度: null,
-        [计划.侧]: 计划.原文,
-        [计划.另一侧]: 结果.译文文本,
-        分段们: 结果.分段们,
+        phase: '修改中',
+        originalSide: plan.side,
+        sideMap: plan.side,
+        prompt: prompt || '',
+        success: '',
+        progress: null,
+        [plan.side]: plan.original,
+        [plan.otherOneSide]: result.translatedText,
+        pieces: result.pieces,
       }
     }
 
-    const 翻译重试码 = ['service_down', 'model_loading', 'busy', 'timeout', 'upstream_error']
+    const translationRetryCode = ['service_down', 'model_loading', 'busy', 'timeout', 'upstream_error']
     // 服务端任务状态 -> 面板阶段。done 后还要取一次结果，所以叫「整理译文」。
-    const 任务阶段文案 = {
+    const taskPhaseCopy = {
       queued: '排队中',
       running: '翻译中',
       done: '整理译文',
       failed: '翻译失败',
       canceled: '已取消',
     }
-    const 冷启动提示 = '正在加载翻译模型，第一次会慢一点（约 40 秒）'
+    const coldStartPrompt = '正在加载翻译模型，第一次会慢一点（约 40 秒）'
 
     // 只跑待翻的批，一次一批（可取译文=1），每批走异步任务：提交 → 轮询 → 取结果。
     // post / get / 等待 / 运行 / 现在 都由调用方注入，单元测试可以完全不走网络。
-    async function 执行翻译(计划, 依赖 = {}) {
-      const 发送 =
-        typeof 依赖.post === 'function'
-          ? 依赖.post
-          : (路径, 体, 选项) => post(路径, 体, 选项 || {})
-      const 取状态 =
-        typeof 依赖.get === 'function'
-          ? 依赖.get
-          : (路径) => get(路径)
-      const 运行 = 依赖.运行 || { 已取消: false, 控制器: null }
-      const 推送 = typeof 依赖.推送 === 'function' ? 依赖.推送 : () => {}
-      const 等待 = typeof 依赖.等待 === 'function' ? 依赖.等待 : (毫秒) => new Promise((好) => setTimeout(好, 毫秒))
-      const 现在 = typeof 依赖.现在 === 'function' ? 依赖.现在 : () => Date.now()
-      const 轮询毫秒 = Number.isFinite(依赖.轮询毫秒) ? Math.max(0, 依赖.轮询毫秒) : 任务轮询毫秒
-      const 冷启动毫秒 = Number.isFinite(依赖.冷启动毫秒) ? Math.max(0, 依赖.冷启动毫秒) : 任务冷启动毫秒
-      const 总时长上限 = Number.isFinite(依赖.总时长上限) ? Math.max(0, 依赖.总时长上限) : 任务总时长上限
+    async function runTranslation(plan, dep = {}) {
+      const send =
+        typeof dep.post === 'function'
+          ? dep.post
+          : (path, body, option) => post(path, body, option || {})
+      const fetchStatus =
+        typeof dep.get === 'function'
+          ? dep.get
+          : (path) => get(path)
+      const run = dep.run || { canceled: false, controller: null }
+      const push = typeof dep.push === 'function' ? dep.push : () => {}
+      const wait = typeof dep.wait === 'function' ? dep.wait : (ms) => new Promise((ok) => setTimeout(ok, ms))
+      const now = typeof dep.now === 'function' ? dep.now : () => Date.now()
+      const pollMs = Number.isFinite(dep.pollMs) ? Math.max(0, dep.pollMs) : taskPollMs
+      const coldStartMs = Number.isFinite(dep.coldStartMs) ? Math.max(0, dep.coldStartMs) : taskColdStartMs
+      const totalDurationLimit = Number.isFinite(dep.totalDurationLimit) ? Math.max(0, dep.totalDurationLimit) : taskTotalDurationLimit
       // 任务批比同步批小：冷启动时单批耗时可控。
-      const 批们 = 规划批次(计划.待翻, 任务每批段数, 任务每批字数)
-      let 完成 = 0
-      let 失败 = ''
-      let 回退 = false
-      const 开始 = 现在()
+      const batches = planBatchNo(plan.pending, taskPerBatchSegmentCount, taskPerBatchChars)
+      let done = 0
+      let fail = ''
+      let revert = false
+      const begin = now()
 
-      const 通知 = (阶段, 提示 = '') => {
-        推送(完成, { 阶段, 提示, 已用: Math.max(0, 现在() - 开始), 总数: 计划.待翻.length })
+      const notice = (phase, prompt = '') => {
+        push(done, { phase, prompt, used: Math.max(0, now() - begin), totalCount: plan.pending.length })
       }
 
-      const 写回一段 = (项, 译文) => {
-        if (typeof 译文 === 'string' && 译文) {
-          计划.译文表[项.索引] = 译文
-          计划.已译[项.索引] = true
-          写缓存(计划.方向, 项.文本, 译文)
-          完成 += 1
+      const writeBackOneSegment = (item, translated) => {
+        if (typeof translated === 'string' && translated) {
+          plan.translatedTable[item.index] = translated
+          plan.translated[item.index] = true
+          writeCache(plan.direction, item.text, translated)
+          done += 1
           return true
         }
-        失败 = '这次没翻完，可以点继续翻译重试'
+        fail = '这次没翻完，可以点继续翻译重试'
         return false
       }
 
       // 回退分支：旧版服务的同步批量接口，超时放宽到 3 分钟。
-      const 同步一批 = async (批) => {
-        const 体 = {
-          texts: 批.map((项) => ({ id: 项.索引, text: 项.文本 })),
-          source: 计划.方向.source,
-          target: 计划.方向.target,
+      const syncOneBatch = async (batch) => {
+        const body = {
+          texts: batch.map((item) => ({ id: item.index, text: item.text })),
+          source: plan.direction.source,
+          target: plan.direction.target,
           timeoutMs: 180000,
         }
-        const 选项 = 运行.控制器 ? { signal: 运行.控制器.signal } : undefined
-        let 结果
+        const option = run.controller ? { signal: run.controller.signal } : undefined
+        let result
         try {
-          结果 = await 发送('/translate/batch', 体, 选项)
+          result = await send('/translate/batch', body, option)
         } catch {
-          结果 = null
+          result = null
         }
-        if (运行.已取消) return
-        if (!结果) {
-          失败 = '连接本地 AI 失败，可以点继续翻译重试'
+        if (run.canceled) return
+        if (!result) {
+          fail = '连接本地 AI 失败，可以点继续翻译重试'
           return
         }
-        if (结果.ok && Array.isArray(结果.results)) {
-          const 按索引 = new Map()
-          for (const 条 of 结果.results) 按索引.set(String(条 && 条.id), 条)
-          for (const 项 of 批) {
-            const 条 = 按索引.get(String(项.索引))
-            if (条 && !条.error && typeof 条.translated === 'string') 写回一段(项, 条.translated)
-            else 失败 = (条 && 条.error && 条.error.hint) || '这次没翻完，可以点继续翻译重试'
+        if (result.ok && Array.isArray(result.results)) {
+          const byIndex = new Map()
+          for (const entry of result.results) byIndex.set(String(entry && entry.id), entry)
+          for (const item of batch) {
+            const entry = byIndex.get(String(item.index))
+            if (entry && !entry.error && typeof entry.translated === 'string') writeBackOneSegment(item, entry.translated)
+            else fail = (entry && entry.error && entry.error.hint) || '这次没翻完，可以点继续翻译重试'
           }
-          通知('翻译中')
+          notice('翻译中')
           return
         }
-        失败 = (结果.ok ? '' : 结果.hint) || '这次没翻完，可以点继续翻译重试'
+        fail = (result.ok ? '' : result.hint) || '这次没翻完，可以点继续翻译重试'
       }
 
-      const 提交一批 = async (批) => {
-        const 体 = {
-          texts: 批.map((项) => 项.文本),
-          source: 计划.方向.source,
-          target: 计划.方向.target,
+      const submitOneBatch = async (batch) => {
+        const body = {
+          texts: batch.map((item) => item.text),
+          source: plan.direction.source,
+          target: plan.direction.target,
         }
-        const 选项 = 运行.控制器 ? { signal: 运行.控制器.signal } : undefined
-        const 发一次 = async () => {
+        const option = run.controller ? { signal: run.controller.signal } : undefined
+        const emitOneOnce = async () => {
           try {
-            return await 发送('/translate/jobs', 体, 选项)
+            return await send('/translate/jobs', body, option)
           } catch {
             return null
           }
         }
-        let 结果 = await 发一次()
-        if (运行.已取消) return { 已取消: true }
-        if (结果 && !结果.ok && 翻译重试码.includes(结果.code)) {
-          await 等待(800)
-          if (运行.已取消) return { 已取消: true }
-          结果 = await 发一次()
+        let result = await emitOneOnce()
+        if (run.canceled) return { canceled: true }
+        if (result && !result.ok && translationRetryCode.includes(result.code)) {
+          await wait(800)
+          if (run.canceled) return { canceled: true }
+          result = await emitOneOnce()
         }
-        if (!结果) return { ok: false, hint: '提交翻译任务失败，可以点继续翻译重试' }
-        if (结果.ok && 结果.id) return { ok: true, id: String(结果.id) }
+        if (!result) return { ok: false, hint: '提交翻译任务失败，可以点继续翻译重试' }
+        if (result.ok && result.id) return { ok: true, id: String(result.id) }
         // 旧版服务没有任务接口：整轮改用同步批量。
-        if (结果.code === 'not_supported') return { 回退: true }
-        return { ok: false, hint: 结果.hint || '提交翻译任务失败，可以点继续翻译重试', code: 结果.code }
+        if (result.code === 'not_supported') return { revert: true }
+        return { ok: false, hint: result.hint || '提交翻译任务失败，可以点继续翻译重试', code: result.code }
       }
 
-      const 尽力取消 = async (任务id) => {
-        if (!任务id) return
+      const bestEffortCancel = async (taskId) => {
+        if (!taskId) return
         try {
-          await 发送('/translate/jobs/cancel', { id: 任务id })
+          await send('/translate/jobs/cancel', { id: taskId })
         } catch {
           // 取消失败不阻塞面板停止。
         }
       }
 
       // 轮询一个任务直到终态；返回 { done } / { 失败 } / { 已取消 }。
-      const 等任务 = async (任务id) => {
-        运行.任务id = 任务id
-        let 阶段 = 'queued'
-        let 连不上 = 0
+      const awaitTask = async (taskId) => {
+        run.taskId = taskId
+        let phase = 'queued'
+        let unreachable = 0
         for (;;) {
-          if (运行.已取消) {
-            运行.任务id = null
-            await 尽力取消(任务id)
-            return { 已取消: true }
+          if (run.canceled) {
+            run.taskId = null
+            await bestEffortCancel(taskId)
+            return { canceled: true }
           }
-          const 已用 = Math.max(0, 现在() - 开始)
-          if (已用 > 总时长上限) {
-            运行.任务id = null
-            失败 = '翻译等太久了，已停下；翻好的段落都保留着'
-            await 尽力取消(任务id)
-            return { 失败: true }
+          const used = Math.max(0, now() - begin)
+          if (used > totalDurationLimit) {
+            run.taskId = null
+            fail = '翻译等太久了，已停下；翻好的段落都保留着'
+            await bestEffortCancel(taskId)
+            return { fail: true }
           }
           // 冷启动（模型加载 + 首次编译）超过 8 秒给明确提示，别让人以为卡死。
-          if (已用 >= 冷启动毫秒 && (阶段 === 'queued' || 阶段 === 'running')) {
-            通知('准备模型', 冷启动提示)
+          if (used >= coldStartMs && (phase === 'queued' || phase === 'running')) {
+            notice('准备模型', coldStartPrompt)
           } else {
-            通知(任务阶段文案[阶段] || '排队中')
+            notice(taskPhaseCopy[phase] || '排队中')
           }
-          let 状态
+          let status
           try {
-            状态 = await 取状态(`/translate/jobs/status?id=${encodeURIComponent(任务id)}`)
+            status = await fetchStatus(`/translate/jobs/status?id=${encodeURIComponent(taskId)}`)
           } catch {
-            状态 = null
+            status = null
           }
-          if (运行.已取消) {
-            运行.任务id = null
-            await 尽力取消(任务id)
-            return { 已取消: true }
+          if (run.canceled) {
+            run.taskId = null
+            await bestEffortCancel(taskId)
+            return { canceled: true }
           }
-          if (状态 && 状态.ok) {
-            连不上 = 0
-            阶段 = String(状态.state || 'running')
-            if (阶段 === 'done') return { done: true }
-            if (阶段 === 'failed') {
-              失败 = (状态.error && typeof 状态.error === 'string' && 状态.error) || '翻译任务失败了，可以点继续翻译重试'
-              return { 失败: true }
+          if (status && status.ok) {
+            unreachable = 0
+            phase = String(status.state || 'running')
+            if (phase === 'done') return { done: true }
+            if (phase === 'failed') {
+              fail = (status.error && typeof status.error === 'string' && status.error) || '翻译任务失败了，可以点继续翻译重试'
+              return { fail: true }
             }
-            if (阶段 === 'canceled') return { 已取消: true }
+            if (phase === 'canceled') return { canceled: true }
           } else {
-            连不上 += 1
-            const 确定性错误 = 状态 && 状态.code && 状态.code !== 'upstream_error'
-            if (确定性错误) {
-              失败 = 状态.hint || '翻译任务中断了，可以点继续翻译重试'
-              return { 失败: true }
+            unreachable += 1
+            const deterministicError = status && status.code && status.code !== 'upstream_error'
+            if (deterministicError) {
+              fail = status.hint || '翻译任务中断了，可以点继续翻译重试'
+              return { fail: true }
             }
-            if (连不上 >= 5) {
-              失败 = '与本地 AI 的连接中断了，翻好的段落都保留着'
-              return { 失败: true }
+            if (unreachable >= 5) {
+              fail = '与本地 AI 的连接中断了，翻好的段落都保留着'
+              return { fail: true }
             }
           }
-          await 等待(轮询毫秒)
+          await wait(pollMs)
         }
       }
 
-      const 取译文 = async (任务id) => {
+      const fetchTranslated = async (taskId) => {
         try {
-          const 结果 = await 取状态(`/translate/jobs/result?id=${encodeURIComponent(任务id)}`)
-          if (结果 && 结果.ok && Array.isArray(结果.texts)) return 结果.texts
+          const result = await fetchStatus(`/translate/jobs/result?id=${encodeURIComponent(taskId)}`)
+          if (result && result.ok && Array.isArray(result.texts)) return result.texts
           return null
         } catch {
           return null
         }
       }
 
-      for (const 批 of 批们) {
-        if (运行.已取消 || 失败) break
-        if (回退) {
-          await 同步一批(批)
+      for (const batch of batches) {
+        if (run.canceled || fail) break
+        if (revert) {
+          await syncOneBatch(batch)
           continue
         }
-        通知('提交中')
-        const 提交 = await 提交一批(批)
-        if (提交.已取消 || 运行.已取消) {
-          运行.任务id = null
+        notice('提交中')
+        const submit = await submitOneBatch(batch)
+        if (submit.canceled || run.canceled) {
+          run.taskId = null
           break
         }
-        if (提交.回退) {
+        if (submit.revert) {
           // 第一批复用同一份文本走同步接口，后续批也留在同步路径。
-          回退 = true
-          await 同步一批(批)
+          revert = true
+          await syncOneBatch(batch)
           continue
         }
-        if (!提交.ok) {
-          失败 = 提交.hint
+        if (!submit.ok) {
+          fail = submit.hint
           break
         }
-        const 状态 = await 等任务(提交.id)
-        if (状态.已取消) break
-        if (状态.失败) break
-        const 译文们 = await 取译文(提交.id)
-        运行.任务id = null
-        if (!译文们) {
-          失败 = '没取到译文，可以点继续翻译重试'
+        const status = await awaitTask(submit.id)
+        if (status.canceled) break
+        if (status.fail) break
+        const translations = await fetchTranslated(submit.id)
+        run.taskId = null
+        if (!translations) {
+          fail = '没取到译文，可以点继续翻译重试'
           break
         }
-        for (let i = 0; i < 批.length; i += 1) 写回一段(批[i], 译文们[i])
-        通知('翻译中')
+        for (let i = 0; i < batch.length; i += 1) writeBackOneSegment(batch[i], translations[i])
+        notice('翻译中')
       }
 
-      if (运行.已取消) await 尽力取消(运行.任务id)
-      return { 完成, 失败, 已取消: Boolean(运行.已取消), 请求批次: 批们.length, 回退 }
+      if (run.canceled) await bestEffortCancel(run.taskId)
+      return { done, fail, canceled: Boolean(run.canceled), requestBatchNo: batches.length, revert }
     }
 
     // ---------------- 分段删除 / 移动（只改文本和映射，不请求翻译） ----------------
 
-    function 删除片段项(片段, 索引) {
-      const 段数 = 片段.内容们.length
-      片段.内容们.splice(索引, 1)
-      if (索引 < 段数 - 1) 片段.前导们.splice(索引 + 1, 1)
-      else 片段.前导们.splice(索引, 1)
+    function deleteFragmentItem(fragment, index) {
+      const segmentCount = fragment.contents.length
+      fragment.contents.splice(index, 1)
+      if (index < segmentCount - 1) fragment.leadings.splice(index + 1, 1)
+      else fragment.leadings.splice(index, 1)
     }
 
-    function 交换片段项(片段, 甲, 乙) {
-      const 临时 = 片段.内容们[甲]
-      片段.内容们[甲] = 片段.内容们[乙]
-      片段.内容们[乙] = 临时
+    function swapFragmentItem(fragment, alpha, beta) {
+      const temp = fragment.contents[alpha]
+      fragment.contents[alpha] = fragment.contents[beta]
+      fragment.contents[beta] = temp
     }
 
     // 片段们 -> 两侧文本 + 新分段映射；原文快照/已译跟着原来的段走。
-    function 由片段建映射(原文片段, 译文片段, 来源, 旧分段们) {
-      const 段数 = 原文片段.内容们.length
-      const 分段们 = []
-      let 原文本 = 原文片段.前导们[0] || ''
-      let 译文本 = 译文片段.前导们[0] || ''
-      for (let i = 0; i < 段数; i += 1) {
-        const 内容原 = 原文片段.内容们[i] || ''
-        const 内容译 = 译文片段.内容们[i] || ''
-        const 原文起 = 原文本.length
-        const 原文止 = 原文起 + 内容原.length
-        const 译文起 = 译文本.length
-        const 译文止 = 译文起 + 内容译.length
-        原文本 += 内容原 + (原文片段.前导们[i + 1] || '')
-        译文本 += 内容译 + (译文片段.前导们[i + 1] || '')
-        const 旧 = 旧分段们[来源[i]]
-        分段们.push({
-          原文起,
-          原文止,
-          原文快照: 旧 ? 旧.原文快照 : 内容原,
-          译文起,
-          译文止,
-          已译: 旧 ? 旧.已译 : false,
+    function buildMapFromFragments(originalFragment, translatedFragment, origin, prevPieces) {
+      const segmentCount = originalFragment.contents.length
+      const pieces = []
+      let sourceText = originalFragment.leadings[0] || ''
+      let translatedCurrent = translatedFragment.leadings[0] || ''
+      for (let i = 0; i < segmentCount; i += 1) {
+        const contentOrig = originalFragment.contents[i] || ''
+        const contentTranslate = translatedFragment.contents[i] || ''
+        const originalStart = sourceText.length
+        const originalEnd = originalStart + contentOrig.length
+        const translatedStart = translatedCurrent.length
+        const translatedEnd = translatedStart + contentTranslate.length
+        sourceText += contentOrig + (originalFragment.leadings[i + 1] || '')
+        translatedCurrent += contentTranslate + (translatedFragment.leadings[i + 1] || '')
+        const prev = prevPieces[origin[i]]
+        pieces.push({
+          originalStart,
+          originalEnd,
+          originalSnapshot: prev ? prev.originalSnapshot : contentOrig,
+          translatedStart,
+          translatedEnd,
+          translated: prev ? prev.translated : false,
         })
       }
-      return { 原文文本: 原文本, 译文文本: 译文本, 分段们 }
+      return { originalText: sourceText, translatedText: translatedCurrent, pieces }
     }
 
     // 操作 = '删除' | '上移' | '下移'；只动本地状态，不调用翻译服务。
-    function 分段操作(状态, 操作, 索引) {
-      if (!状态 || 状态.阶段 === '翻译中') return 状态
-      if (!映射有效(状态)) return 状态
-      const 分段们 = 状态.分段们
-      const 位置 = Number(索引)
-      if (!Number.isInteger(位置) || 位置 < 0 || 位置 >= 分段们.length) return 状态
-      const 映射侧 = 状态.映射侧 || 状态.原文侧
-      if (!映射侧) return 状态
-      const 另一侧 = 映射侧 === '上' ? '下' : '上'
-      const 原文片段 = 切片段(状态[映射侧], 分段们, '原文起', '原文止')
-      const 译文片段 = 切片段(状态[另一侧], 分段们, '译文起', '译文止')
-      const 来源 = 分段们.map((_, i) => i)
-      if (操作 === '删除') {
-        删除片段项(原文片段, 位置)
-        删除片段项(译文片段, 位置)
-        来源.splice(位置, 1)
-      } else if (操作 === '上移' && 位置 > 0) {
-        交换片段项(原文片段, 位置, 位置 - 1)
-        交换片段项(译文片段, 位置, 位置 - 1)
-        const 临时 = 来源[位置]
-        来源[位置] = 来源[位置 - 1]
-        来源[位置 - 1] = 临时
-      } else if (操作 === '下移' && 位置 < 分段们.length - 1) {
-        交换片段项(原文片段, 位置, 位置 + 1)
-        交换片段项(译文片段, 位置, 位置 + 1)
-        const 临时 = 来源[位置]
-        来源[位置] = 来源[位置 + 1]
-        来源[位置 + 1] = 临时
+    function pieceAction(status, action, index) {
+      if (!status || status.phase === '翻译中') return status
+      if (!mapValid(status)) return status
+      const pieces = status.pieces
+      const position = Number(index)
+      if (!Number.isInteger(position) || position < 0 || position >= pieces.length) return status
+      const sideMap = status.sideMap || status.originalSide
+      if (!sideMap) return status
+      const otherOneSide = sideMap === 'upper' ? 'lower' : 'upper'
+      const originalFragment = switchFragment(status[sideMap], pieces, 'originalStart', 'originalEnd')
+      const translatedFragment = switchFragment(status[otherOneSide], pieces, 'translatedStart', 'translatedEnd')
+      const origin = pieces.map((_, i) => i)
+      if (action === '删除') {
+        deleteFragmentItem(originalFragment, position)
+        deleteFragmentItem(translatedFragment, position)
+        origin.splice(position, 1)
+      } else if (action === '上移' && position > 0) {
+        swapFragmentItem(originalFragment, position, position - 1)
+        swapFragmentItem(translatedFragment, position, position - 1)
+        const temp = origin[position]
+        origin[position] = origin[position - 1]
+        origin[position - 1] = temp
+      } else if (action === '下移' && position < pieces.length - 1) {
+        swapFragmentItem(originalFragment, position, position + 1)
+        swapFragmentItem(translatedFragment, position, position + 1)
+        const temp = origin[position]
+        origin[position] = origin[position + 1]
+        origin[position + 1] = temp
       } else {
-        return 状态
+        return status
       }
-      const 映射 = 由片段建映射(原文片段, 译文片段, 来源, 分段们)
-      if (!映射.原文文本.trim() && !映射.译文文本.trim()) return 翻译空状态()
+      const map = buildMapFromFragments(originalFragment, translatedFragment, origin, pieces)
+      if (!map.originalText.trim() && !map.translatedText.trim()) return translationEmptyStatus()
       return {
-        ...状态,
-        [映射侧]: 映射.原文文本,
-        [另一侧]: 映射.译文文本,
-        分段们: 映射.分段们,
-        成功: '',
+        ...status,
+        [sideMap]: map.originalText,
+        [otherOneSide]: map.translatedText,
+        pieces: map.pieces,
+        success: '',
         // 同步态里做结构编辑：把映射锚定的一侧定为原文，之后可以直接点翻译。
-        ...(状态.阶段 === '同步' ? { 阶段: '修改中', 原文侧: 映射侧 } : {}),
+        ...(status.phase === '同步' ? { phase: '修改中', originalSide: sideMap } : {}),
       }
     }
 
@@ -3900,40 +3900,40 @@ select.fish-select option:checked {
     // 映射的原文坐标记在 映射侧：同步态下 原文侧 为 null，但映射侧保留，
     // 所以分段高亮 / 上移 / 下移 / 删除在同步态仍然可用。
 
-    function 翻译空状态() {
-      return { 上: '', 下: '', 原文侧: null, 阶段: '同步', 提示: '', 进度: null, 方向: null, 成功: '', 分段们: null, 映射侧: null }
+    function translationEmptyStatus() {
+      return { upper: '', lower: '', originalSide: null, phase: '同步', prompt: '', progress: null, direction: null, success: '', pieces: null, sideMap: null }
     }
 
     // 把映射的原文侧换到另一侧：文本一个字都不动，只交换每段的坐标。
-    function 翻转映射(状态, 新原文侧) {
-      const 分段们 = 状态 && 状态.分段们
-      if (!Array.isArray(分段们) || !分段们.length) return 分段们 || null
-      const 旧原文侧 = 状态.映射侧 || 状态.原文侧
-      if (!旧原文侧 || 旧原文侧 === 新原文侧) return 分段们
-      const 新原文文本 = String(状态[新原文侧] || '')
-      return 分段们.map((项) => ({
-        ...项,
-        原文起: 项.译文起,
-        原文止: 项.译文止,
-        译文起: 项.原文起,
-        译文止: 项.原文止,
-        原文快照: 新原文文本.slice(项.译文起, 项.译文止),
+    function flipToMap(status, nextOriginalSide) {
+      const pieces = status && status.pieces
+      if (!Array.isArray(pieces) || !pieces.length) return pieces || null
+      const prevOriginalSide = status.sideMap || status.originalSide
+      if (!prevOriginalSide || prevOriginalSide === nextOriginalSide) return pieces
+      const nextOriginalText = String(status[nextOriginalSide] || '')
+      return pieces.map((item) => ({
+        ...item,
+        originalStart: item.translatedStart,
+        originalEnd: item.translatedEnd,
+        translatedStart: item.originalStart,
+        translatedEnd: item.originalEnd,
+        originalSnapshot: nextOriginalText.slice(item.translatedStart, item.translatedEnd),
       }))
     }
 
     // 「改这一侧」：只换原文 / 译文的角色，两边文本都不动。
-    function 切换原文侧(状态) {
-      if (!状态 || 状态.阶段 !== '修改中' || !状态.原文侧) return 状态
-      const 新侧 = 状态.原文侧 === '上' ? '下' : '上'
+    function switchSwapOriginalSide(status) {
+      if (!status || status.phase !== '修改中' || !status.originalSide) return status
+      const nextSide = status.originalSide === 'upper' ? 'lower' : 'upper'
       return {
-        ...状态,
-        原文侧: 新侧,
-        映射侧: 新侧,
-        分段们: 翻转映射(状态, 新侧),
-        方向: null,
-        进度: null,
-        提示: '',
-        成功: '',
+        ...status,
+        originalSide: nextSide,
+        sideMap: nextSide,
+        pieces: flipToMap(status, nextSide),
+        direction: null,
+        progress: null,
+        prompt: '',
+        success: '',
       }
     }
 
@@ -3942,353 +3942,353 @@ select.fish-select option:checked {
     //   - 同步态写入非空内容的那一侧成为原文，另一侧锁成译文输出；
     //   - 修改中只认原文侧，改译文侧直接拒绝；原文清空回到同步；
     //   - 分段映射跟着改动折偏移，没改过的段留给下次沿用。
-    function 翻译编辑(状态, 侧, 值) {
-      if (!状态 || 状态.阶段 === '翻译中') return 状态
-      const 文本 = String(值 == null ? '' : 值)
-      const 另一侧 = 侧 === '上' ? '下' : '上'
-      const 下个 = { ...状态, [侧]: 文本, 提示: '', 成功: '' }
-      const 清空 = !文本.trim()
+    function translationEdit(status, side, value) {
+      if (!status || status.phase === '翻译中') return status
+      const text = String(value == null ? '' : value)
+      const otherOneSide = side === 'upper' ? 'lower' : 'upper'
+      const nextOne = { ...status, [side]: text, prompt: '', success: '' }
+      const clear = !text.trim()
 
-      if (状态.阶段 === '修改中') {
-        if (侧 !== 状态.原文侧) return 状态
-        if (清空) {
-          return { ...下个, 阶段: '同步', 原文侧: null, 映射侧: null, 分段们: null, 方向: null, 进度: null }
+      if (status.phase === '修改中') {
+        if (side !== status.originalSide) return status
+        if (clear) {
+          return { ...nextOne, phase: '同步', originalSide: null, sideMap: null, pieces: null, direction: null, progress: null }
         }
         return {
-          ...下个,
-          阶段: '修改中',
-          映射侧: 侧,
-          分段们: 调整分段偏移(状态.分段们, '原文', 状态[侧], 文本),
+          ...nextOne,
+          phase: '修改中',
+          sideMap: side,
+          pieces: adjustPieceOffset(status.pieces, 'original', status[side], text),
         }
       }
 
       // 同步态：空编辑保持同步；写入非空内容的那侧成为原文。
-      if (清空) {
-        return { ...下个, 阶段: '同步', 原文侧: null, 映射侧: null, 分段们: null, 方向: null, 进度: null }
+      if (clear) {
+        return { ...nextOne, phase: '同步', originalSide: null, sideMap: null, pieces: null, direction: null, progress: null }
       }
-      let 分段们 = 状态.分段们
-      let 旧文本 = 状态[侧]
-      if (Array.isArray(分段们) && 分段们.length && 状态.映射侧 && 状态.映射侧 !== 侧) {
-        分段们 = 翻转映射(状态, 侧)
-        旧文本 = String(状态[侧] || '')
+      let pieces = status.pieces
+      let prevText = status[side]
+      if (Array.isArray(pieces) && pieces.length && status.sideMap && status.sideMap !== side) {
+        pieces = flipToMap(status, side)
+        prevText = String(status[side] || '')
       }
       return {
-        ...下个,
-        阶段: '修改中',
-        原文侧: 侧,
-        映射侧: 侧,
-        分段们: Array.isArray(分段们) && 分段们.length ? 调整分段偏移(分段们, '原文', 旧文本, 文本) : null,
-        进度: null,
+        ...nextOne,
+        phase: '修改中',
+        originalSide: side,
+        sideMap: side,
+        pieces: Array.isArray(pieces) && pieces.length ? adjustPieceOffset(pieces, 'original', prevText, text) : null,
+        progress: null,
       }
     }
 
-    function 翻译锁定侧(状态) {
-      if (!状态 || 状态.阶段 !== '修改中' || !状态.原文侧) return null
-      return 状态.原文侧 === '上' ? '下' : '上'
+    function translationLockedSide(status) {
+      if (!status || status.phase !== '修改中' || !status.originalSide) return null
+      return status.originalSide === 'upper' ? 'lower' : 'upper'
     }
 
-    function 翻译可执行(状态) {
-      if (!状态 || 状态.阶段 !== '修改中' || !状态.原文侧) return false
-      return Boolean(String(状态[状态.原文侧] || '').trim())
+    function translationCanRun(status) {
+      if (!status || status.phase !== '修改中' || !status.originalSide) return false
+      return Boolean(String(status[status.originalSide] || '').trim())
     }
 
-    function 翻译按钮文字(状态) {
-      if (!状态) return '翻译'
-      if (状态.阶段 === '翻译中') return '正在翻译…'
-      if (状态.阶段 === '修改中' && 状态.提示) return '继续翻译'
+    function translationButtonLabel(status) {
+      if (!status) return '翻译'
+      if (status.phase === '翻译中') return '正在翻译…'
+      if (status.phase === '修改中' && status.prompt) return '继续翻译'
       return '翻译'
     }
 
     // 每个会话留一份草稿：切走再切回来，原文和已翻好的译文都还在。
-    const 翻译草稿 = new Map()
+    const translationDraft = new Map()
 
     // 悬停只做预览高亮，点击才选中；选中状态不因鼠标移开而消失。
-    function 分段空交互() {
-      return { 悬停: null, 选中: null }
+    function pieceEmptyInteraction() {
+      return { hover: null, selected: null }
     }
 
-    function 分段交互(交互, 事件) {
-      const 当前 = 交互 || 分段空交互()
-      const 类型 = 事件 && 事件.类型
-      const 索引 = 事件 && Number.isInteger(事件.索引) ? 事件.索引 : null
-      if (类型 === '悬停') return { ...当前, 悬停: 索引 }
-      if (类型 === '点击') return { ...当前, 悬停: 索引, 选中: 索引 == null || 当前.选中 === 索引 ? null : 索引 }
-      return { ...当前, 选中: null }
+    function pieceInteraction(interaction, event) {
+      const current = interaction || pieceEmptyInteraction()
+      const type = event && event.type
+      const index = event && Number.isInteger(event.index) ? event.index : null
+      if (type === '悬停') return { ...current, hover: index }
+      if (type === '点击') return { ...current, hover: index, selected: index == null || current.selected === index ? null : index }
+      return { ...current, selected: null }
     }
 
     // 固定工具条：无选中时只给提示，选中后按钮按首尾边界禁用。
-    function 分段工具条(分段数, 选中, 处理, 取消选中) {
-      const 总 = Math.max(0, Math.trunc(Number(分段数) || 0))
-      const 有效 = 选中 != null && 选中 >= 0 && 选中 < 总 ? 选中 : null
-      if (有效 == null) {
+    function pieceToolbar(pieceCount, selected, handle, cancelSelected) {
+      const total = Math.max(0, Math.trunc(Number(pieceCount) || 0))
+      const valid = selected != null && selected >= 0 && selected < total ? selected : null
+      if (valid == null) {
         return [h('span', { key: '提示', className: 'fish-panel-dim' }, '点一下分段，可上移 / 下移 / 删除')]
       }
-      const 按钮 = (键, 文字, 可用, 标题, 操作) =>
+      const button = (key, text, available, title, action) =>
         h(
           'button',
           {
-            key: 键,
+            key: key,
             type: 'button',
-            className: 操作 === '删除' ? 'fish-btn fish-tr-del' : 'fish-btn',
-            disabled: !可用,
-            title: 标题,
-            onClick: 可用 && 处理 ? () => 处理(操作, 有效) : undefined,
+            className: action === '删除' ? 'fish-btn fish-tr-del' : 'fish-btn',
+            disabled: !available,
+            title: title,
+            onClick: available && handle ? () => handle(action, valid) : undefined,
           },
-          文字,
+          text,
         )
       return [
-        h('span', { key: '位置', className: 'fish-panel-dim' }, `第 ${有效 + 1}/${总} 段`),
-        按钮('上移', '上移', 有效 > 0, '与上一段交换位置', '上移'),
-        按钮('下移', '下移', 有效 < 总 - 1, '与下一段交换位置', '下移'),
-        按钮('删除', '删除', true, '删除这一段，两侧一起删除', '删除'),
-        h('button', { key: '取消选择', type: 'button', className: 'fish-btn', onClick: 取消选中 || undefined }, '取消选择'),
+        h('span', { key: '位置', className: 'fish-panel-dim' }, `第 ${valid + 1}/${total} 段`),
+        button('上移', '上移', valid > 0, '与上一段交换位置', '上移'),
+        button('下移', '下移', valid < total - 1, '与下一段交换位置', '下移'),
+        button('删除', '删除', true, '删除这一段，两侧一起删除', '删除'),
+        h('button', { key: '取消选择', type: 'button', className: 'fish-btn', onClick: cancelSelected || undefined }, '取消选择'),
       ]
     }
 
-    function 翻译面板(props) {
-      const 会话键 = String((props && props.sessionId) || '')
-      const 偏好态 = useStore(偏好)
-      const [状态, 设状态] = React.useState(() => 翻译草稿.get(会话键) || 翻译空状态())
-      const [交互, 设交互] = React.useState(分段空交互)
-      const 状态引用 = React.useRef(状态)
-      状态引用.current = 状态
-      const 运行 = React.useRef(null)
-      const 框引用 = React.useRef({ 上: null, 下: null })
-      const 镜引用 = React.useRef({ 上: null, 下: null })
+    function translationPanel(props) {
+      const sessionKey = String((props && props.sessionId) || '')
+      const prefsState = useStore(prefs)
+      const [status, setStatus] = React.useState(() => translationDraft.get(sessionKey) || translationEmptyStatus())
+      const [interaction, setInteraction] = React.useState(pieceEmptyInteraction)
+      const statusRef = React.useRef(status)
+      statusRef.current = status
+      const run = React.useRef(null)
+      const inputRef = React.useRef({ upper: null, lower: null })
+      const mirrorRef = React.useRef({ upper: null, lower: null })
 
       React.useEffect(() => {
-        翻译草稿.set(会话键, 状态)
-        if (翻译草稿.size > 20) {
-          const 最旧 = 翻译草稿.keys().next().value
-          if (最旧 !== 会话键) 翻译草稿.delete(最旧)
+        translationDraft.set(sessionKey, status)
+        if (translationDraft.size > 20) {
+          const oldest = translationDraft.keys().next().value
+          if (oldest !== sessionKey) translationDraft.delete(oldest)
         }
-      }, [会话键, 状态])
+      }, [sessionKey, status])
 
       React.useEffect(() => {
-        if (!偏好.get().载入) void 载入偏好()
+        if (!prefs.get().load) void loadPrefs()
         return () => {
-          const 在跑 = 运行.current
-          if (在跑) {
-            在跑.已取消 = true
-            if (在跑.控制器) 在跑.控制器.abort()
-            if (在跑.任务id) void post('/translate/jobs/cancel', { id: 在跑.任务id })
+          const running = run.current
+          if (running) {
+            running.canceled = true
+            if (running.controller) running.controller.abort()
+            if (running.taskId) void post('/translate/jobs/cancel', { id: running.taskId })
           }
-          运行.current = null
+          run.current = null
         }
       }, [])
 
-      const 配置 = (偏好态 && 偏好态.config) || {}
-      const 翻译中 = 状态.阶段 === '翻译中'
-      const 锁定 = 翻译锁定侧(状态)
-      const 有映射 = 映射有效(状态)
-      const 分段数 = Array.isArray(状态.分段们) ? 状态.分段们.length : 0
-      const 悬停段 = 有映射 && 交互.悬停 != null && 交互.悬停 >= 0 && 交互.悬停 < 分段数 ? 交互.悬停 : null
-      const 选中段 = 有映射 && 交互.选中 != null && 交互.选中 >= 0 && 交互.选中 < 分段数 ? 交互.选中 : null
+      const config = (prefsState && prefsState.config) || {}
+      const translating = status.phase === '翻译中'
+      const lock = translationLockedSide(status)
+      const hasMap = mapValid(status)
+      const pieceCount = Array.isArray(status.pieces) ? status.pieces.length : 0
+      const hoverSegment = hasMap && interaction.hover != null && interaction.hover >= 0 && interaction.hover < pieceCount ? interaction.hover : null
+      const selectedSegment = hasMap && interaction.selected != null && interaction.selected >= 0 && interaction.selected < pieceCount ? interaction.selected : null
 
       // 段数可能随编辑/翻译变化，派发前先把越界的旧选中清掉。
-      const 交互事件 = (事件) => {
-        设交互((旧) => 分段交互({ ...旧, 选中: 旧.选中 != null && 旧.选中 < 分段数 ? 旧.选中 : null }, 事件))
+      const interactionEvent = (event) => {
+        setInteraction((prev) => pieceInteraction({ ...prev, selected: prev.selected != null && prev.selected < pieceCount ? prev.selected : null }, event))
       }
 
-      const 编辑 = (侧, 值) => {
-        设交互((旧) => ({ ...旧, 悬停: null }))
-        设状态((旧) => 翻译编辑(旧, 侧, 值))
+      const edit = (side, value) => {
+        setInteraction((prev) => ({ ...prev, hover: null }))
+        setStatus((prev) => translationEdit(prev, side, value))
       }
 
-      const 取消 = () => {
-        const 在跑 = 运行.current
-        if (!在跑) return
-        在跑.已取消 = true
-        if (在跑.控制器) 在跑.控制器.abort()
+      const cancel = () => {
+        const running = run.current
+        if (!running) return
+        running.canceled = true
+        if (running.controller) running.controller.abort()
         // 只停本地轮询不够，顺手让服务端别继续占着队列。
-        if (在跑.任务id) {
-          const 任务id = 在跑.任务id
-          在跑.任务id = null
-          void post('/translate/jobs/cancel', { id: 任务id })
+        if (running.taskId) {
+          const taskId = running.taskId
+          running.taskId = null
+          void post('/translate/jobs/cancel', { id: taskId })
         }
       }
 
-      const 处理分段 = (操作, 索引) => {
-        if (操作 === '取消选中') {
-          设交互((旧) => ({ ...旧, 选中: null }))
+      const handlePiece = (action, index) => {
+        if (action === '取消选中') {
+          setInteraction((prev) => ({ ...prev, selected: null }))
           return
         }
-        const 当前 = 状态引用.current
-        if (当前.阶段 === '翻译中') return
-        if (操作 === '删除') {
-          const 问 = typeof window !== 'undefined' && typeof window.confirm === 'function'
-          if (问 && !window.confirm('删除这一段？两侧对应内容会一起删除，无法撤销。')) return
+        const current = statusRef.current
+        if (current.phase === '翻译中') return
+        if (action === '删除') {
+          const ask = typeof window !== 'undefined' && typeof window.confirm === 'function'
+          if (ask && !window.confirm('删除这一段？两侧对应内容会一起删除，无法撤销。')) return
         }
-        设状态((旧) => 分段操作(旧, 操作, 索引))
+        setStatus((prev) => pieceAction(prev, action, index))
         // 移动后选中跟着这段走；删除后回到未选。
-        设交互((旧) => (操作 === '删除' ? 分段空交互() : { 悬停: null, 选中: 操作 === '上移' ? 索引 - 1 : 索引 + 1 }))
+        setInteraction((prev) => (action === '删除' ? pieceEmptyInteraction() : { hover: null, selected: action === '上移' ? index - 1 : index + 1 }))
       }
 
       // 「改这一侧」：把锁定侧换成原文，只换角色、不动文本。
-      const 切换侧 = () => {
-        const 当前 = 状态引用.current
-        if (当前.阶段 === '翻译中' || !当前.原文侧) return
-        设状态((旧) => 切换原文侧(旧))
-        设交互((旧) => ({ ...旧, 悬停: null }))
+      const switchSwapSide = () => {
+        const current = statusRef.current
+        if (current.phase === '翻译中' || !current.originalSide) return
+        setStatus((prev) => switchSwapOriginalSide(prev))
+        setInteraction((prev) => ({ ...prev, hover: null }))
       }
 
-      const 翻译 = async () => {
-        const 当前 = 状态引用.current
-        const 计划 = 建翻译计划(当前, 配置)
-        if (!计划) return
-        设交互(分段空交互())
-        const 运行对象 = {
-          已取消: false,
-          控制器: typeof AbortController === 'function' ? new AbortController() : null,
-          任务id: null,
+      const translation = async () => {
+        const current = statusRef.current
+        const plan = buildTranslationPlan(current, config)
+        if (!plan) return
+        setInteraction(pieceEmptyInteraction())
+        const runObject = {
+          canceled: false,
+          controller: typeof AbortController === 'function' ? new AbortController() : null,
+          taskId: null,
         }
-        运行.current = 运行对象
-        设状态((旧) => 翻译开始状态(旧, 计划))
-        const 推送 = (完成, 信息 = {}) => {
-          设状态((旧) => ({
-            ...翻译开始状态(旧, 计划),
-            提示: 信息.提示 || '',
-            进度: {
-              完成,
-              总数: 计划.待翻.length,
-              阶段: 信息.阶段 || '翻译中',
-              已用: 信息.已用 || 0,
+        run.current = runObject
+        setStatus((prev) => translationBeginStatus(prev, plan))
+        const push = (done, info = {}) => {
+          setStatus((prev) => ({
+            ...translationBeginStatus(prev, plan),
+            prompt: info.prompt || '',
+            progress: {
+              done,
+              totalCount: plan.pending.length,
+              phase: info.phase || '翻译中',
+              used: info.used || 0,
             },
           }))
         }
-        const 结果 = await 执行翻译(计划, { 运行: 运行对象, 推送 })
-        运行.current = null
-        if (运行对象.已取消 || (结果 && 结果.已取消)) {
-          设状态((旧) => 翻译中断状态(旧, 计划, '已取消', '已取消，已翻好的部分保留'))
+        const result = await runTranslation(plan, { run: runObject, push })
+        run.current = null
+        if (runObject.canceled || (result && result.canceled)) {
+          setStatus((prev) => translationAbortState(prev, plan, '已取消', '已取消，已翻好的部分保留'))
           return
         }
-        if (结果 && 结果.失败) {
-          设状态((旧) => 翻译中断状态(旧, 计划, '失败', 结果.失败))
+        if (result && result.fail) {
+          setStatus((prev) => translationAbortState(prev, plan, '失败', result.fail))
           return
         }
-        设状态((旧) => 翻译成功状态(旧, 计划))
+        setStatus((prev) => translationSuccessStatus(prev, plan))
       }
 
       // 鼠标坐标落在哪一段：textarea 收事件，背后的 mirror 负责量出每段的位置。
-      const 命中分段 = (侧, 事件) => {
-        const 当前 = 状态引用.current
-        if (!事件 || !映射有效(当前)) return null
-        const 框 = 框引用.current[侧]
-        const 镜 = 镜引用.current[侧]
-        if (!框 || !镜 || typeof 镜.querySelectorAll !== 'function') return null
-        const 宽 = 框.clientWidth
-        if (宽 > 0 && 镜.style.width !== `${宽}px`) 镜.style.width = `${宽}px`
-        if (镜.scrollTop !== 框.scrollTop) 镜.scrollTop = 框.scrollTop
-        if (镜.scrollLeft !== 框.scrollLeft) 镜.scrollLeft = 框.scrollLeft
-        const 点X = 事件.clientX
-        const 点Y = 事件.clientY
-        for (const 节点 of 镜.querySelectorAll('[data-seg]')) {
-          for (const 矩形 of 节点.getClientRects()) {
-            if (点X >= 矩形.left && 点X <= 矩形.right && 点Y >= 矩形.top && 点Y <= 矩形.bottom) {
-              return Number(节点.getAttribute('data-seg'))
+      const hitPiece = (side, event) => {
+        const current = statusRef.current
+        if (!event || !mapValid(current)) return null
+        const input = inputRef.current[side]
+        const mirror = mirrorRef.current[side]
+        if (!input || !mirror || typeof mirror.querySelectorAll !== 'function') return null
+        const width = input.clientWidth
+        if (width > 0 && mirror.style.width !== `${width}px`) mirror.style.width = `${width}px`
+        if (mirror.scrollTop !== input.scrollTop) mirror.scrollTop = input.scrollTop
+        if (mirror.scrollLeft !== input.scrollLeft) mirror.scrollLeft = input.scrollLeft
+        const tapX = event.clientX
+        const tapY = event.clientY
+        for (const node of mirror.querySelectorAll('[data-seg]')) {
+          for (const rect of node.getClientRects()) {
+            if (tapX >= rect.left && tapX <= rect.right && tapY >= rect.top && tapY <= rect.bottom) {
+              return Number(node.getAttribute('data-seg'))
             }
           }
         }
         return null
       }
 
-      const 同步滚动 = (侧) => {
-        const 框 = 框引用.current[侧]
-        const 镜 = 镜引用.current[侧]
-        if (!框 || !镜) return
-        镜.scrollTop = 框.scrollTop
-        镜.scrollLeft = 框.scrollLeft
+      const syncScroll = (side) => {
+        const input = inputRef.current[side]
+        const mirror = mirrorRef.current[side]
+        if (!input || !mirror) return
+        mirror.scrollTop = input.scrollTop
+        mirror.scrollLeft = input.scrollLeft
       }
 
       // 点两个框和工具条以外的空白：取消选中。
-      const 点空白 = (事件) => {
-        const 目标 = 事件 && 事件.target
-        if (!目标) return
-        const 类 = typeof 目标.className === 'string' ? 目标.className : ''
-        if (类.includes('fish-tr-textarea')) return
-        if (目标.closest && 目标.closest('.fish-tr-edit, .fish-tr-segbar, .fish-tr-actions')) return
-        设交互((旧) => ({ ...旧, 悬停: null, 选中: null }))
+      const tapBlank = (event) => {
+        const target = event && event.target
+        if (!target) return
+        const category = typeof target.className === 'string' ? target.className : ''
+        if (category.includes('fish-tr-textarea')) return
+        if (target.closest && target.closest('.fish-tr-edit, .fish-tr-segbar, .fish-tr-actions')) return
+        setInteraction((prev) => ({ ...prev, hover: null, selected: null }))
       }
 
-      const 渲染镜像 = (侧) => {
-        const 片段 = 取侧片段(状态, 侧)
-        if (!片段) return null
-        const 子们 = []
-        for (let i = 0; i < 片段.内容们.length; i += 1) {
-          子们.push(片段.前导们[i] || '')
-          子们.push(
+      const renderMirror = (side) => {
+        const fragment = fetchSideFragment(status, side)
+        if (!fragment) return null
+        const children = []
+        for (let i = 0; i < fragment.contents.length; i += 1) {
+          children.push(fragment.leadings[i] || '')
+          children.push(
             h(
               'span',
               {
                 key: `段${i}`,
                 className: 'fish-tr-seg',
                 'data-seg': i,
-                'data-active': 悬停段 === i ? '1' : undefined,
-                'data-selected': 选中段 === i ? '1' : undefined,
+                'data-active': hoverSegment === i ? '1' : undefined,
+                'data-selected': selectedSegment === i ? '1' : undefined,
               },
-              片段.内容们[i] || '',
+              fragment.contents[i] || '',
             ),
           )
         }
-        子们.push(片段.前导们[片段.内容们.length] || '')
-        return 子们
+        children.push(fragment.leadings[fragment.contents.length] || '')
+        return children
       }
 
-      const 侧标签 = (侧) => {
-        if (状态.阶段 === '同步' || !状态.原文侧) return '可输入'
-        return 侧 === 状态.原文侧 ? '原文' : '译文'
+      const sideTag = (side) => {
+        if (status.phase === '同步' || !status.originalSide) return '可输入'
+        return side === status.originalSide ? '原文' : '译文'
       }
-      const 侧说明 = (侧) => {
-        if (翻译中) return '正在翻译，暂时不能编辑'
-        if (!状态.原文侧) return ''
-        if (侧 === 状态.原文侧) return '这边是原文'
+      const sideDescription = (side) => {
+        if (translating) return '正在翻译，暂时不能编辑'
+        if (!status.originalSide) return ''
+        if (side === status.originalSide) return '这边是原文'
         return '译文输出，翻译完成前不可编辑'
       }
-      const 占位 = (侧) => {
-        if (!状态.原文侧 || 侧 === 状态.原文侧) return '输入或粘贴要翻译的文字'
+      const placeholder = (side) => {
+        if (!status.originalSide || side === status.originalSide) return '输入或粘贴要翻译的文字'
         return '点「翻译」后，译文出现在这里'
       }
 
-      const 可执行 = 翻译可执行(状态)
-      const 空文本 = !String(状态.上 || '').trim() && !String(状态.下 || '').trim()
-      const 禁用原因 = 可执行 || 翻译中 || !空文本 ? '' : '先输入要翻译的文字'
-      const 按钮标题 = 翻译中
+      const canRun = translationCanRun(status)
+      const emptyText = !String(status.upper || '').trim() && !String(status.lower || '').trim()
+      const disabledReason = canRun || translating || !emptyText ? '' : '先输入要翻译的文字'
+      const buttonTitle = translating
         ? '正在翻译，请稍候'
-        : 可执行
+        : canRun
           ? undefined
-          : 状态.阶段 === '同步' && !空文本
+          : status.phase === '同步' && !emptyText
             ? '先在一个框里改点内容，改过的那一侧会成为原文'
             : '先输入要翻译的文字'
-      const 进度 = (翻译中 && 状态.进度) || null
-      const 进度阶段 = 进度 && 进度.阶段 && 进度.阶段 !== '翻译中' ? 进度.阶段 : ''
-      const 已用秒 = 进度 && 进度.已用 >= 1000 ? Math.round(进度.已用 / 1000) : 0
-      const 进度线 = 进度
-        ? [`正在翻译 ${进度.完成 || 0}/${进度.总数 || 0} 段`, 进度阶段, 已用秒 ? `已用 ${已用秒} 秒` : '']
+      const progress = (translating && status.progress) || null
+      const progressPhase = progress && progress.phase && progress.phase !== '翻译中' ? progress.phase : ''
+      const usedSeconds = progress && progress.used >= 1000 ? Math.round(progress.used / 1000) : 0
+      const progressBar = progress
+        ? [`正在翻译 ${progress.done || 0}/${progress.totalCount || 0} 段`, progressPhase, usedSeconds ? `已用 ${usedSeconds} 秒` : '']
             .filter(Boolean)
             .join(' · ')
         : ''
 
-      const 一栏 = (侧) =>
+      const oneColumn = (side) =>
         h(
           'div',
           {
             className: 'fish-tr-pane',
-            'data-locked': 锁定 === 侧 ? '1' : undefined,
-            'data-busy': 翻译中 ? '1' : undefined,
+            'data-locked': lock === side ? '1' : undefined,
+            'data-busy': translating ? '1' : undefined,
           },
           h(
             'div',
             { className: 'fish-tr-head' },
-            h('span', { className: 'fish-tr-role' }, 侧标签(侧)),
-            h('span', { className: 'fish-panel-dim' }, 侧说明(侧)),
-            锁定 === 侧
+            h('span', { className: 'fish-tr-role' }, sideTag(side)),
+            h('span', { className: 'fish-panel-dim' }, sideDescription(side)),
+            lock === side
               ? h(
                   'button',
                   {
                     type: 'button',
                     className: 'fish-tr-switch',
                     title: '把这侧改成原文，另一侧作为译文输出',
-                    onClick: 切换侧,
+                    onClick: switchSwapSide,
                   },
                   '改这一侧',
                 )
@@ -4297,50 +4297,50 @@ select.fish-select option:checked {
           h(
             'div',
             { className: 'fish-tr-edit' },
-            有映射 ? h('div', { className: 'fish-tr-mirror', 'aria-hidden': 'true', ref: (节点) => { 镜引用.current[侧] = 节点 } }, 渲染镜像(侧)) : null,
+            hasMap ? h('div', { className: 'fish-tr-mirror', 'aria-hidden': 'true', ref: (node) => { mirrorRef.current[side] = node } }, renderMirror(side)) : null,
             h('textarea', {
               className: 'fish-tr-textarea',
-              value: 状态[侧],
-              readOnly: 翻译中 || 锁定 === 侧,
+              value: status[side],
+              readOnly: translating || lock === side,
               disabled: false,
-              placeholder: 占位(侧),
-              'aria-label': `${侧标签(侧)}框`,
-              ref: (节点) => { 框引用.current[侧] = 节点 },
-              onMouseMove: (事件) => 交互事件({ 类型: '悬停', 索引: 命中分段(侧, 事件) }),
-              onMouseLeave: () => 交互事件({ 类型: '悬停', 索引: null }),
-              onClick: (事件) => 交互事件({ 类型: '点击', 索引: 命中分段(侧, 事件) }),
-              onScroll: () => 同步滚动(侧),
-              onChange: (事件) => 编辑(侧, 事件.target.value),
+              placeholder: placeholder(side),
+              'aria-label': `${sideTag(side)}框`,
+              ref: (node) => { inputRef.current[side] = node },
+              onMouseMove: (event) => interactionEvent({ type: '悬停', index: hitPiece(side, event) }),
+              onMouseLeave: () => interactionEvent({ type: '悬停', index: null }),
+              onClick: (event) => interactionEvent({ type: '点击', index: hitPiece(side, event) }),
+              onScroll: () => syncScroll(side),
+              onChange: (event) => edit(side, event.target.value),
             }),
           ),
         )
 
-      const 分段条 =
-        有映射 && !翻译中
+      const pieceEntry =
+        hasMap && !translating
           ? h(
               'div',
-              { className: 'fish-tr-segbar', 'data-idle': 选中段 == null ? '1' : undefined },
-              分段工具条(分段数, 选中段, 处理分段, () => 处理分段('取消选中', null)),
+              { className: 'fish-tr-segbar', 'data-idle': selectedSegment == null ? '1' : undefined },
+              pieceToolbar(pieceCount, selectedSegment, handlePiece, () => handlePiece('取消选中', null)),
             )
           : null
 
-      const 提示是错误 = Boolean(状态.提示) && !String(状态.提示).startsWith('已取消')
-      const 提示 = 状态.提示
-        ? h('div', { className: 提示是错误 ? 'fish-err fish-tr-note' : 'fish-panel-dim fish-tr-note', role: 'status' }, 状态.提示)
-        : 状态.成功
-          ? h('div', { className: 'fish-ok fish-tr-note', role: 'status' }, 状态.成功)
-          : 禁用原因
-            ? h('div', { className: 'fish-panel-dim fish-tr-note' }, 禁用原因)
+      const hintIsError = Boolean(status.prompt) && !String(status.prompt).startsWith('已取消')
+      const prompt = status.prompt
+        ? h('div', { className: hintIsError ? 'fish-err fish-tr-note' : 'fish-panel-dim fish-tr-note', role: 'status' }, status.prompt)
+        : status.success
+          ? h('div', { className: 'fish-ok fish-tr-note', role: 'status' }, status.success)
+          : disabledReason
+            ? h('div', { className: 'fish-panel-dim fish-tr-note' }, disabledReason)
             : null
 
       return h(
         'div',
         {
           className: 'fish-tr',
-          onMouseDown: 点空白,
+          onMouseDown: tapBlank,
           // Esc 取消选中：焦点可能在文本框、按钮或工具条上，统一在卡片根上接。
-          onKeyDown: (事件) => {
-            if (事件 && 事件.key === 'Escape') 交互事件({ 类型: '取消' })
+          onKeyDown: (event) => {
+            if (event && event.key === 'Escape') interactionEvent({ type: '取消' })
           },
         },
         // 顶部固定操作区：操作行 / 提示 / 规则 / 分段工具条，不随输入框滚动。
@@ -4356,26 +4356,26 @@ select.fish-select option:checked {
                 type: 'button',
                 className: 'fish-btn',
                 'data-primary': '1',
-                disabled: !可执行,
-                title: 按钮标题,
-                'aria-busy': 翻译中 ? 'true' : undefined,
-                onClick: () => void 翻译(),
+                disabled: !canRun,
+                title: buttonTitle,
+                'aria-busy': translating ? 'true' : undefined,
+                onClick: () => void translation(),
               },
-              翻译中 ? 图标转圈(13) : null,
-              翻译按钮文字(状态),
+              translating ? iconSpinner(13) : null,
+              translationButtonLabel(status),
             ),
-            翻译中 ? h('button', { type: 'button', className: 'fish-btn', onClick: 取消 }, '取消') : null,
-            进度线 ? h('span', { className: 'fish-panel-dim', role: 'status' }, 进度线) : null,
+            translating ? h('button', { type: 'button', className: 'fish-btn', onClick: cancel }, '取消') : null,
+            progressBar ? h('span', { className: 'fish-panel-dim', role: 'status' }, progressBar) : null,
           ),
-          提示,
-          h('div', { className: 'fish-panel-dim fish-tr-note' }, 翻译规则文案(配置)),
-          分段条,
+          prompt,
+          h('div', { className: 'fish-panel-dim fish-tr-note' }, translationRuleCopy(config)),
+          pieceEntry,
         ),
-        h('div', { className: 'fish-tr-grid' }, 一栏('上'), 一栏('下')),
+        h('div', { className: 'fish-tr-grid' }, oneColumn('upper'), oneColumn('lower')),
       )
     }
 
-    function 翻译图标({ size = 26, className } = {}) {
+    function translationIcon({ size = 26, className } = {}) {
       return h(
         'svg',
         {
@@ -4397,53 +4397,53 @@ select.fish-select option:checked {
 
     // 槽位/右栏在 DSH 启动早期可能还没就绪，短轮询等待；返回的清理函数会把
     // 已注册的东西反注册，并清掉还没触发的重试定时器。
-    const 就绪重试间隔毫秒 = 250
-    const 就绪最多次数 = 40
-    function 等就绪(尝试) {
-      let 次数 = 0
-      let 定时 = null
-      let 已取消 = false
-      let 清理 = null
-      const 跑 = () => {
-        if (已取消) return
-        const 结果 = 尝试()
-        if (结果 === null) {
-          if (次数 < 就绪最多次数) {
-            次数 += 1
-            定时 = setTimeout(跑, 就绪重试间隔毫秒)
+    const readyRetryIntervalMs = 250
+    const readyMaxCount = 40
+    function awaitReady(tryOnce) {
+      let count = 0
+      let timer = null
+      let canceled = false
+      let cleanup = null
+      const execute = () => {
+        if (canceled) return
+        const result = tryOnce()
+        if (result === null) {
+          if (count < readyMaxCount) {
+            count += 1
+            timer = setTimeout(execute, readyRetryIntervalMs)
           } else {
             try { console.warn('[dsh-fish-service] 服务没就绪，注册已放弃') } catch { /* 忽略 */ }
           }
           return
         }
-        清理 = typeof 结果 === 'function' ? 结果 : null
+        cleanup = typeof result === 'function' ? result : null
       }
-      跑()
+      execute()
       return () => {
-        已取消 = true
-        if (定时) { clearTimeout(定时); 定时 = null }
-        if (清理) {
-          try { 清理() } catch { /* 已卸载 */ }
-          清理 = null
+        canceled = true
+        if (timer) { clearTimeout(timer); timer = null }
+        if (cleanup) {
+          try { cleanup() } catch { /* 已卸载 */ }
+          cleanup = null
         }
       }
     }
 
     // 右栏「开始」页的卡片：注册一个 tab 类型 + guide 条目，body 走 sidebar.right.pane.tab 槽。
-    function 注册右栏(ctx) {
-      return 等就绪(() => {
-        let 右栏 = null
+    function registerRightPanel(ctx) {
+      return awaitReady(() => {
+        let rightPanel = null
         try {
-          右栏 = ctx.get('sidebarRightTabs')
+          rightPanel = ctx.get('sidebarRightTabs')
         } catch {
-          右栏 = null
+          rightPanel = null
         }
-        if ((!右栏 || typeof 右栏.register !== 'function') && ctx && ctx.sidebarRightTabs) 右栏 = ctx.sidebarRightTabs
-        if (!右栏 || typeof 右栏.register !== 'function') return null
+        if ((!rightPanel || typeof rightPanel.register !== 'function') && ctx && ctx.sidebarRightTabs) rightPanel = ctx.sidebarRightTabs
+        if (!rightPanel || typeof rightPanel.register !== 'function') return null
         try {
-          const 摘 = 右栏.register({
-            id: 翻译TabID,
-            kind: 翻译TabKind,
+          const summary = rightPanel.register({
+            id: translationTabID,
+            kind: translationTabKind,
             title: () => '双语翻译',
             keepMounted: true,
             guide: [
@@ -4452,13 +4452,13 @@ select.fish-select option:checked {
                 order: 35,
                 title: () => '双语翻译',
                 description: () => '两段文字对着翻，长的只重译改过的地方',
-                icon: 翻译图标,
+                icon: translationIcon,
               },
             ],
           })
-          return typeof 摘 === 'function' ? 摘 : () => {}
-        } catch (错误) {
-          try { console.warn('[dsh-fish-service] 注册双语翻译卡片失败', 错误) } catch { /* 忽略 */ }
+          return typeof summary === 'function' ? summary : () => {}
+        } catch (error) {
+          try { console.warn('[dsh-fish-service] 注册双语翻译卡片失败', error) } catch { /* 忽略 */ }
           return () => {}
         }
       })
@@ -4466,23 +4466,23 @@ select.fish-select option:checked {
 
     // ---------------- 注册 ----------------
 
-    function 注册(ctx, 槽位, 配置项, 组件) {
+    function register(ctx, slot, configItem, component) {
       try {
-        return slots注册(ctx, 槽位, 配置项, 组件)
+        return slotsRegister(ctx, slot, configItem, component)
       } catch (error) {
         // 槽位在这个 DSH 版本不存在时不要让整个插件挂掉。
-        try { console.warn('[dsh-fish-service] 注册槽位失败', 槽位, error) } catch { /* 忽略 */ }
+        try { console.warn('[dsh-fish-service] 注册槽位失败', slot, error) } catch { /* 忽略 */ }
         return () => {}
       }
     }
 
-    function slots注册(ctx, 槽位, 配置项, 组件) {
-      return 等就绪(() => {
+    function slotsRegister(ctx, slot, configItem, component) {
+      return awaitReady(() => {
         const slots = ctx.get('slots')
         if (!slots || typeof slots.register !== 'function' || typeof slots.inject !== 'function') return null
         try {
-          const 摘 = slots.inject(槽位, () => slots.register({ name: 槽位, ...配置项 }, 组件))
-          return typeof 摘 === 'function' ? 摘 : () => {}
+          const summary = slots.inject(slot, () => slots.register({ name: slot, ...configItem }, component))
+          return typeof summary === 'function' ? summary : () => {}
         } catch {
           // 槽位本身可能还没注册，等下一轮再试。
           return null
@@ -4494,22 +4494,22 @@ select.fish-select option:checked {
      * 框选文字：先注册「选中后打开工具条」的交互，再注册 keyed 槽位。
      * 两个都成功，DSH 才会在选中文字时渲染工具条。
      */
-    function 注册选中交互(ctx) {
-      const 摘 = []
+    function registerSelectedInteraction(ctx) {
+      const summary = []
       try {
         const ui = ctx.get('uiConversation')
-        const 交互 = ui && ui.interactions
-        if (交互 && typeof 交互.register === 'function') {
-          const disposer = 交互.register({
-            id: 选中交互ID,
-            onInteraction(请求) {
-              if (!请求 || 请求.trigger !== 'selection') return
-              const 文本 = typeof 请求.readText === 'function' ? 请求.readText() : null
-              if (文本 === null || !String(文本).trim()) return
-              if (typeof 请求.open === 'function') 请求.open()
+        const interaction = ui && ui.interactions
+        if (interaction && typeof interaction.register === 'function') {
+          const disposer = interaction.register({
+            id: selectedInteractionID,
+            onInteraction(request) {
+              if (!request || request.trigger !== 'selection') return
+              const text = typeof request.readText === 'function' ? request.readText() : null
+              if (text === null || !String(text).trim()) return
+              if (typeof request.open === 'function') request.open()
             },
           }, '选中文字的朗读与翻译')
-          if (typeof disposer === 'function') 摘.push(disposer)
+          if (typeof disposer === 'function') summary.push(disposer)
         }
       } catch (error) {
         try { console.warn('[dsh-fish-service] 注册选中交互失败', error) } catch { /* 忽略 */ }
@@ -4519,57 +4519,57 @@ select.fish-select option:checked {
         if (slots && typeof slots.register === 'function' && typeof slots.inject === 'function') {
           const disposer = slots.inject('conversation.chat.text-interaction', () => slots.register({
             name: 'conversation.chat.text-interaction',
-            key: 选中交互ID,
-          }, 选中工具条))
-          if (typeof disposer === 'function') 摘.push(disposer)
+            key: selectedInteractionID,
+          }, selectedToolbar))
+          if (typeof disposer === 'function') summary.push(disposer)
         }
       } catch (error) {
         try { console.warn('[dsh-fish-service] 注册选中文字槽位失败', error) } catch { /* 忽略 */ }
       }
       return () => {
-        for (const 函数 of 摘.splice(0)) {
-          try { 函数() } catch { /* 已卸载 */ }
+        for (const fn of summary.splice(0)) {
+          try { fn() } catch { /* 已卸载 */ }
         }
       }
     }
 
     function apply(ctx) {
-      插件上下文 = ctx
-      const 清理们 = []
-      const 收 = (清理) => { if (typeof 清理 === 'function') 清理们.push(清理) }
-      收(注入样式())
+      pluginContext = ctx
+      const cleanups = []
+      const collect = (cleanup) => { if (typeof cleanup === 'function') cleanups.push(cleanup) }
+      collect(injectStyle())
       // 设置页：P1 的「本地 AI」tab（P2 在同一个页面里加分区的）。
-      收(注册(ctx, 'settings.section', { id: 'fish-service', order: 57, label: () => '本地 AI' }, Section))
+      collect(register(ctx, 'settings.section', { id: 'fish-service', order: 57, label: () => '本地 AI' }, Section))
       // 消息级朗读按钮：助手消息操作行（复制按钮右边）。
-      收(注册(ctx, 'conversation.chat.assistant-actions', { id: 'fish-read', order: 21, label: () => '朗读' }, 朗读按钮))
+      collect(register(ctx, 'conversation.chat.assistant-actions', { id: 'fish-read', order: 21, label: () => '朗读' }, readButton))
       // 输入框右侧：麦克风（开始/结束录音）。
-      收(注册(ctx, 'conversation.input.right', { id: 'fish-mic', order: 32, label: () => '语音输入' }, 麦克风按钮))
+      collect(register(ctx, 'conversation.input.right', { id: 'fish-mic', order: 32, label: () => '语音输入' }, micButton))
       // 输入框右侧：本地识图按钮（点选图片；图片不进草稿）。
-      收(注册(ctx, 'conversation.input.right', { id: 'fish-vision', order: 31, label: () => '本地识图' }, 本地识图按钮))
+      collect(register(ctx, 'conversation.input.right', { id: 'fish-vision', order: 31, label: () => '本地识图' }, localVisionButton))
       // 输入框上方浮层：录音状态 + 三选一面板（DSH 的 overlay 就挂在这里）。
-      收(注册(ctx, 'conversation.input.overlay', { id: 'fish-voice', order: 40, label: () => '语音输入面板' }, 语音面板))
+      collect(register(ctx, 'conversation.input.overlay', { id: 'fish-voice', order: 40, label: () => '语音输入面板' }, speechPanel))
       // 输入框左侧：自动朗读开关。
-      收(注册(ctx, 'conversation.input.left', { id: 'fish-auto-read', order: 45, label: () => '自动朗读' }, 自动朗读开关))
+      collect(register(ctx, 'conversation.input.left', { id: 'fish-auto-read', order: 45, label: () => '自动朗读' }, autoReadSwitch))
       // 输入框左侧：本地 AI 状态胶囊（显存 / 任务，点开看详情）。
-      收(注册(ctx, 'conversation.input.left', { id: 'fish-metrics', order: 40, label: () => '本地 AI 状态' }, 指标胶囊))
+      collect(register(ctx, 'conversation.input.left', { id: 'fish-metrics', order: 40, label: () => '本地 AI 状态' }, metricsCapsule))
       // 框选文字：朗读 / 翻译（需要同时注册 interaction 与 keyed 槽位）。
-      收(注册选中交互(ctx))
+      collect(registerSelectedInteraction(ctx))
       // 右栏「开始」页：双语翻译卡片（guide 入口 + 面板 body）。
       // inject 拿到当前会话 id，面板据此给每个会话留一份草稿。
-      收(注册(ctx, 'sidebar.right.pane.tab', { key: 翻译TabID, inject: (会话) => ({ sessionId: 会话 }) }, 翻译面板))
-      收(注册右栏(ctx))
+      collect(register(ctx, 'sidebar.right.pane.tab', { key: translationTabID, inject: (session) => ({ sessionId: session }) }, translationPanel))
+      collect(registerRightPanel(ctx))
 
       // 预热一次偏好（不阻塞）；失败也无所谓，组件挂载时会再拉。
-      void 载入偏好()
+      void loadPrefs()
 
       // 按注册的反序释放：槽位/交互/右栏 tab、未触发的重试定时器、样式节点。
-      const 卸载 = () => {
-        for (const 清理 of 清理们.splice(0).reverse()) {
-          try { 清理() } catch { /* 已卸载 */ }
+      const dispose = () => {
+        for (const cleanup of cleanups.splice(0).reverse()) {
+          try { cleanup() } catch { /* 已卸载 */ }
         }
       }
       try {
-        ctx.effect?.(() => 卸载)
+        ctx.effect?.(() => dispose)
       } catch {
         // 老宿主没有 effect 时只能靠页面整体销毁；不影响注册本身。
       }
@@ -4579,95 +4579,95 @@ select.fish-select option:checked {
     exports.inject = inject
     // 仅供单元测试直接验证的纯函数；浏览器运行时不使用。
     exports.__testing = {
-      读会话自动朗读,
-      写会话自动朗读,
-      读后台自动朗读,
-      是否自动朗读,
-      会话自动朗读上限,
-      会话键合法,
-      构建录音约束,
-      规整录音时长,
-      打开麦克风,
-      设备不可用错误,
-      是虚拟设备名称,
-      虚拟设备提示,
-      注册选中交互,
-      选中交互ID,
-      识图扩展,
-      是图片文件,
-      本地识图开,
-      界面开关开,
-      界面开关键,
-      偏好,
-      麦克风按钮,
-      本地识图按钮,
-      语音面板,
-      自动朗读开关,
-      指标胶囊,
-      识图档位们,
-      识图档位选项,
-      规范识图档位,
-      识图阻塞原因,
-      拼图片描述,
-      入队待插入,
-      取待插入,
-      消费待插入,
-      格式化GB,
-      格式化显存,
-      格式化模型,
-      格式化任务,
-      格式化胶囊任务,
-      任务总数,
-      格式化时长,
-      格式化类型明细,
-      显存色,
-      格式化视觉,
-      指标离线,
-      语音附件名,
-      取会话对话,
-      挂语音附件,
-      检测语言,
-      选翻译方向,
-      翻译方向文案,
-      翻译规则文案,
-      翻译语言标签,
-      切段,
-      组装译文,
-      规划翻译,
-      规划批次,
-      取翻译方向配置,
-      求编辑范围,
-      映射位置,
-      调整分段偏移,
-      切片段,
-      取侧片段,
-      映射有效,
-      拼接分段,
-      翻转映射,
-      切换原文侧,
-      同方向,
-      建翻译计划,
-      执行翻译,
-      任务阶段文案,
-      冷启动提示,
-      翻译开始状态,
-      翻译成功状态,
-      翻译中断状态,
-      分段操作,
-      分段空交互,
-      分段交互,
-      分段工具条,
-      翻译草稿,
-      缓存键,
-      读缓存,
-      写缓存,
-      清空翻译缓存,
-      翻译空状态,
-      翻译编辑,
-      翻译锁定侧,
-      翻译可执行,
-      翻译按钮文字,
-      翻译面板,
+      readAutoReadSessions,
+      writeAutoReadSessions,
+      readBackgroundAutoRead,
+      shouldAutoRead,
+      autoReadSessionLimit,
+      validSessionKey,
+      buildRecordingConstraint,
+      clampRecordingDuration,
+      openMic,
+      deviceUnavailableError,
+      isVirtualDeviceName,
+      virtualDevicePrompt,
+      registerSelectedInteraction,
+      selectedInteractionID,
+      visionExt,
+      isImageFile,
+      localVisionOn,
+      uiSwitchOn,
+      uiSwitchKey,
+      prefs,
+      micButton,
+      localVisionButton,
+      speechPanel,
+      autoReadSwitch,
+      metricsCapsule,
+      visionPresets,
+      visionPresetOption,
+      normalizeVisionPreset,
+      visionBlockReason,
+      composeImageDesc,
+      enqueuePendingInsert,
+      fetchPendingInsert,
+      consumePendingInsert,
+      formatGB,
+      formatVram,
+      formatModel,
+      formatTask,
+      formatCapsuleTask,
+      taskTotalCount,
+      formatDuration,
+      formatTypeDetail,
+      vramColor,
+      formatVisual,
+      metricsOffline,
+      speechAttachmentName,
+      fetchSessionConversation,
+      attachSpeechAttachment,
+      detectLanguage,
+      pickTranslationDirection,
+      translationDirectionCopy,
+      translationRuleCopy,
+      translationLanguageTag,
+      splitSegment,
+      assembleTranslated,
+      planTranslation,
+      planBatchNo,
+      fetchTranslationDirectionConfig,
+      getEditRange,
+      mapPosition,
+      adjustPieceOffset,
+      switchFragment,
+      fetchSideFragment,
+      mapValid,
+      joinSegments,
+      flipToMap,
+      switchSwapOriginalSide,
+      sameDirection,
+      buildTranslationPlan,
+      runTranslation,
+      taskPhaseCopy,
+      coldStartPrompt,
+      translationBeginStatus,
+      translationSuccessStatus,
+      translationAbortState,
+      pieceAction,
+      pieceEmptyInteraction,
+      pieceInteraction,
+      pieceToolbar,
+      translationDraft,
+      cacheKey,
+      readCache,
+      writeCache,
+      clearTranslationCache,
+      translationEmptyStatus,
+      translationEdit,
+      translationLockedSide,
+      translationCanRun,
+      translationButtonLabel,
+      translationPanel,
       Section,
     }
     return module.exports

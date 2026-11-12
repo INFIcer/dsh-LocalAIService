@@ -16,7 +16,7 @@ import {
   publicConfig,
   RECORD_DEVICE_ID_MAX,
 } from '../lib/config.js'
-import { 默认识图提示, 识图档位 } from '../lib/vision-presets.js'
+import { defaultVisionPrompt, visionPreset } from '../lib/vision-presets.js'
 import { makeTempDir } from './helpers.js'
 
 test('默认配置符合 P1 契约', () => {
@@ -118,17 +118,17 @@ test('cacheDir 支持 ~ 展开', () => {
 test('解包 DSH volatile 引用，不把 [object Object] 写进配置', () => {
   const temp = makeTempDir()
   try {
-    const 引用 = (值) => ({
-      get: () => 值,
+    const ref = (value) => ({
+      get: () => value,
       [Symbol.for('cosmokit.volatile.write')]: () => {},
     })
     const c = normalizeConfig({
-      baseUrl: 引用('http://127.0.0.1:7444'),
-      apiVersion: 引用('1'),
-      ttsVoice: 引用('default'),
-      cacheDir: 引用('~/vc'),
-      requestTimeoutMs: 引用(9000),
-      logLevel: 引用('debug'),
+      baseUrl: ref('http://127.0.0.1:7444'),
+      apiVersion: ref('1'),
+      ttsVoice: ref('default'),
+      cacheDir: ref('~/vc'),
+      requestTimeoutMs: ref(9000),
+      logLevel: ref('debug'),
     }, { homeDir: temp.dir })
     assert.equal(c.baseUrl, 'http://127.0.0.1:7444')
     assert.equal(c.apiVersion, '1')
@@ -234,18 +234,18 @@ test('normalizeConfig：P2 朗读/语音字段钳范围、非法枚举回退', (
     assert.equal(c.rememberVoiceChoice, false)
     assert.equal(c.asrLanguage, 'auto')
 
-    const 正常 = normalizeConfig({
+    const normal = normalizeConfig({
       ttsSpeed: 1.257,
       readMaxChars: 3000,
       readConcurrency: 1,
       recordMime: 'wav',
       asrLanguage: 'zh',
     }, { homeDir: temp.dir })
-    assert.equal(正常.ttsSpeed, 1.26)
-    assert.equal(正常.readMaxChars, 3000)
-    assert.equal(正常.readConcurrency, 1)
-    assert.equal(正常.recordMime, 'wav')
-    assert.equal(正常.asrLanguage, 'zh')
+    assert.equal(normal.ttsSpeed, 1.26)
+    assert.equal(normal.readMaxChars, 3000)
+    assert.equal(normal.readConcurrency, 1)
+    assert.equal(normal.recordMime, 'wav')
+    assert.equal(normal.asrLanguage, 'zh')
   } finally {
     temp.cleanup()
   }
@@ -254,19 +254,19 @@ test('normalizeConfig：P2 朗读/语音字段钳范围、非法枚举回退', (
 test('primaryLanguage / secondaryLanguage：默认 zh/en，五语言白名单，非法回退', () => {
   const temp = makeTempDir()
   try {
-    const 默认 = normalizeConfig({}, { homeDir: temp.dir })
-    assert.equal(默认.primaryLanguage, 'zh')
-    assert.equal(默认.secondaryLanguage, 'en')
+    const fallbackValue = normalizeConfig({}, { homeDir: temp.dir })
+    assert.equal(fallbackValue.primaryLanguage, 'zh')
+    assert.equal(fallbackValue.secondaryLanguage, 'en')
 
-    for (const 代码 of ['zh', 'en', 'ja', 'ko', 'yue']) {
-      const c = normalizeConfig({ primaryLanguage: 代码, secondaryLanguage: 代码 }, { homeDir: temp.dir })
-      assert.equal(c.primaryLanguage, 代码)
-      assert.equal(c.secondaryLanguage, 代码)
+    for (const code of ['zh', 'en', 'ja', 'ko', 'yue']) {
+      const c = normalizeConfig({ primaryLanguage: code, secondaryLanguage: code }, { homeDir: temp.dir })
+      assert.equal(c.primaryLanguage, code)
+      assert.equal(c.secondaryLanguage, code)
     }
 
-    const 乱写 = normalizeConfig({ primaryLanguage: 'fr', secondaryLanguage: 42 }, { homeDir: temp.dir })
-    assert.equal(乱写.primaryLanguage, 'zh')
-    assert.equal(乱写.secondaryLanguage, 'en')
+    const garbled = normalizeConfig({ primaryLanguage: 'fr', secondaryLanguage: 42 }, { homeDir: temp.dir })
+    assert.equal(garbled.primaryLanguage, 'zh')
+    assert.equal(garbled.secondaryLanguage, 'en')
   } finally {
     temp.cleanup()
   }
@@ -276,9 +276,9 @@ test('autoReadSessions：默认空表；旧配置没有该字段时行为不变'
   const temp = makeTempDir()
   try {
     assert.deepEqual(defaultConfig(temp.dir).autoReadSessions, {})
-    const 旧 = normalizeConfig({ autoRead: true }, { homeDir: temp.dir })
-    assert.equal(旧.autoRead, true)
-    assert.deepEqual(旧.autoReadSessions, {})
+    const prev = normalizeConfig({ autoRead: true }, { homeDir: temp.dir })
+    assert.equal(prev.autoRead, true)
+    assert.deepEqual(prev.autoReadSessions, {})
     // 只有全局默认时，所有会话都按它表现（回落由客户端完成）。
     assert.deepEqual(normalizeAutoReadSessions(undefined), { value: {}, warnings: [], valid: true })
   } finally {
@@ -295,16 +295,16 @@ test('localDescribe：默认开；旧配置缺字段按开；明确关闭才关�
     assert.equal(normalizeConfig({ autoRead: true }, { homeDir: temp.dir }).localDescribe, true)
     // 无法识别的值：回落默认（开），不抛错。
     assert.equal(normalizeConfig({ localDescribe: '乱写' }, { homeDir: temp.dir }).localDescribe, true)
-    for (const 值 of [false, 'false', 0, '0']) {
-      assert.equal(normalizeConfig({ localDescribe: 值 }, { homeDir: temp.dir }).localDescribe, false)
+    for (const value of [false, 'false', 0, '0']) {
+      assert.equal(normalizeConfig({ localDescribe: value }, { homeDir: temp.dir }).localDescribe, false)
     }
 
     // 环境变量最高优先级。
-    const 关 = applyEnv(defaultConfig(temp.dir), { DSH_FISH_SERVICE_LOCAL_DESCRIBE: 'false' }, { homeDir: temp.dir })
-    assert.equal(关.config.localDescribe, false)
-    assert.deepEqual(关.overrides, ['localDescribe'])
-    const 开 = applyEnv(defaultConfig(temp.dir), { FISH_SERVICE_LOCAL_DESCRIBE: '1' }, { homeDir: temp.dir })
-    assert.equal(开.config.localDescribe, true)
+    const off = applyEnv(defaultConfig(temp.dir), { DSH_FISH_SERVICE_LOCAL_DESCRIBE: 'false' }, { homeDir: temp.dir })
+    assert.equal(off.config.localDescribe, false)
+    assert.deepEqual(off.overrides, ['localDescribe'])
+    const on = applyEnv(defaultConfig(temp.dir), { FISH_SERVICE_LOCAL_DESCRIBE: '1' }, { homeDir: temp.dir })
+    assert.equal(on.config.localDescribe, true)
 
     // 持久化：保存后重读仍是关。
     const store = new ConfigStore({ homeDir: temp.dir })
@@ -323,27 +323,27 @@ test('localDescribe：默认开；旧配置缺字段按开；明确关闭才关�
 test('识图档位与提示词：旧配置补默认、空串保留、非法回退默认、只认四档', () => {
   const temp = makeTempDir()
   try {
-    const 默认 = defaultConfig(temp.dir)
-    assert.deepEqual(默认.visionPresets, { ...默认识图提示 })
-    assert.equal(默认.visionDefaultPreset, 'detailed')
-    assert.equal(默认.visionSessionPrompt, '')
+    const fallbackValue = defaultConfig(temp.dir)
+    assert.deepEqual(fallbackValue.visionPresets, { ...defaultVisionPrompt })
+    assert.equal(fallbackValue.visionDefaultPreset, 'detailed')
+    assert.equal(fallbackValue.visionSessionPrompt, '')
 
     // 旧配置没有这些字段：自动补默认，不报错。
-    const 旧 = normalizeConfig({ autoRead: true }, { homeDir: temp.dir })
-    assert.deepEqual(旧.visionPresets, 默认识图提示)
-    assert.equal(旧.visionDefaultPreset, 'detailed')
-    assert.equal(旧.visionSessionPrompt, '')
+    const prev = normalizeConfig({ autoRead: true }, { homeDir: temp.dir })
+    assert.deepEqual(prev.visionPresets, defaultVisionPrompt)
+    assert.equal(prev.visionDefaultPreset, 'detailed')
+    assert.equal(prev.visionSessionPrompt, '')
 
     // 非对象 / 非字符串：补内置默认；空串保留（运行时按默认处理）。
-    assert.deepEqual(normalizeConfig({ visionPresets: '乱写' }, { homeDir: temp.dir }).visionPresets, 默认识图提示)
-    const 混 = normalizeConfig({
+    assert.deepEqual(normalizeConfig({ visionPresets: '乱写' }, { homeDir: temp.dir }).visionPresets, defaultVisionPrompt)
+    const mixed = normalizeConfig({
       visionPresets: { brief: '  ', standard: '我的标准版', detailed: 123, foo: '不该收' },
     }, { homeDir: temp.dir })
-    assert.equal(混.visionPresets.brief, '')
-    assert.equal(混.visionPresets.standard, '我的标准版')
-    assert.equal(混.visionPresets.detailed, 默认识图提示.detailed)
-    assert.equal(混.visionPresets.foo, undefined)
-    assert.deepEqual(Object.keys(混.visionPresets).sort(), [...识图档位].sort())
+    assert.equal(mixed.visionPresets.brief, '')
+    assert.equal(mixed.visionPresets.standard, '我的标准版')
+    assert.equal(mixed.visionPresets.detailed, defaultVisionPrompt.detailed)
+    assert.equal(mixed.visionPresets.foo, undefined)
+    assert.deepEqual(Object.keys(mixed.visionPresets).sort(), [...visionPreset].sort())
 
     // 配置只认档位 id；认不出回退默认（中文名由服务/工具层转换，配置层不做）。
     assert.equal(normalizeConfig({ visionDefaultPreset: 'standard' }, { homeDir: temp.dir }).visionDefaultPreset, 'standard')
@@ -351,29 +351,29 @@ test('识图档位与提示词：旧配置补默认、空串保留、非法回�
     assert.equal(normalizeConfig({ visionDefaultPreset: '特写' }, { homeDir: temp.dir }).visionDefaultPreset, 'detailed')
 
     // 会话识图提示词单独存：留空用内置，过长截断，非字符串按留空。
-    const 会话 = normalizeConfig({ visionSessionPrompt: '  我的会话提示  ' }, { homeDir: temp.dir })
-    assert.equal(会话.visionSessionPrompt, '我的会话提示')
-    const 会话超长 = normalizeConfig({ visionSessionPrompt: 'a'.repeat(5000) }, { homeDir: temp.dir })
-    assert.equal(会话超长.visionSessionPrompt.length, 4000)
+    const session = normalizeConfig({ visionSessionPrompt: '  我的会话提示  ' }, { homeDir: temp.dir })
+    assert.equal(session.visionSessionPrompt, '我的会话提示')
+    const sessionExceedLength = normalizeConfig({ visionSessionPrompt: 'a'.repeat(5000) }, { homeDir: temp.dir })
+    assert.equal(sessionExceedLength.visionSessionPrompt.length, 4000)
     assert.equal(normalizeConfig({ visionSessionPrompt: 42 }, { homeDir: temp.dir }).visionSessionPrompt, '')
 
     // 单条提示词超长截到 4000。
-    const 超长 = normalizeConfig({ visionPresets: { brief: 'a'.repeat(5000) } }, { homeDir: temp.dir })
-    assert.equal(超长.visionPresets.brief.length, 4000)
+    const exceedLength = normalizeConfig({ visionPresets: { brief: 'a'.repeat(5000) } }, { homeDir: temp.dir })
+    assert.equal(exceedLength.visionPresets.brief.length, 4000)
 
     // 持久化后重读仍是改过的值。
     const store = new ConfigStore({ homeDir: temp.dir })
     store.load({}, {})
-    assert.deepEqual(store.current.visionPresets, 默认识图提示)
+    assert.deepEqual(store.current.visionPresets, defaultVisionPrompt)
     store.save({
       ...store.current,
       visionPresets: { ...store.current.visionPresets, text: '我的文字提示' },
       visionSessionPrompt: '我的会话提示',
     })
     const again = new ConfigStore({ homeDir: temp.dir })
-    const 重读 = again.load({}, {})
-    assert.equal(重读.visionPresets.text, '我的文字提示')
-    assert.equal(重读.visionSessionPrompt, '我的会话提示')
+    const reread = again.load({}, {})
+    assert.equal(reread.visionPresets.text, '我的文字提示')
+    assert.equal(reread.visionSessionPrompt, '我的会话提示')
   } finally {
     temp.cleanup()
   }
@@ -385,15 +385,15 @@ test('autoReadInBackground：默认开；旧配置缺字段按开；明确关闭
     assert.equal(defaultConfig(temp.dir).autoReadInBackground, true)
 
     // 旧配置没有该字段：按开启处理（以前后台不朗读，现在默认后台也朗读）。
-    const 旧 = normalizeConfig({ autoRead: true }, { homeDir: temp.dir })
-    assert.equal(旧.autoReadInBackground, true)
+    const prev = normalizeConfig({ autoRead: true }, { homeDir: temp.dir })
+    assert.equal(prev.autoReadInBackground, true)
 
     // true / 'true' / 1 / '1' 都算开；false / 'false' / 0 / '0' 算关。
-    for (const 值 of [true, 'true', 1, '1']) {
-      assert.equal(normalizeConfig({ autoReadInBackground: 值 }, { homeDir: temp.dir }).autoReadInBackground, true)
+    for (const value of [true, 'true', 1, '1']) {
+      assert.equal(normalizeConfig({ autoReadInBackground: value }, { homeDir: temp.dir }).autoReadInBackground, true)
     }
-    for (const 值 of [false, 'false', 0, '0']) {
-      assert.equal(normalizeConfig({ autoReadInBackground: 值 }, { homeDir: temp.dir }).autoReadInBackground, false)
+    for (const value of [false, 'false', 0, '0']) {
+      assert.equal(normalizeConfig({ autoReadInBackground: value }, { homeDir: temp.dir }).autoReadInBackground, false)
     }
     // 无法识别的值：回落默认（开），不抛错。
     assert.equal(normalizeConfig({ autoReadInBackground: '乱写' }, { homeDir: temp.dir }).autoReadInBackground, true)
@@ -417,8 +417,8 @@ test('recordDeviceId：默认空串；旧配置不变；非法值忽略并提示
   try {
     assert.equal(defaultConfig(temp.dir).recordDeviceId, '')
     // 旧配置没有该字段：按空串处理，行为与以前一致。
-    const 旧 = normalizeConfig({ autoRead: true }, { homeDir: temp.dir })
-    assert.equal(旧.recordDeviceId, '')
+    const prev = normalizeConfig({ autoRead: true }, { homeDir: temp.dir })
+    assert.equal(prev.recordDeviceId, '')
     assert.deepEqual(normalizeRecordDeviceId(undefined), { value: '', warnings: [], valid: true })
 
     // 空串合法 = 跟随系统默认；字符串保留（去首尾空白）。
@@ -427,24 +427,24 @@ test('recordDeviceId：默认空串；旧配置不变；非法值忽略并提示
     assert.equal(normalizeRecordDeviceId('x'.repeat(RECORD_DEVICE_ID_MAX)).value.length, RECORD_DEVICE_ID_MAX)
 
     // 非法类型：忽略并提示，回落空串。
-    const 类型警告 = []
-    const 类型 = normalizeConfig({ recordDeviceId: 42 }, {
+    const typeWarn = []
+    const type = normalizeConfig({ recordDeviceId: 42 }, {
       homeDir: temp.dir,
-      onWarning: (警告) => 类型警告.push(警告),
+      onWarning: (warn) => typeWarn.push(warn),
     })
-    assert.equal(类型.recordDeviceId, '')
-    assert.equal(类型警告.length, 1)
-    assert.match(类型警告[0], /格式不正确/)
+    assert.equal(type.recordDeviceId, '')
+    assert.equal(typeWarn.length, 1)
+    assert.match(typeWarn[0], /格式不正确/)
 
     // 超长：忽略并提示，回落空串。
-    const 长度警告 = []
-    const 超长 = normalizeConfig({ recordDeviceId: 'x'.repeat(RECORD_DEVICE_ID_MAX + 1) }, {
+    const lenWarn = []
+    const exceedLength = normalizeConfig({ recordDeviceId: 'x'.repeat(RECORD_DEVICE_ID_MAX + 1) }, {
       homeDir: temp.dir,
-      onWarning: (警告) => 长度警告.push(警告),
+      onWarning: (warn) => lenWarn.push(warn),
     })
-    assert.equal(超长.recordDeviceId, '')
-    assert.equal(长度警告.length, 1)
-    assert.match(长度警告[0], /最多 200 字/)
+    assert.equal(exceedLength.recordDeviceId, '')
+    assert.equal(lenWarn.length, 1)
+    assert.match(lenWarn[0], /最多 200 字/)
 
     // 合法值写进配置。
     assert.equal(normalizeConfig({ recordDeviceId: 'mic-abc' }, { homeDir: temp.dir }).recordDeviceId, 'mic-abc')
@@ -466,7 +466,7 @@ test('autoReadSessions：键须以 session- 开头、值转布尔、非法项忽
         'not-a-session': true,
         '': true,
       },
-    }, { homeDir: temp.dir, onWarning: (警告) => warnings.push(警告) })
+    }, { homeDir: temp.dir, onWarning: (warn) => warnings.push(warn) })
     assert.deepEqual(c.autoReadSessions, {
       'session-a': true,
       'session-b': false,
@@ -477,11 +477,11 @@ test('autoReadSessions：键须以 session- 开头、值转布尔、非法项忽
     assert.match(warnings[0], /2 条无法识别/)
 
     // 只要不是普通对象就整项丢弃，不报错。
-    for (const 非法 of [[], 'session-a', 42]) {
-      const 规范 = normalizeAutoReadSessions(非法)
-      assert.deepEqual(规范.value, {})
-      assert.equal(规范.valid, false)
-      assert.equal(规范.warnings.length, 1)
+    for (const invalid of [[], 'session-a', 42]) {
+      const normalize = normalizeAutoReadSessions(invalid)
+      assert.deepEqual(normalize.value, {})
+      assert.equal(normalize.valid, false)
+      assert.equal(normalize.warnings.length, 1)
     }
   } finally {
     temp.cleanup()
@@ -492,11 +492,11 @@ test('autoReadSessions：最多保留 200 条，超出部分丢弃并提示', ()
   const temp = makeTempDir()
   const warnings = []
   try {
-    const 表 = {}
-    for (let i = 0; i < 205; i += 1) 表[`session-${i}`] = i % 2 === 0
-    const c = normalizeConfig({ autoReadSessions: 表 }, {
+    const table = {}
+    for (let i = 0; i < 205; i += 1) table[`session-${i}`] = i % 2 === 0
+    const c = normalizeConfig({ autoReadSessions: table }, {
       homeDir: temp.dir,
-      onWarning: (警告) => warnings.push(警告),
+      onWarning: (warn) => warnings.push(warn),
     })
     assert.equal(Object.keys(c.autoReadSessions).length, 200)
     assert.equal(c.autoReadSessions['session-199'], false)
@@ -546,37 +546,37 @@ test('schemastery 配置 schema 能构建（拿不到包时允许为 undefined�
 test('界面开关：默认开，明确关闭才关，非法值回落默认，env 可覆盖', () => {
   const temp = makeTempDir()
   try {
-    const 键们 = ['uiVoiceInput', 'uiVision', 'uiMetrics', 'uiAutoRead']
-    const 默认 = defaultConfig(temp.dir)
-    for (const 键 of 键们) assert.equal(默认[键], true)
+    const keys = ['uiVoiceInput', 'uiVision', 'uiMetrics', 'uiAutoRead']
+    const fallbackValue = defaultConfig(temp.dir)
+    for (const key of keys) assert.equal(fallbackValue[key], true)
 
     // 旧配置没有这四个字段：按开处理，行为与以前一致。
-    const 旧 = normalizeConfig({ autoRead: true }, { homeDir: temp.dir })
-    for (const 键 of 键们) assert.equal(旧[键], true)
+    const prev = normalizeConfig({ autoRead: true }, { homeDir: temp.dir })
+    for (const key of keys) assert.equal(prev[key], true)
 
     // 无法识别的值：回落默认（开），不抛错。
     assert.equal(normalizeConfig({ uiVoiceInput: '乱写' }, { homeDir: temp.dir }).uiVoiceInput, true)
 
     // false / 'false' / 0 / '0' 都算关；true / 'true' / 1 / '1' 都算开。
-    for (const 键 of 键们) {
-      for (const 值 of [false, 'false', 0, '0']) {
-        assert.equal(normalizeConfig({ [键]: 值 }, { homeDir: temp.dir })[键], false)
+    for (const key of keys) {
+      for (const value of [false, 'false', 0, '0']) {
+        assert.equal(normalizeConfig({ [key]: value }, { homeDir: temp.dir })[key], false)
       }
-      for (const 值 of [true, 'true', 1, '1']) {
-        assert.equal(normalizeConfig({ [键]: 值 }, { homeDir: temp.dir })[键], true)
+      for (const value of [true, 'true', 1, '1']) {
+        assert.equal(normalizeConfig({ [key]: value }, { homeDir: temp.dir })[key], true)
       }
     }
 
     // 环境变量最高优先级；大小写两套变量名都认。
-    const 覆盖 = applyEnv(defaultConfig(temp.dir), {
+    const override = applyEnv(defaultConfig(temp.dir), {
       DSH_FISH_SERVICE_UI_VISION: 'false',
       FISH_SERVICE_UI_AUTO_READ: '0',
       FISH_SERVICE_UI_METRICS: 'true',
     }, { homeDir: temp.dir })
-    assert.equal(覆盖.config.uiVision, false)
-    assert.equal(覆盖.config.uiAutoRead, false)
-    assert.equal(覆盖.config.uiMetrics, true)
-    assert.deepEqual(覆盖.overrides.sort(), ['uiAutoRead', 'uiMetrics', 'uiVision'])
+    assert.equal(override.config.uiVision, false)
+    assert.equal(override.config.uiAutoRead, false)
+    assert.equal(override.config.uiMetrics, true)
+    assert.deepEqual(override.overrides.sort(), ['uiAutoRead', 'uiMetrics', 'uiVision'])
   } finally {
     temp.cleanup()
   }
@@ -601,15 +601,15 @@ test('界面开关：保存后真正落盘，重读仍是关闭', async () => {
     assert.equal(raw.uiAutoRead, false)
 
     const again = new ConfigStore({ homeDir: temp.dir })
-    const 重读 = again.load({}, {})
-    assert.equal(重读.uiVoiceInput, false)
-    assert.equal(重读.uiAutoRead, false)
+    const reread = again.load({}, {})
+    assert.equal(reread.uiVoiceInput, false)
+    assert.equal(reread.uiAutoRead, false)
     assert.deepEqual(again.warnings, [])
 
     // schema 里也要有这四项，设置页才能正常绑定。
     const z = await import('@deepseek-ai/schemastery')
     const text = String(buildConfigSchema(z.default, temp.dir))
-    for (const 键 of ['uiVoiceInput', 'uiVision', 'uiMetrics', 'uiAutoRead']) assert.match(text, new RegExp(键))
+    for (const key of ['uiVoiceInput', 'uiVision', 'uiMetrics', 'uiAutoRead']) assert.match(text, new RegExp(key))
   } finally {
     temp.cleanup()
   }

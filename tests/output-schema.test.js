@@ -5,38 +5,38 @@ import assert from 'node:assert/strict'
 import { buildToolDefinitions } from '../lib/tools/index.js'
 
 // 只断言宿主实际会检查的关键字；没写 type 视为任意 JSON（job.result、describe.parsed 正是如此）。
-function 校验(结构, 值, 路径 = '$') {
-  assert.equal(typeof 结构, 'object', `${路径} 的 schema 缺失`)
-  if (结构.type === 'object') {
-    assert.equal(typeof 值, 'object', `${路径} 应为 object，实际是 ${typeof 值}`)
-    assert.ok(值 !== null && !Array.isArray(值), `${路径} 应为 object`)
-    for (const 键 of 结构.required || []) assert.ok(键 in 值, `${路径} 缺必填字段 ${键}`)
-    const 属性 = 结构.properties || {}
-    if (结构.additionalProperties === false) {
-      for (const 键 of Object.keys(值)) assert.ok(键 in 属性, `${路径} 多出未声明字段 ${键}`)
+function validate(shape, value, path = '$') {
+  assert.equal(typeof shape, 'object', `${path} 的 schema 缺失`)
+  if (shape.type === 'object') {
+    assert.equal(typeof value, 'object', `${path} 应为 object，实际是 ${typeof value}`)
+    assert.ok(value !== null && !Array.isArray(value), `${path} 应为 object`)
+    for (const key of shape.required || []) assert.ok(key in value, `${path} 缺必填字段 ${key}`)
+    const prop = shape.properties || {}
+    if (shape.additionalProperties === false) {
+      for (const key of Object.keys(value)) assert.ok(key in prop, `${path} 多出未声明字段 ${key}`)
     }
-    for (const [键, 子结构] of Object.entries(属性)) {
-      if (键 in 值) 校验(子结构, 值[键], `${路径}.${键}`)
+    for (const [key, childShape] of Object.entries(prop)) {
+      if (key in value) validate(childShape, value[key], `${path}.${key}`)
     }
     return
   }
-  if (结构.type === 'array') {
-    assert.ok(Array.isArray(值), `${路径} 应为 array`)
-    if (结构.items) 值.forEach((项, 序) => 校验(结构.items, 项, `${路径}[${序}]`))
+  if (shape.type === 'array') {
+    assert.ok(Array.isArray(value), `${path} 应为 array`)
+    if (shape.items) value.forEach((item, order) => validate(shape.items, item, `${path}[${order}]`))
     return
   }
-  if (结构.type === 'string') assert.equal(typeof 值, 'string', `${路径} 应为 string`)
-  else if (结构.type === 'number') assert.equal(typeof 值, 'number', `${路径} 应为 number`)
-  else if (结构.type === 'integer') assert.ok(Number.isInteger(值), `${路径} 应为 integer`)
-  else if (结构.type === 'boolean') assert.equal(typeof 值, 'boolean', `${路径} 应为 boolean`)
+  if (shape.type === 'string') assert.equal(typeof value, 'string', `${path} 应为 string`)
+  else if (shape.type === 'number') assert.equal(typeof value, 'number', `${path} 应为 number`)
+  else if (shape.type === 'integer') assert.ok(Number.isInteger(value), `${path} 应为 integer`)
+  else if (shape.type === 'boolean') assert.equal(typeof value, 'boolean', `${path} 应为 boolean`)
 }
 
-function 造工具(api) {
+function makeTool(api) {
   const defs = buildToolDefinitions({ api, logger: null })
-  return new Map(defs.map((定义) => [定义.name, 定义]))
+  return new Map(defs.map((define) => [define.name, define]))
 }
 
-const 假服务 = {
+const fakeService = {
   config: { get: () => ({}) },
   recordError() {},
   jobs: {
@@ -47,44 +47,44 @@ const 假服务 = {
   },
   visionDescribe: async (paths) => ({
     ok: true,
-    items: paths.map((路径) => ({ path: 路径, text: '一只猫', parsed: '{"heads":1}', ms: 3 })),
+    items: paths.map((path) => ({ path: path, text: '一只猫', parsed: '{"heads":1}', ms: 3 })),
     ms: 3,
   }),
 }
 
 test('每个工具的输出 schema 顶层都是宽松 object', () => {
-  const 表 = 造工具(假服务)
-  assert.equal(表.size, 9)
-  for (const 定义 of 表.values()) {
-    assert.equal(定义.output.schema.type, 'object', 定义.name)
-    assert.equal(定义.output.schema.additionalProperties, true, 定义.name)
+  const table = makeTool(fakeService)
+  assert.equal(table.size, 9)
+  for (const define of table.values()) {
+    assert.equal(define.output.schema.type, 'object', define.name)
+    assert.equal(define.output.schema.additionalProperties, true, define.name)
   }
 })
 
 test('fish_job：上游任务结果是数组 / 字符串时也不违反输出 schema', async () => {
-  const job = 造工具(假服务).get('fish_job')
+  const job = makeTool(fakeService).get('fish_job')
 
-  const 数组结果 = await job.execute({ action: 'status', jobId: 'j1' }, {})
-  assert.equal(数组结果.ok, true)
-  assert.ok(Array.isArray(数组结果.result))
-  校验(job.output.schema, 数组结果)
+  const arrayResult = await job.execute({ action: 'status', jobId: 'j1' }, {})
+  assert.equal(arrayResult.ok, true)
+  assert.ok(Array.isArray(arrayResult.result))
+  validate(job.output.schema, arrayResult)
 
-  const 标量结果 = await job.execute({ action: 'wait', jobId: 'j1' }, {})
-  assert.equal(标量结果.result, '纯文本结果')
-  校验(job.output.schema, 标量结果)
+  const scalarResult = await job.execute({ action: 'wait', jobId: 'j1' }, {})
+  assert.equal(scalarResult.result, '纯文本结果')
+  validate(job.output.schema, scalarResult)
 
-  const 列表 = await job.execute({ action: 'list' }, {})
-  校验(job.output.schema, 列表)
+  const list = await job.execute({ action: 'list' }, {})
+  validate(job.output.schema, list)
 })
 
 test('fish_describe_image：parsed 是字符串 / 数组时也不违反输出 schema', async () => {
-  const describe = 造工具(假服务).get('fish_describe_image')
+  const describe = makeTool(fakeService).get('fish_describe_image')
 
-  const 字符串 = await describe.execute({ paths: ['C:\\a.png'] }, {})
-  assert.equal(typeof 字符串.items[0].parsed, 'string')
-  校验(describe.output.schema, 字符串)
+  const textResult = await describe.execute({ paths: ['C:\\a.png'] }, {})
+  assert.equal(typeof textResult.items[0].parsed, 'string')
+  validate(describe.output.schema, textResult)
 
-  const 数组 = await describe.execute({ paths: ['C:\\a.png'] }, {})
-  数组.items[0].parsed = [1, 2, 3]
-  校验(describe.output.schema, 数组)
+  const array = await describe.execute({ paths: ['C:\\a.png'] }, {})
+  array.items[0].parsed = [1, 2, 3]
+  validate(describe.output.schema, array)
 })

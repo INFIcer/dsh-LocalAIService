@@ -8,11 +8,11 @@ import { File } from 'node:buffer'
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 
-function 载入客户端() {
-  const 源码 = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
-  let 工厂 = null
-  const 沙箱 = {
-    window: { __ModuleLoader__: { load: (定义) => { 工厂 = 定义.factory } } },
+function loadClient() {
+  const sourceCode = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+  let factory = null
+  const sandbox = {
+    window: { __ModuleLoader__: { load: (define) => { factory = define.factory } } },
     document: undefined,
     console,
     setTimeout,
@@ -23,94 +23,94 @@ function 载入客户端() {
     File,
     fetch: async () => ({ json: async () => null }),
   }
-  vm.createContext(沙箱)
-  vm.runInContext(源码, 沙箱)
-  assert.equal(typeof 工厂, 'function')
-  return 工厂(() => ({
+  vm.createContext(sandbox)
+  vm.runInContext(sourceCode, sandbox)
+  assert.equal(typeof factory, 'function')
+  return factory(() => ({
     createElement: () => null,
     Fragment: 'Fragment',
-    useState: (初值) => [typeof 初值 === 'function' ? 初值() : 初值, () => {}],
+    useState: (initialValue) => [typeof initialValue === 'function' ? initialValue() : initialValue, () => {}],
     useEffect: () => {},
-    useRef: (值) => ({ current: 值 }),
-    useCallback: (函数) => 函数,
+    useRef: (value) => ({ current: value }),
+    useCallback: (fn) => fn,
   }))
 }
 
-const 测试 = 载入客户端().__testing
+const service = loadClient().__testing
 
 test('语音附件名：日期时间 + 按 MIME 选扩展名', () => {
-  const 时刻 = new Date(2026, 10, 10, 23, 5, 9).getTime()
-  assert.equal(测试.语音附件名(时刻, 'audio/webm'), '语音-20261110-230509.webm')
-  assert.equal(测试.语音附件名(时刻, 'audio/wav'), '语音-20261110-230509.wav')
-  assert.equal(测试.语音附件名(时刻, 'audio/ogg;codecs=opus'), '语音-20261110-230509.ogg')
-  assert.equal(测试.语音附件名(时刻, 'audio/mp4'), '语音-20261110-230509.m4a')
-  assert.equal(测试.语音附件名(时刻, ''), '语音-20261110-230509.webm')
-  assert.equal(测试.语音附件名(时刻, undefined), '语音-20261110-230509.webm')
+  const timestamp = new Date(2026, 10, 10, 23, 5, 9).getTime()
+  assert.equal(service.speechAttachmentName(timestamp, 'audio/webm'), '语音-20261110-230509.webm')
+  assert.equal(service.speechAttachmentName(timestamp, 'audio/wav'), '语音-20261110-230509.wav')
+  assert.equal(service.speechAttachmentName(timestamp, 'audio/ogg;codecs=opus'), '语音-20261110-230509.ogg')
+  assert.equal(service.speechAttachmentName(timestamp, 'audio/mp4'), '语音-20261110-230509.m4a')
+  assert.equal(service.speechAttachmentName(timestamp, ''), '语音-20261110-230509.webm')
+  assert.equal(service.speechAttachmentName(timestamp, undefined), '语音-20261110-230509.webm')
 })
 
 test('取会话对话：优先走 session 作用域的 conversation', () => {
-  const 对话 = { 标记: 'session' }
-  const 上下文 = {
-    get: (名) => (名 === 'sessions'
-      ? { scope: (id) => (id === 's1' ? { get: (服务) => (服务 === 'conversation' ? 对话 : undefined) } : undefined) }
-      : 名 === 'conversation' ? { 标记: 'root' } : undefined),
+  const conversation = { mark: 'session' }
+  const context = {
+    get: (name) => (name === 'sessions'
+      ? { scope: (id) => (id === 's1' ? { get: (service) => (service === 'conversation' ? conversation : undefined) } : undefined) }
+      : name === 'conversation' ? { mark: 'root' } : undefined),
   }
-  assert.equal(测试.取会话对话('s1', 上下文), 对话)
+  assert.equal(service.fetchSessionConversation('s1', context), conversation)
 })
 
 test('取会话对话：session 作用域没有时退回根 conversation', () => {
-  const 根对话 = { 标记: 'root' }
-  const 上下文 = { get: (名) => (名 === 'sessions' ? {} : 名 === 'conversation' ? 根对话 : undefined) }
-  assert.equal(测试.取会话对话('s2', 上下文), 根对话)
+  const rootConversation = { mark: 'root' }
+  const context = { get: (name) => (name === 'sessions' ? {} : name === 'conversation' ? rootConversation : undefined) }
+  assert.equal(service.fetchSessionConversation('s2', context), rootConversation)
 })
 
 test('取会话对话：服务都没有时返回 null 而不是抛错', () => {
-  assert.equal(测试.取会话对话('s3', { get: () => undefined }), null)
-  assert.equal(测试.取会话对话('s4', { get: () => { throw new Error('boom') } }), null)
-  assert.equal(测试.取会话对话('s5', null), null)
+  assert.equal(service.fetchSessionConversation('s3', { get: () => undefined }), null)
+  assert.equal(service.fetchSessionConversation('s4', { get: () => { throw new Error('boom') } }), null)
+  assert.equal(service.fetchSessionConversation('s5', null), null)
 })
 
 test('挂语音附件：createDrafts + addAttachments 成功返回 true', () => {
-  const 收到的 = []
-  const 对话 = {
-    createDrafts: (会话, 文件们) => {
-      收到的.push({ 会话, 文件们 })
+  const receivedValue = []
+  const conversation = {
+    createDrafts: (session, files) => {
+      receivedValue.push({ session, files })
       return [{ id: 'a1' }, { id: 'a2' }]
     },
   }
-  const 上下文 = { get: (名) => (名 === 'conversation' ? 对话 : undefined) }
+  const context = { get: (name) => (name === 'conversation' ? conversation : undefined) }
   const inputActions = {
-    addAttachments: (标识们) => {
-      收到的.push({ 标识们 })
+    addAttachments: (ids) => {
+      receivedValue.push({ ids })
       return true
     },
   }
-  const 成功 = 测试.挂语音附件(inputActions, 's9', { size: 3 }, 'audio/webm', '语音-20261110-230509.webm', 上下文)
-  assert.equal(成功, true)
-  assert.equal(收到的[0].会话, 's9')
-  assert.equal(收到的[0].文件们.length, 1)
-  assert.equal(收到的[0].文件们[0].name, '语音-20261110-230509.webm')
-  assert.deepEqual(收到的[1].标识们, ['a1', 'a2'])
+  const success = service.attachSpeechAttachment(inputActions, 's9', { size: 3 }, 'audio/webm', '语音-20261110-230509.webm', context)
+  assert.equal(success, true)
+  assert.equal(receivedValue[0].session, 's9')
+  assert.equal(receivedValue[0].files.length, 1)
+  assert.equal(receivedValue[0].files[0].name, '语音-20261110-230509.webm')
+  assert.deepEqual(receivedValue[1].ids, ['a1', 'a2'])
 })
 
 test('挂语音附件：内核没有 conversation 服务时返回 false', () => {
   const inputActions = { addAttachments: () => true }
-  assert.equal(测试.挂语音附件(inputActions, 's9', { size: 3 }, 'audio/webm', 'x.webm', { get: () => undefined }), false)
+  assert.equal(service.attachSpeechAttachment(inputActions, 's9', { size: 3 }, 'audio/webm', 'x.webm', { get: () => undefined }), false)
 })
 
 test('挂语音附件：addAttachments 被拒时返回 false（调用方退回路径文字）', () => {
-  const 对话 = { createDrafts: () => [{ id: 'a1' }] }
-  const 上下文 = { get: (名) => (名 === 'conversation' ? 对话 : undefined) }
-  assert.equal(测试.挂语音附件({ addAttachments: () => false }, 's9', { size: 3 }, 'audio/webm', 'x.webm', 上下文), false)
+  const conversation = { createDrafts: () => [{ id: 'a1' }] }
+  const context = { get: (name) => (name === 'conversation' ? conversation : undefined) }
+  assert.equal(service.attachSpeechAttachment({ addAttachments: () => false }, 's9', { size: 3 }, 'audio/webm', 'x.webm', context), false)
 })
 
 test('挂语音附件：createDrafts 抛错时吞掉异常返回 false', () => {
-  const 对话 = { createDrafts: () => { throw new Error('busy') } }
-  const 上下文 = { get: (名) => (名 === 'conversation' ? 对话 : undefined) }
-  assert.equal(测试.挂语音附件({ addAttachments: () => true }, 's9', { size: 3 }, 'audio/webm', 'x.webm', 上下文), false)
+  const conversation = { createDrafts: () => { throw new Error('busy') } }
+  const context = { get: (name) => (name === 'conversation' ? conversation : undefined) }
+  assert.equal(service.attachSpeechAttachment({ addAttachments: () => true }, 's9', { size: 3 }, 'audio/webm', 'x.webm', context), false)
 })
 
 test('挂语音附件：没有 blob / 没有 inputActions 时直接 false', () => {
-  assert.equal(测试.挂语音附件({ addAttachments: () => true }, 's9', null, 'audio/webm', 'x.webm', {}), false)
-  assert.equal(测试.挂语音附件(null, 's9', { size: 3 }, 'audio/webm', 'x.webm', {}), false)
+  assert.equal(service.attachSpeechAttachment({ addAttachments: () => true }, 's9', null, 'audio/webm', 'x.webm', {}), false)
+  assert.equal(service.attachSpeechAttachment(null, 's9', { size: 3 }, 'audio/webm', 'x.webm', {}), false)
 })

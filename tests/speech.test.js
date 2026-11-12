@@ -2,15 +2,15 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  默认最大字数,
-  最大分段字数,
-  最多段数,
+  defaultMaxChars,
+  maxSegmentChars,
+  maxSegments,
   prepareSpeech,
   splitForSpeech,
   stripMarkdown,
 } from '../lib/speech.js'
 
-const 样例 = [
+const example = [
   '# 标题一',
   '',
   '这是**加粗**和*斜体*，还有 `行内代码`。',
@@ -40,7 +40,7 @@ const 样例 = [
 ].join('\n')
 
 test('stripMarkdown：标题/加粗/斜体/行内代码/列表/引用/表格标记都剥掉', () => {
-  const { text } = stripMarkdown(样例)
+  const { text } = stripMarkdown(example)
   assert.ok(!text.includes('#'))
   assert.ok(!text.includes('**'))
   assert.ok(!text.includes('`'))
@@ -65,8 +65,8 @@ test('stripMarkdown：链接只读文字、图片只读 alt、裸 URL 丢掉', (
 })
 
 test('stripMarkdown：默认去掉代码块并统计行数', () => {
-  const 全 = '前面\n\n```python\nprint(1)\nprint(2)\n```\n\n后面'
-  const { text, codeBlocks, codeLines } = stripMarkdown(全, { skipCodeBlocks: true })
+  const all = '前面\n\n```python\nprint(1)\nprint(2)\n```\n\n后面'
+  const { text, codeBlocks, codeLines } = stripMarkdown(all, { skipCodeBlocks: true })
   assert.equal(codeBlocks, 1)
   assert.equal(codeLines, 2)
   assert.ok(!text.includes('print(1)'))
@@ -102,21 +102,21 @@ test('splitForSpeech：短文本一段，空文本零段', () => {
 })
 
 test('splitForSpeech：单段超长按句末标点切分，且不超过 maxChars', () => {
-  const 句 = '这是一个用来测试分段的句子，需要足够长一点才能看出效果。'
-  const 文本 = 句.repeat(10) // 约 270 字
-  const { chunks, truncated } = splitForSpeech(文本, 200)
+  const sentence = '这是一个用来测试分段的句子，需要足够长一点才能看出效果。'
+  const text = sentence.repeat(10) // 约 270 字
+  const { chunks, truncated } = splitForSpeech(text, 200)
   assert.equal(truncated, false)
   assert.ok(chunks.length >= 2)
-  for (const 块 of chunks) assert.ok(块.length <= 200, `片段超长：${块.length}`)
-  assert.equal(chunks.join(''), 文本)
+  for (const chunk of chunks) assert.ok(chunk.length <= 200, `片段超长：${chunk.length}`)
+  assert.equal(chunks.join(''), text)
 })
 
 test('splitForSpeech：没有标点的超长句按字数硬切', () => {
-  const 文本 = '啊'.repeat(500)
-  const { chunks } = splitForSpeech(文本, 200)
+  const text = '啊'.repeat(500)
+  const { chunks } = splitForSpeech(text, 200)
   assert.equal(chunks.length, 3)
-  for (const 块 of chunks) assert.ok(块.length <= 200)
-  assert.equal(chunks.join(''), 文本)
+  for (const chunk of chunks) assert.ok(chunk.length <= 200)
+  assert.equal(chunks.join(''), text)
 })
 
 test('splitForSpeech：过短的相邻段会合并，减少 TTS 次数', () => {
@@ -127,30 +127,30 @@ test('splitForSpeech：过短的相邻段会合并，减少 TTS 次数', () => {
 })
 
 test('splitForSpeech：maxChars 会被钳到 200~5000', () => {
-  const 文本 = '字'.repeat(3000)
-  const 小 = splitForSpeech(文本, 1)
-  for (const 块 of 小.chunks) assert.ok(块.length <= 200)
-  const 大 = splitForSpeech(文本, 999999)
-  assert.equal(大.chunks.length, 1)
-  assert.ok(大.chunks[0].length <= 最大分段字数)
+  const text = '字'.repeat(3000)
+  const small = splitForSpeech(text, 1)
+  for (const chunk of small.chunks) assert.ok(chunk.length <= 200)
+  const big = splitForSpeech(text, 999999)
+  assert.equal(big.chunks.length, 1)
+  assert.ok(big.chunks[0].length <= maxSegmentChars)
 })
 
 test('splitForSpeech：总字数超过 2 万会截断并标记 truncated', () => {
-  const 文本 = '啊'.repeat(25000)
-  const { chunks, truncated } = splitForSpeech(文本, 默认最大字数)
+  const text = '啊'.repeat(25000)
+  const { chunks, truncated } = splitForSpeech(text, defaultMaxChars)
   assert.equal(truncated, true)
   assert.equal(chunks.length, 10)
-  for (const 块 of chunks) assert.ok(块.length <= 默认最大字数)
+  for (const chunk of chunks) assert.ok(chunk.length <= defaultMaxChars)
   assert.equal(chunks.join('').length, 20000)
 
   // 小分段时：2 万字切成 100 段，最终只保留前 40 段。
-  const 小 = splitForSpeech(文本, 200)
-  assert.equal(小.truncated, true)
-  assert.equal(小.chunks.length, 最多段数)
+  const small = splitForSpeech(text, 200)
+  assert.equal(small.truncated, true)
+  assert.equal(small.chunks.length, maxSegments)
 })
 
 test('prepareSpeech：清洗 + 分段 + 统计代码块', () => {
-  const r = prepareSpeech(样例, { maxChars: 200 })
+  const r = prepareSpeech(example, { maxChars: 200 })
   assert.ok(r.chunks.length >= 1)
   assert.ok(r.chars > 0)
   assert.equal(r.codeBlocks, 1)
@@ -158,7 +158,7 @@ test('prepareSpeech：清洗 + 分段 + 统计代码块', () => {
   assert.equal(r.truncated, false)
   assert.ok(!r.text.includes('const a = 1'))
   assert.ok(r.text.includes('主人，测试一下。'))
-  for (const 块 of r.chunks) assert.ok(块.length <= 200)
+  for (const chunk of r.chunks) assert.ok(chunk.length <= 200)
 })
 
 test('prepareSpeech：只有代码块时没有可朗读内容', () => {
@@ -187,18 +187,18 @@ test('分段：末尾的碎片并到上一段', () => {
 })
 
 test('分段：句末标点即分段边界', () => {
-  const 文 = '这是第一句话，写得足够长可以单独成段。这是第二句话，同样足够长能单独成段。'
-  const { chunks } = splitForSpeech(文, 2000)
+  const text = '这是第一句话，写得足够长可以单独成段。这是第二句话，同样足够长能单独成段。'
+  const { chunks } = splitForSpeech(text, 2000)
   assert.equal(chunks.length, 2)
   assert.equal(chunks[0], '这是第一句话，写得足够长可以单独成段。')
   assert.equal(chunks[1], '这是第二句话，同样足够长能单独成段。')
 })
 
 test('分段：单句超过 maxChars 才按字数硬切', () => {
-  const 文 = '没有标点的一长串文字'.repeat(40) // 480 字，无标点
-  const { chunks } = splitForSpeech(文, 200)
+  const text = '没有标点的一长串文字'.repeat(40) // 480 字，无标点
+  const { chunks } = splitForSpeech(text, 200)
   assert.ok(chunks.length >= 2)
-  for (const 块 of chunks) assert.ok(块.length <= 200)
-  assert.equal(chunks.join(''), 文)
+  for (const chunk of chunks) assert.ok(chunk.length <= 200)
+  assert.equal(chunks.join(''), text)
 })
 

@@ -80,8 +80,8 @@ export const CAPABILITIES_BODY = Object.freeze({
 /** 默认 mock：能力/健康/显存/音色齐全，其余 404。 */
 export function basicHandler(overrides = {}) {
   return async (req, res, record, url) => {
-    const 自定义 = overrides[url.pathname]
-    if (typeof 自定义 === 'function') return 自定义(req, res, record, url)
+    const custom = overrides[url.pathname]
+    if (typeof custom === 'function') return custom(req, res, record, url)
     if (url.pathname === '/capabilities') return sendJson(res, 200, CAPABILITIES_BODY)
     if (url.pathname === '/health') return sendJson(res, 200, { ok: true, model_ready: true })
     if (url.pathname === '/vram') return sendJson(res, 200, { ok: true, free_mb: 6973, total_mb: 8192, margin_mb: 512 })
@@ -178,10 +178,10 @@ export function makeRes() {
 /** 造一个 req 替身（GET 或带 JSON/multipart body 的 POST）。 */
 export async function makeReq({ method = 'GET', url = '/', headers = {}, body = undefined } = {}) {
   const { Readable } = await import('node:stream')
-  const 数据 = Buffer.isBuffer(body)
+  const data = Buffer.isBuffer(body)
     ? body
     : Buffer.from(body === undefined ? '' : (typeof body === 'string' ? body : JSON.stringify(body)))
-  const req = Readable.from(body === undefined ? [] : [数据])
+  const req = Readable.from(body === undefined ? [] : [data])
   req.method = method
   req.url = url
   req.headers = headers
