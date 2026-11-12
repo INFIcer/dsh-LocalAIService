@@ -322,3 +322,46 @@ test('client.js：slots 还没就绪时会重试，而不是直接抛错', async
   assert.doesNotThrow(() => exported.apply(ctx))
   assert.ok(taken > 0, '应该尝试过 ctx.get("slots")')
 })
+
+test('朗读按钮：渲染期真的执行 useChat 选择器也不抛错（TDZ 回归）', async () => {
+  const sourceCode = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+  let factory = null
+  const sandbox = {
+    window: { __ModuleLoader__: { load: (define) => { factory = define.factory } } },
+    document: undefined,
+    console,
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
+    URL,
+    fetch: async () => ({ json: async () => null }),
+  }
+  vm.createContext(sandbox)
+  vm.runInContext(sourceCode, sandbox)
+  const exported = factory(() => installReact())
+
+  // 快照形状照 readButton 里 messageText / messagePosition 的取数路径（轮次 → 节点 → 定稿消息）。
+  const snapshot = {
+    timeline: { turnOrder: [1] },
+    locations: { getTurn: (turn) => (turn === 1 ? ['k1'] : []) },
+    nodes: {
+      get: (key) => (key === 'k1'
+        ? { kind: 'turn-tail', data: { closing: { finalNode: { messageId: 'm1' }, blocks: [{ kind: 'text', text: '你好' }] } } }
+        : undefined),
+    },
+  }
+  // 选择器必须真的被调用才能复现：局部变量遮住同名外层函数后自引用，初始化前调用会抛
+  // ReferenceError（TDZ），宿主槽位错误边界会把这条注册退役，表现为朗读按钮整块消失。
+  const element = exported.__testing.readButton({
+    messageId: 'm1',
+    sessionId: 'session-1',
+    useChat: (selector) => selector(snapshot),
+  })
+  const children = (element && element.param) || []
+  assert.equal(
+    children.some((child) => child && Array.isArray(child.param) && child.param[0] === 'button'),
+    true,
+    '应该渲染出朗读按钮',
+  )
+})

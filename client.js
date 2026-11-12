@@ -739,13 +739,13 @@ select.fish-select option:checked {
 
       const text = useChat((snapshot) => messageText(snapshot, messageId))
       const position = useChat((snapshot) => messagePosition(snapshot, messageId))
-      const lastRound = useChat((snapshot) => lastRound(snapshot))
+      const lastTurn = useChat((snapshot) => lastRound(snapshot))
       const sessionKey = String(props?.sessionId || '')
 
       React.useEffect(() => {
         // 本轮所有消息按钮挂载时记录一次；之后新到的回复轮次会更大。
-        if (!sessionInitialLastRound.has(sessionKey)) sessionInitialLastRound.set(sessionKey, lastRound)
-      }, [lastRound, sessionKey])
+        if (!sessionInitialLastRound.has(sessionKey)) sessionInitialLastRound.set(sessionKey, lastTurn)
+      }, [lastTurn, sessionKey])
 
       React.useEffect(() => {
         keepAlive(true)
@@ -4593,6 +4593,7 @@ select.fish-select option:checked {
       virtualDevicePrompt,
       registerSelectedInteraction,
       selectedInteractionID,
+      readButton,
       visionExt,
       isImageFile,
       localVisionOn,
