@@ -1165,6 +1165,70 @@ test('POST /read 走真实 fish.service：分段合成写缓存，/audio 能回�
   assert.match(reply.body, /^RIFF-\d+$/)
 })
 
+test('POST /read/plan → /read/segment：朗读化只在 tts 入口生效一次（幂等）', async (t) => {
+  const { makeStack, basicHandler, sendBuffer } = await import('./helpers.js')
+  const calls = []
+  const stack = await makeStack({
+    handler: basicHandler({
+      '/tts': (req, res, rec) => {
+        const body = JSON.parse(rec.body.toString('utf8') || '{}')
+        calls.push(body)
+        sendBuffer(res, 200, Buffer.from(`RIFF-${calls.length}`), {
+          'content-type': 'audio/wav',
+          'x-seed': '5',
+          'x-language': 'zh',
+        })
+      },
+    }),
+  })
+  t.after(() => stack.close())
+
+  const routes = new Map()
+  const ctx = { webServer: { register: (define) => { routes.set(define.path, define.handler); return () => routes.delete(define.path) } } }
+  const dispose = registerRoutes({
+    ctx,
+    api: stack.api,
+    configStore: stack.store,
+    capabilities: stack.capabilities,
+    cache: stack.cache,
+    logger: stack.logger,
+    version: '0.1.0',
+  })
+  t.after(() => dispose())
+
+  const text = '版本 2.5.0 已发布，延迟 69ms。\u0060lastBoot.confirmed=true\u0060 不用念。'
+  const planReq = await makeReq({
+    method: 'POST',
+    url: '/dsh-fish-service/read/plan',
+    headers: { host: 'x' },
+    body: { text, maxChars: 200 },
+  })
+  const planRes = makeRes()
+  await routes.get('/dsh-fish-service/read/plan')(planReq, planRes)
+  const plan = JSON.parse(planRes.body)
+  assert.equal(plan.ok, true)
+  assert.ok(plan.segments.length >= 1)
+  assert.ok(!plan.segments.some((segment) => segment.text.includes('lastBoot')), planRes.body)
+
+  for (const [index, segment] of plan.segments.entries()) {
+    const segReq = await makeReq({
+      method: 'POST',
+      url: '/dsh-fish-service/read/segment',
+      headers: { host: 'x' },
+      body: { text: segment.text, index, total: plan.segments.length },
+    })
+    const segRes = makeRes()
+    await routes.get('/dsh-fish-service/read/segment')(segReq, segRes)
+    assert.equal(JSON.parse(segRes.body).ok, true, segRes.body)
+  }
+
+  // 合成收到的文本与分段计划完全一致：计划已朗读化，tts() 再跑一遍不改变结果。
+  assert.deepEqual(
+    calls.map((body) => body.text).sort(),
+    plan.segments.map((segment) => segment.text).sort(),
+  )
+})
+
 test('POST /read：超过 20 段时按 20 条一批调 TTS（契约上限）', async () => {
   const batchSize = []
   const env = setupEnv({

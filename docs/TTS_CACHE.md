@@ -26,12 +26,14 @@ sha16(JSON.stringify([text, voice, speed, emotion, seed]))
 
 | 场景 | key 的组成（数组 JSON 后 sha16） | 说明 |
 | --- | --- | --- |
-| 不传 seed（默认 / 自动朗读） | `[text, voice, speed, emotion, "auto"]` | 服务端每次随机 seed，但同一组参数复用**最近一次**合成的音频 |
-| 传 seed（`fish_tts` 显式固定） | `[text, voice, speed, emotion, seed]` | 固定 seed 的可复现语义不变 |
+| 不传 seed（默认 / 自动朗读） | `[朗读化后的 text, voice, speed, emotion, "auto"]` | 服务端每次随机 seed，但同一组参数复用**最近一次**合成的音频 |
+| 传 seed（`fish_tts` 显式固定） | `[朗读化后的 text, voice, speed, emotion, seed]` | 固定 seed 的可复现语义不变 |
 | 传不同的 voice / speed / emotion | 对应字段变化 → 不同 key | 换音色 / 换语速 / 换情绪会**重新合成** |
 
 要点：
 
+- key 里的 `text` 是**朗读化之后**的文本（Markdown 清洗 + 中文读法，见 `docs/P2.md` 6.3）：
+  同一段内容的原文、带 Markdown 的原文、已朗读化的写法都落到同一个 key；
 - key 里**没有 `ms`、时间戳、请求 id**，所以同一句话第二次朗读会稳定命中；
 - 命中时 `tts()` 直接返回：
   `{wavPath, ms: 0, voice, bytes, cached: true}`，**不发任何 HTTP 请求**；

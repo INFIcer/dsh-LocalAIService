@@ -202,3 +202,41 @@ test('分段：单句超过 maxChars 才按字数硬切', () => {
   assert.equal(chunks.join(''), text)
 })
 
+test('朗读化：版本号、小数、百分比、带单位数值都读成中文', () => {
+  const spoken = (input) => prepareSpeech(input).text
+  assert.equal(spoken('版本 2.5.0 已发布。'), '版本 二点五点零 已发布。')
+  assert.equal(spoken('dsh-context 0.84.0 修好了。'), 'dsh context 零点八四点零 修好了。')
+  assert.equal(spoken('CPU 占用 87.5%，延迟 69ms。'), 'CPU 占用 百分之八十七点五，延迟 六十九毫秒。')
+  assert.equal(spoken('延迟 69ms，占用 87.5%。'), '延迟 六十九毫秒，占用 百分之八十七点五。')
+})
+
+test('朗读化：行内代码里的标识符整段丢弃，表格/标题/列表标记不念', () => {
+  const spoken = (input) => prepareSpeech(input).text
+  const inline = spoken('\u0060lastBoot.confirmed=true\u0060 不用念，\u00604d35203\u0060 也不用。')
+  assert.ok(!inline.includes('lastBoot'), inline)
+  assert.ok(!inline.includes('4d35203'), inline)
+  assert.equal(inline, '不用念， 也不用。')
+  assert.equal(
+    spoken('| 名称 | 版本 |\n| --- | --- |\n| 内核 | 2.5.0 |'),
+    '名称，版本。内核，二点五点零',
+  )
+  assert.equal(spoken('## 标题\n- 第一项\n- 第二项\n---\n正文。'), '标题。第一项。第二项。正文。')
+})
+
+test('朗读化：对已朗读化的文本再跑一遍结果不变（幂等）', () => {
+  const inputs = [
+    '版本 2.5.0 已发布。',
+    'dsh-context 0.84.0 修好了。',
+    'CPU 占用 87.5%，延迟 69ms。',
+    '\u0060lastBoot.confirmed=true\u0060 不用念。',
+    '| 名称 | 版本 |\n| --- | --- |\n| 内核 | 2.5.0 |',
+    '2026-11-12 9:07 温度 26\u00b0C，电话 13812345678。',
+    '开 4 个并发，ratio 是 0.5。',
+  ]
+  for (const input of inputs) {
+    const once = prepareSpeech(input).text
+    const twice = prepareSpeech(once).text
+    assert.equal(twice, once, `不幂等：${input}`)
+  }
+})
+

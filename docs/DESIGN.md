@@ -242,7 +242,8 @@
 ### 5.2 一次 TTS 调用的时序
 
 ```text
-Agent/UI → fish_tts / POST /dsh-fish-service/tts
+Agent/UI → fish_tts / POST /dsh-fish-service/tts / 别的插件的 service.tts
+  → 朗读化（lib/tts-text.js，幂等；缓存 key 用它改写后的文本）
   → fish.service.ensureReady('tts')
       → 读 capabilities 缓存（60s）；ready=false → model_missing
       → 读 /vram；free_mb - margin < estimate → vram_exhausted（可选先提示）
@@ -498,8 +499,8 @@ export function apply(ctx, pluginConfig) {
 
 ### 8.7 产物与缓存
 
-- TTS：`<cache>/tts/<sha16(text+voice+speed+emotion+seed|"auto")>-<ts>.wav`；
-  不传 seed 用 `"auto"` 占位，同一组参数（文本+音色+语速+情绪）复用最近一份音频；
+- TTS：`<cache>/tts/<sha16(朗读化后的 text+voice+speed+emotion+seed|"auto")>-<ts>.wav`；
+  不传 seed 用 `"auto"` 占位，同一组参数（朗读化后的文本+音色+语速+情绪）复用最近一份音频；
   显式 seed 仍按 seed 隔离。命中统计在服务层内存里维护（P2.1，见 `docs/TTS_CACHE.md`）。
 - 朗读分段合成：批与批之间按 `readConcurrency`（默认 2，1~4）有限并发，失败批降级串行重试；
   流式朗读 `/read/plan` + `/read/segment` 让首段合成完就播。

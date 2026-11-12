@@ -218,7 +218,11 @@ interface TtsResult {
 ```
 
 - 单条也传数组；工具层 `texts` 必填，服务方法允许 `string`（内部归一成数组）；
-- 每条文本 ≤ 5000 字；超过返回 `bad_request`（不要偷偷切）；
+- **合成前统一朗读化**：Markdown 清洗（代码块与行内代码里的技术标识符整段丢弃）后做中文读法
+  （数字、日期、时间、地址、符号、多点版本号「2.5.0 → 二点五点零」），缓存的也是改写后的文本。
+  这一步对所有调用方生效，不要在调用方自己再改写；
+- 每条文本 **朗读化后** ≤ 5000 字；超过返回 `bad_request`（不要偷偷切）；改写后为空也返回
+  `bad_request`（例如整条都是代码块）；
 - 产物写 `~/.dsh/fish-service-cache/tts/`，返回稳定路径；
 - `returnBuffer:true` 时 `items[].buffer` 是 `Uint8Array`（宿主内存内使用）；**工具层禁止设置该选项**，否则违反“不回传 base64”的约定；
 - 响应头 `X-Audio-Path` 只用于诊断，不直接返回（可能被服务端清理）；
@@ -588,7 +592,7 @@ interface VisionPrefs {
 ```json
 {
   "name": "fish_tts",
-  "description": "用本地 IndexTTS-2.5 合成语音（可一次多条）。返回本机 wav 路径与耗时；不返回 base64。首条可能因加载模型较慢，超时默认 180 秒。",
+  "description": "把文字转换为语音，可一次合成多条。返回音频文件路径与耗时。文本会先朗读化（Markdown 标记与代码丢弃、数字/地址转中文读法），所以听到的是改写后的内容。首条可能因加载模型较慢，超时默认 180 秒。",
   "parameters": {
     "type": "object",
     "additionalProperties": false,
@@ -598,7 +602,7 @@ interface VisionPrefs {
         "items": { "type": "string", "minLength": 1, "maxLength": 5000 },
         "minItems": 1,
         "maxItems": 20,
-        "description": "要合成的文本；单条也传数组。每条 ≤5000 字。"
+        "description": "要合成的文本（1~20 条）；单条也传数组。每条朗读化后不超过 5000 字（长度在运行期按改写后文本校验）。"
       },
       "voice": { "type": "string", "description": "音色名，如 dafeiyu/default；默认取配置。" },
       "speed": { "type": "number", "minimum": 0.5, "maximum": 2.0, "default": 1.0 },
@@ -894,7 +898,7 @@ interface VisionPrefs {
 | GET | `/translate/jobs/result` | `?id=` | `{ok, id, state, texts, source, target, engine, ms?}`；未完成 200 + `{ok:false, code:"not_ready"}` |
 | POST | `/translate/jobs/cancel` | `{id}` | 取消结果；失败也 200 |
 | POST | `/read` | `{text, voice?, speed?, maxChars?, skipCodeBlocks?}` | `{ok, wavPath, ms, items[{wavPath,url,ms,voice,bytes,chars,cached}], chunks, chars, codeBlocks, truncated, concurrency, cachedChunks, cacheHits, degraded?}`（P2，一次全合成） |
-| POST | `/read/plan` | `{text, maxChars?, voice?, speed?, skipCodeBlocks?}` | `{ok, segments:[{index,text,chars}], chars, codeBlocks, codeLines, truncated, voice, speed, maxChars}`（P2.1，不合成） |
+| POST | `/read/plan` | `{text, maxChars?, voice?, speed?, skipCodeBlocks?}` | `{ok, segments:[{index,text,chars}], chars, codeBlocks, codeLines, truncated, voice, speed, maxChars}`（P2.1，不合成；`segments[].text` 已清洗并朗读化） |
 | POST | `/read/segment` | `{index, total?, text, voice?, speed?}` | `{ok, index, wavPath, url, ms, cached, bytes, voice?, speed?, total?}`（P2.1，单段合成、自动命中缓存） |
 | GET | `/cache/stats` | — | `{ok, kind:"tts", files, bytes, hits, misses, hitRate}`（P2.1，服务层内存计数） |
 | POST | `/cache/clear` | `{kind?}` | `{ok, kind, files, bytes, kinds}`；省略 kind 清产物但保留 `voice`（P2.1） |
