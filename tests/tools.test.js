@@ -151,7 +151,7 @@ test('其它工具的结果渲染仍是原样 JSON（不改变既有契约）', 
   assert.deepEqual(JSON.parse(块[0].text), r)
 })
 
-test('fish_asr：11 个文件 → bad_request；合法参数默认 speaker=true/timestamps=false', async () => {
+test('fish_asr：11 个文件 → bad_request；合法参数默认 timestamps=false、不带 speaker', async () => {
   const { api, calls } = 造假服务()
   const asr = 工具表(api).get('fish_asr')
   const tooMany = await asr.execute({ files: Array.from({ length: 11 }, (_, i) => `C:\\a${i}.wav`) }, {})
@@ -160,7 +160,7 @@ test('fish_asr：11 个文件 → bad_request；合法参数默认 speaker=true/
   const r = await asr.execute({ files: ['C:\\a.wav'] }, {})
   assert.equal(r.ok, true)
   const opts = calls[0][1][1]
-  assert.equal(opts.speaker, true)
+  assert.equal('speaker' in opts, false)
   assert.equal(opts.timestamps, false)
   assert.equal(opts.language, 'auto')
   assert.equal(opts.engine, 'auto')

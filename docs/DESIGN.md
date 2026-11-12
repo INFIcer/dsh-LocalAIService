@@ -54,7 +54,6 @@
 | `engine\.venv\` | 虚拟环境，含 torch（实测 6.5 GB） | 否 |
 | `models\` | 模型权重（实测 17.7 GB） | 否，按需下载 |
 | `voices\` | 音色参考音频（7 个，6.5 MB） | 否，用户数据 |
-| `speakers\` | 声纹向量（0.2 MB，不含原始音频） | 否，用户数据 |
 | `outputs\` / `data\` / `logs\` | 输出、任务 SQLite、日志 | 否 |
 | `docs\SERVICE_API.md` | 完整 HTTP API（2219 行） | 是 |
 | `docs\WEBUI.md` | WebUI 与 `/admin/*` 说明 | 是 |
@@ -69,7 +68,7 @@
 | `asr` | SenseVoiceSmall | true | 1200 MB | `POST /asr`、`POST /asr/segments` |
 | `whisper` | faster-whisper-small | true | 600 MB | `POST /asr`（`engine=whisper`）、`POST /asr/segments` |
 | `translate` | nllb-200-distilled-600M | true | 1500 MB | `POST /translate`、`/translate/batch`、`/jobs/translate` |
-| `speaker` | campplus | true | 300 MB | `/speakers/*` |
+| `speaker` | campplus | true | 300 MB | `POST /speakers/embed` |
 | `separate` | htdemucs | true | 1000 MB | `POST /separate` |
 | `media` | ffmpeg / ffprobe | true | 0 | `/media/probe`、`/media/to_wav`、`/media/frames`、`/media/scenes`、`/media/subtitles*` |
 | `download` | yt-dlp 2026.10.26 | true | 0 | `/media/download`、`/media/download/sync`、`/media/analyze` |
@@ -128,7 +127,7 @@
 
 - QQ 私聊双向桥：NapCat / OneBot 11，WS 优先、HTTP 轮询兜底；离线补投、持久化出站队列、`[语音]…[/语音]` 出站。
 - 现在**直接 HTTP** 调本地服务：
-  - 入站：`record` 段 → `get_record` 拿 wav → 落 `fish-message-inbox\` → `POST /asr?speaker=1` → 文字 + 声纹名；
+  - 入站：`record` 段 → `get_record` 拿 wav → 落 `fish-message-inbox\` → `POST /asr` → 文字；
   - 出站：`[语音]文字[/语音]` → `POST /tts` → 落 `fish-message-outbox\` → 交给 transport；
   - 另有 `/media/to_wav` 做 16k 单声道归一。
 - 配置 `~/.dsh/fish-message-config.json` 实测：
@@ -173,7 +172,7 @@
 
 1. **地址散落**：`fish-message` 的 `asrBaseUrl` / `ttsBaseUrl`、TTS 插件的 `index.baseUrl`、脚本里的 `127.0.0.1:7880` 各存一份；换端口/换机器要改多处。
 2. **失败只有状态码**：507/503/504 在 UI 上就是「失败」，用户不知道该开服务、下模型还是关占卡程序；Agent 也只能看到 `HTTP 507`。
-3. **多步链路每次重写**：取语音→转写→声纹→投递、翻译→合成→发语音，这些链路目前要么写死在某个插件里，要么让 Agent 连续调多个工具，往返多、容易漏步骤。
+3. **多步链路每次重写**：取语音→转写→投递、翻译→合成→发语音，这些链路目前要么写死在某个插件里，要么让 Agent 连续调多个工具，往返多、容易漏步骤。
 4. **安装/模型管理靠人**：装 venv、装 torch、下 8GB 模型、配自启，全是手工步骤；换机器成本高。
 
 ---
@@ -208,7 +207,7 @@
 4. **产物落盘、接口回路径**：TTS/分离/关键帧写到 DSH 缓存目录，工具返回 `wavPath`/`stems`/`frames[].path`；**绝不把 base64 塞进工具结果**。
 5. **降级而不是阻塞**：服务不可用时，`fish-service` 的工具返回结构化错误；`fish-message` 的转写失败降级为 `[语音（转写失败：…）]`；UI 显示引导而不是白屏。
 6. **接管优先于覆盖**：已有 `localai` 服务只接管，不重装；只有 `installMode=managed` 且目录带安装标记时才允许升级/卸载。
-7. **只回滚自己创建的东西**：安装器维护 `createdPaths` 清单；模型、音色、声纹、用户 `config.json` 默认不动。
+7. **只回滚自己创建的东西**：安装器维护 `createdPaths` 清单；模型、音色、用户 `config.json` 默认不动。
 8. **契约先冻结**：P0 先把 `CONTRACT.md` 定死；P1 只实现契约内的东西，不边写边改字段。
 
 ---
@@ -271,13 +270,12 @@ UI 额外走 GET /dsh-fish-service/audio/<id> 流式播放；Agent 只拿路径�
 Agent → voice_note_analyze({messageId})
   → fish-ops 解析 requires：fish.service>=1.0 ✅、fish.message>=0.2 ✅
   → fish.message.getVoice(messageId) → 本地 wav 路径 + 元数据
-  → fish.service.asr(wav, {speaker:true, language:'auto'})
-      → POST /asr?speaker=1（multipart，timeout 300s）
-  → 返回 {ok:true, text, speaker:{name,score,known}, language, durationMs}
+  → fish.service.asr(wav, {language:'auto'})
+      → POST /asr（multipart，timeout 300s）
+  → 返回 {ok:true, text, language, durationMs}
 失败：
   - 消息不是语音 → no_voice_attachment（不调服务）
   - 服务没起 → service_down（带「启动服务」hint）
-  - 声纹失败但转写成功 → ok:true，speaker=null，speakerError 字段
 ```
 
 ---
@@ -385,7 +383,7 @@ export function apply(ctx, pluginConfig) {
 | `health()` | `{ok, baseUrl, latencyMs, serviceVersion, apiVersion, vram, capabilities, checkedAt}` |
 | `ensureReady(cap, opts)` | 能力门禁；`preload:false` 默认只检查，不强行加载模型 |
 | `tts(text\|texts, opts)` | 返回 `{items:[{wavPath,ms,voice,seed,language,bytes}], ms}` |
-| `asr(file\|files, opts)` | 返回 `{items:[{text,segments?,speaker?,language,engine,ms}]}` |
+| `asr(file\|files, opts)` | 返回 `{items:[{text,segments?,language,engine,ms}]}` |
 | `translate(text\|texts, opts)` | 返回 `{texts, source, target, ms, engine}` |
 | `separate(file, opts)` | 返回 `{stems, dir, ms, released}` |
 | `visionFrames(input, opts)` | 返回 `{frames, duration, subtitlesFrom, stats, ms}` |
@@ -419,7 +417,7 @@ export function apply(ctx, pluginConfig) {
 | 工具 | 用途 | 主要参数 | 返回 |
 | --- | --- | --- | --- |
 | `fish_tts` | 文本→语音（批量） | `texts[1..20]`, `voice`, `speed`, `language`, `seed` | `items[{wavPath,ms,voice,seed,language,bytes}]` |
-| `fish_asr` | 音频/视频→文字（批量） | `files[1..10]`, `language`, `engine`, `speaker`, `timestamps` | `items[{text,segments?,speaker?,language,engine,ms}]` |
+| `fish_asr` | 音频/视频→文字（批量） | `files[1..10]`, `language`, `engine`, `timestamps` | `items[{text,segments?,language,engine,ms}]` |
 | `fish_translate` | 批量翻译（目标语言可自动选） | `texts[1..200]`, `source`, `target`（可选，`auto` 不允许） | `texts[]`, `source`, `target`, `ms` |
 | `fish_describe_image` | 单图/多图理解（描述/评分/OCR） | `paths[1..10]`, `mode(caption/score/ocr)`, `prompt` | `items[{path,text,parsed?,ms}]` |
 | `fish_separate` | 人声分离 | `file`, `model`, `stems[]` | `stems{name:path}`, `dir`, `ms` |
@@ -622,7 +620,7 @@ apply
 
 | op | 链路 | 输入 | 输出 | 失败语义 |
 | --- | --- | --- | --- | --- |
-| `voice_note_analyze` | `fish.message.getVoice` → `fish.service.asr(speaker:true)` | `messageId?` / `filePath?`、`language?`、`identifySpeaker?` | `text`、`speaker{name,score,known}`、`language`、`durationMs`、`engine` | 非语音→`no_voice_attachment`；服务错→原 code + `op/stage` |
+| `voice_note_analyze` | `fish.message.getVoice` → `fish.service.asr` | `messageId?` / `filePath?`、`language?` | `text`、`language`、`durationMs`、`engine` | 非语音→`no_voice_attachment`；服务错→原 code + `op/stage` |
 | `say_as_voice` | `fish.service.tts` → `fish.message.sendVoice` | `text`、`voice?`、`sessionId?`、`idempotencyKey?` | `sent`、`wavPath`、`messageId?`、`ms` | TTS 成功但发送失败→`send_failed`，保留 `wavPath` 可重试 |
 | `translate_and_speak` | `fish.service.translate` → `tts` → `sendVoice` | `text`、`source`、`target`、`voice?`、`sessionId?`、`idempotencyKey?` | `sourceText`、`translatedText`、`wavPath`、`sent` | 分阶段：`stage:'translate'|'tts'|'send'`，带 `partial` |
 | `long_text_read` | 分段 → 逐段 `tts` → 逐段发送 | `text?` / `filePath?`、`maxCharsPerChunk`、`voice?`、`sessionId?`、`idempotencyKey?` | `chunks[]`、`sentCount`、`wavPaths[]` | 某段失败→停止并返回已完成段；`mode:'concat'` 本版 `not_implemented` |
@@ -631,8 +629,8 @@ apply
 **`voice_note_analyze` 步骤细节**
 
 1. `fish.message.getVoice(messageId)` 返回 `{filePath, durationMs, messageId, sender?}`；没有 `messageId` 时用 `filePath`（必须绝对路径，且存在）。
-2. 若 `identifySpeaker !== false`，`fish.service.asr(file,{speaker:true, language})`；否则 `speaker:false`（省掉 campplus 加载）。
-3. `asr` 的 `speaker_error` 不视为失败：`ok:true`，`speaker:null`，`speakerError` 带原因。
+2. `fish.service.asr(file,{language})` 拿转写文字。
+3. 声纹身份属于记忆层，不在这一步：需要时由 Agent 用声纹工具另算向量、在 `memos/` 里比对。
 4. 返回不包含原始音频路径以外的隐私内容；临时文件由 `fish.message` 的 inbox 管理。
 
 **`say_as_voice` 步骤细节**
@@ -743,7 +741,7 @@ apply
 3. **模型走服务端 `/admin/models/download`**：安装器不自己实现下载；服务端已有 ModelScope 优先、进度、单任务互斥。
 4. **自启复用 `/admin/autostart`**：服务端已实现计划任务 `LocalAIService-Service`；失败再退回启动文件夹快捷方式。
 5. **接管优先**：先探配置地址，再探 7880；`/health` + `/capabilities` 版本协商；不匹配提示升级，不重装。
-6. **回滚只删自己建的**：`createdPaths` 清单 + 安装标记；模型/音色/声纹/用户 config 默认保留。
+6. **回滚只删自己建的**：`createdPaths` 清单 + 安装标记；模型/音色/用户 config 默认保留。
 7. **WebUI 内嵌**：服务端加 `?embed=1` 隐藏 `.sidebar`/`.topbar`；`postMessage` 高度自适应；插件提供「新窗口打开」兜底。
 
 ---
@@ -881,7 +879,7 @@ P2/P4/P5 ─→ P6（迁移是最后一步，避免中途双入口）
 | 1 | 插件加载 | DSH 重启后无 `failed to import`；设置页出现「本地 AI」tab |
 | 2 | 状态 | `fish_service_status` 返回真实 `serviceVersion=2.5.0`、`apiVersion=1`、`tts.ready=true` |
 | 3 | TTS | `fish_tts({texts:["测试"]})` 返回存在的 `wavPath`，可播放，`ms>0` |
-| 4 | ASR | 对 3 秒中文 wav 调 `fish_asr`，`text` 非空，`speaker` 有名字或明确 `known:false` |
+| 4 | ASR | 对 3 秒中文 wav 调 `fish_asr`，`text` 非空 |
 | 5 | 翻译 | `fish_translate({texts:["你好"],target:"en"})` 返回英文，顺序一致 |
 | 6 | 服务缺失 | 停止服务后调 `fish_tts`，2 秒内返回 `{ok:false,code:"service_down",hint:"…"}`，不抛堆栈 |
 | 7 | 507 翻译 | mock 服务返回 507，工具返回 `vram_exhausted` + 可读 hint，UI 不显示原始英文 |
@@ -907,7 +905,7 @@ P2/P4/P5 ─→ P6（迁移是最后一步，避免中途双入口）
 | 2 | 兜底 | iframe 加载失败显示「打开新窗口」+ 原因，不显示空白 |
 | 3 | 接管 | 现有 7880 服务被识别为 `adopted`，不重装、不移动目录、不重启 |
 | 4 | 安装幂等 | 连续点两次安装：第二次返回 `already_installed`，不自启两次、不重复建任务 |
-| 5 | 卸载 | 卸载后服务目录删除，模型/音色/声纹保留；再次安装能复用模型 |
+| 5 | 卸载 | 卸载后服务目录删除，模型/音色保留；再次安装能复用模型 |
 | 6 | 回滚 | 模拟安装第 3 步失败：只删除本次创建的文件，原有目录不受影响 |
 | 7 | 端口占用 | 7880 被非 localai 占用时提示换端口/关闭程序，不覆盖 |
 
@@ -918,7 +916,7 @@ P2/P4/P5 ─→ P6（迁移是最后一步，避免中途双入口）
 | 1 | 条件注册 | 禁用 `dsh-fish-message` 重启：`voice_note_analyze`/`say_as_voice`/`translate_and_speak`/`long_text_read` 不在工具列表；`vision_watch` 与 `fish_tts` 仍在 |
 | 2 | 诊断 | `fish_ops_list` 显示缺失 `fish.message@>=0.2` 与 hint，且 `vision_watch.available=true` |
 | 3 | 热插拔 | 重新启用 message：无需重载 ops，工具在 3 秒内出现 |
-| 4 | 语音分析 | 发一条 QQ 语音，`voice_note_analyze` 返回文字 + 声纹名 |
+| 4 | 语音分析 | 发一条 QQ 语音，`voice_note_analyze` 返回文字 |
 | 5 | 发语音 | `say_as_voice` 发到绑定会话；10 分钟内重复调用不重复发 |
 | 6 | 长文 | 2000 字分 3 段发送；第 2 段失败时返回已完成段 + `stage` |
 | 7 | 取消 | 取消 `vision_watch` 后 5 秒内停止，job 状态 `canceled` 或不再推进 |
@@ -929,7 +927,7 @@ P2/P4/P5 ─→ P6（迁移是最后一步，避免中途双入口）
 | --- | --- | --- |
 | 1 | 打包 | `python -m localai bundle --out dist --version 2.5.0` 产出 zip + manifest + SHA256；代码包 < 50MB |
 | 2 | 干净安装 | 空目录、无 uv、无 Python 环境：一键安装成功，`/health` **HTTP 200**（`ok` 可能为 false，因为模型还没下）且 `/capabilities.api_version=1` |
-| 3 | 模型 | 勾选 TTS/ASR/声纹/Demucs 下载完成；`/admin/models` 全部 `present=true` |
+| 3 | 模型 | 勾选 TTS/ASR/声纹向量模型/Demucs 下载完成；`/admin/models` 全部 `present=true` |
 | 4 | 断网 | 断网后安装：预检给出 `network_unavailable` + 离线包提示；不无限重试 |
 | 5 | 离线 | 用离线包 + 本地模型目录安装成功，不访问外网 |
 | 6 | 空间不足 | 预检拦截，提示需要 X GB，不开始下载 |
@@ -941,7 +939,7 @@ P2/P4/P5 ─→ P6（迁移是最后一步，避免中途双入口）
 | --- | --- | --- |
 | 1 | 禁用 TTS | profile bundles 无 `@memef1f1y/dsh-plugin-tts`；无重复朗读入口 |
 | 2 | 回滚 | 重新加入 bundles + 重启，旧 TTS 恢复，fish-service 朗读按钮可同时关掉 |
-| 3 | QQ 入站 | 语音消息转写正常，声纹名正确；服务停掉时降级为 `[语音（转写失败：…）]`，消息不丢 |
+| 3 | QQ 入站 | 语音消息转写正常；服务停掉时降级为 `[语音（转写失败：…）]`，消息不丢 |
 | 4 | QQ 出站 | `[语音]…[/语音]` 正常发；服务停掉时文字进补发队列，恢复后重发 |
 | 5 | 接管 | 现有 v2.5 不被重装；`installMode=adopted`；`ttsVoice` 导入为 `defaultVoice` |
 | 6 | 双入口 | 同时启用旧 TTS + fish-service 时，文档要求只开一个；验收时检查没有两个朗读按钮 |
@@ -960,7 +958,7 @@ P2/P4/P5 ─→ P6（迁移是最后一步，避免中途双入口）
 | 6 | ops 依赖漂移 | 工具消失/重复注册 | 中 | manifest 显式版本；`internal/service` 重解析；单测覆盖“禁用 message”场景 |
 | 7 | 双 TTS 冲突 | 一条消息读两遍 | 高 | 迁移清单强制校验 bundles；验收检查 Network 无 `/dsh-tts-api`；设置页互斥提示 |
 | 8 | 服务地址被改错 | 全部功能不可用 | 中 | 设置页「测试连接」；保存前 `GET /health`；保留最近一次可用地址 |
-| 9 | 卸载误删用户模型 | 数据丢失 | 低 | 安装标记 + createdPaths；默认保留 models/voices/speakers；二次确认 |
+| 9 | 卸载误删用户模型 | 数据丢失 | 低 | 安装标记 + createdPaths；默认保留 models/voices；二次确认 |
 | 10 | 长文本 TTS 超时 | 朗读中断 | 中 | 分段 ≤800 字；总预算；逐段发送；失败保留已完成段 |
 | 11 | 视觉长视频阻塞 | UI 卡住 | 中 | >10 分钟走 job；进度轮询；可取消 |
 | 12 | token 泄漏 | 本机接口被滥用 | 低 | 仅宿主持有；不返浏览器；日志脱敏；loopback 默认 |

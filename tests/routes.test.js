@@ -833,7 +833,7 @@ test('POST /transcribe-upload：multipart 录音 → ASR 文本；临时文件�
           调用.push({ 文件, opts, 存在: existsSync(文件) })
           return {
             ok: true,
-            items: [{ file: 文件, text: '你好世界', language: 'zh', engine: 'sensevoice', elapsedMs: 88, speaker: null }],
+            items: [{ file: 文件, text: '你好世界', language: 'zh', engine: 'sensevoice', elapsedMs: 88 }],
             ms: 120,
           }
         },
@@ -859,7 +859,7 @@ test('POST /transcribe-upload：multipart 录音 → ASR 文本；临时文件�
     assert.equal(调用.length, 1)
     assert.equal(调用[0].存在, true)
     assert.equal(调用[0].opts.language, 'zh')
-    assert.equal(调用[0].opts.speaker, false)
+    assert.equal(调用[0].opts.speaker, undefined)
     assert.equal(readdirSync(join(temp.dir, 'cache', 'tmp')).length, 0)
   } finally {
     temp.cleanup()

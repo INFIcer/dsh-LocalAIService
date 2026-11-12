@@ -1501,7 +1501,6 @@ select.fish-select option:checked {
       表单.append('file', 语音.片段.blob, `voice${语音扩展(语音.片段.mime)}`)
       表单.append('durationMs', String(语音.片段.durationMs || 0))
       表单.append('language', 配置.asrLanguage || 'auto')
-      表单.append('speaker', 'false')
       const r = await postForm('/transcribe-upload', 表单)
       if (代 !== 语音.代) return
       if (!r || !r.ok) {

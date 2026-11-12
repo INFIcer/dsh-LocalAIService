@@ -91,7 +91,7 @@ python -m localai bundle `
 **排除清单**（硬编码，防止把用户数据打进包）：
 
 ```text
-.git/  .venv/  engine/.venv/  models/  voices/  speakers/
+.git/  .venv/  engine/.venv/  models/  voices/
 outputs/  logs/  data/  out/  config.json  *.log  *.wav  *.mp3
 __pycache__/  *.pyc  .pytest_cache/  *.egg-info/
 ```
@@ -370,7 +370,7 @@ https://github.com/astral-sh/uv/releases/download/<version>/uv-x86_64-pc-windows
 | --- | --- | --- | --- | --- |
 | `tts` | `""`（固定 IndexTTS-2.5） | 8075 MB | ✅ | 朗读/发语音 |
 | `asr` | `""`（固定 SenseVoiceSmall） | 897 MB | ✅ | 语音输入/转写 |
-| `speaker` | `""`（固定 campplus） | 27 MB | ✅ | 声纹 |
+| `speaker` | `""`（固定 campplus） | 27 MB | ✅ | 声纹向量分析 |
 | `vad` | `""`（固定 fsmn-vad） | 4 MB | ✅ | 分段/长音频 |
 | `separate` | `htdemucs` | 80 MB | 推荐 | 人声分离 |
 | `translate` | `""`（固定 NLLB） | 2368 MB | 可选 | 翻译 |
@@ -499,7 +499,7 @@ data: {"ok":true,"serviceVersion":"2.5.0","health":"reachable","models":"ok"}
 
 - 维护 `createdPaths`（只记录本次创建、且不在安装前存在的路径）；
 - 回滚顺序：停进程（仅自己启动的）→ 删 createdPaths → 删安装标记 → 恢复配置备份；
-- **不删**：`models/`、`voices/`、`speakers/`、`data/`、`outputs/`、`logs/`、用户 `config.json`；
+- **不删**：`models/`、`voices/`、`data/`、`outputs/`、`logs/`、用户 `config.json`；
 - 如果服务是 `adopted`，回滚只删插件自己的状态文件，不动服务目录。
 
 ---
@@ -556,7 +556,7 @@ GET <baseUrl>/admin/system    (5s，可选，拿 paths.home/autostart)
 ```text
 当前版本 < 目标版本：
   1. 读 /admin/system.service.pid 与命令行，确认是 localai serve
-  2. 备份当前代码目录（不含 models/voices/speakers/data/outputs/logs，也**不含 engine\.venv**）到 <installDir>\.backup\<old>-<ts>
+  2. 备份当前代码目录（不含 models/voices/data/outputs/logs，也**不含 engine\.venv**）到 <installDir>\.backup\<old>-<ts>
   3. 停止进程（只停 PID 匹配的那个；不 taskkill 全部 python）
   4. 下载新包 → 校验 SHA256 → 解压覆盖代码（保留 config.json/模型/数据）
   5. 若 manifest 的引擎依赖 hash 变化 → 重装引擎依赖（可跳过，先试跑）
@@ -566,7 +566,7 @@ GET <baseUrl>/admin/system    (5s，可选，拿 paths.home/autostart)
 
 约束：
 
-- 模型/音色/声纹/输出/日志**原地保留**；
+- 模型/音色/输出/日志**原地保留**；
 - `config.json` 保留；新增配置项用默认值；
 - 升级不自动改端口/不重下模型；
 - 跨大版本（如 2.x→3.x）先读 release notes；`api_version` 变了要升级插件。
@@ -578,7 +578,7 @@ GET <baseUrl>/admin/system    (5s，可选，拿 paths.home/autostart)
 1. 停进程（仅自己启动/确认是 localai 的 PID）；
 2. 取消自启（仅 `createdAutostart=true` 时）；
 3. 删除代码、venv、`tools/uv`、缓存；
-4. **保留** `models/`、`voices/`、`speakers/`、`data/`、`outputs/`、`logs/`、`config.json`；
+4. **保留** `models/`、`voices/`、`data/`、`outputs/`、`logs/`、`config.json`；
 5. 删除安装标记；保留 `fish-service-config.json.bak-<ts>`。
 
 **可选（删除我下载的模型）**
@@ -754,7 +754,7 @@ Get-Content "<installDir>\logs\service.err.log" -Tail 80
 ### 9.1 打包
 
 - [ ] `python -m localai bundle --out dist --version 2.5.0` 成功；
-- [ ] zip 内无 `.venv/models/voices/speakers/outputs/logs/data/config.json`；
+- [ ] zip 内无 `.venv/models/voices/outputs/logs/data/config.json`；
 - [ ] manifest 有 version/apiVersion/platform/cuda/models/sha256；
 - [ ] 干净 VM 解压后 `uv venv` + 安装 core/engine + `localai doctor` 全绿；
 - [ ] 代码包 < 50MB。
@@ -777,7 +777,7 @@ Get-Content "<installDir>\logs\service.err.log" -Tail 80
 
 ### 9.4 升级/卸载
 
-- [ ] 升级保留 models/voices/speakers/data/config；
+- [ ] 升级保留 models/voices/data/config；
 - [ ] 升级失败自动恢复备份并重启旧版；
 - [ ] 卸载默认保留模型；勾选后才删自己下载的；
 - [ ] 自启只删自己创建的任务。
@@ -819,7 +819,6 @@ Get-Content "<installDir>\logs\service.err.log" -Tail 80
 ├─ tools\uv\uv.exe
 ├─ models\                          # 用户数据，卸载默认保留
 ├─ voices\
-├─ speakers\
 ├─ outputs\
 ├─ logs\
 ├─ data\

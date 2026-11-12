@@ -14,7 +14,7 @@
 | 服务自启 | 计划任务 `LocalAIService-Service`，已启用 | 保留，不改名 |
 | 服务配置 | `E:\LocalAIService\config.json`（`model_search_paths`） | 保留；插件不覆盖 |
 | 音色 | `E:\LocalAIService\voices`，7 个，`dafeiyu` 等 | 保留；`defaultVoice` 导入 `dafeiyu` |
-| 声纹 | `E:\LocalAIService\speakers`（向量，0.2MB） | 保留 |
+| 声纹 | `E:\LocalAIService\speakers`（旧身份库） | **已移除**：服务端不再存身份，只提供 `POST /speakers/embed`；身份记忆在工作区 `memos/` |
 | QQ 桥 | `E:\dsh-fish-message` v0.1.0，已上线 | 保留；新增可选 `fish.service` 调用 |
 | QQ 配置 | `~\.dsh\fish-message-config.json`：`asrBaseUrl`/`ttsBaseUrl=7880`、`ttsVoice=dafeiyu` | 保留旧字段；新增 `useFishService` |
 | 旧 TTS 插件 | `@memef1f1y/dsh-plugin-tts 0.6.7` 已安装；**当前不在 `dsh.profile.bundles`** | 确保不在 bundles；`dependencies` 保留以便回滚 |
@@ -152,9 +152,9 @@ async asrFile(path) {
   const 配置 = this.getConfig()
   if (配置.useFishService !== false && this.fishService?.capabilities?.asr?.available) {
     try {
-      const r = await this.fishService.asr(path, { speaker: true, language: 'auto' })
+      const r = await this.fishService.asr(path, { language: 'auto' })
       const item = r.items?.[0]
-      if (item?.text) return { text: item.text, speakerName: item.speaker?.name || '', speakerKnown: !!item.speaker?.known, engine: item.engine }
+      if (item?.text) return { text: item.text, engine: item.engine }
     } catch (error) {
       // 只在“服务不可用”时回退 HTTP；业务错误（507/400）原样抛给上层，避免重复请求
       if (error?.code !== 'service_not_installed') throw error
@@ -184,7 +184,7 @@ async synthesize(text, opts = {}) {
 - **只在 `service_not_installed` 回退**（即插件没配置服务）；`service_down` 不回退——因为旧 `asrBaseUrl`/`ttsBaseUrl` 通常和 `fish.service` 是同一个地址，回退只会把等待时间翻倍；
 - `507`/`400`/`timeout` 也不回退，否则会对同一个模型发两次请求，放大显存压力；让上层按现有语义降级（入站显示失败、出站进队列）；
 - `fishService.capabilities` 是缓存值，可能滞后 60 秒；调用失败按上面的 code 判断，不靠缓存猜；
-- `fish.service` 的 `asr` 默认 `speaker:true`，和现有 `/asr?speaker=1` 行为一致；
+- `fish.service` 的 `asr` 只返回转写文字；声纹名字属于记忆层，不在转写结果里；
 - 返回的 `wavPath` 在 `~/.dsh/fish-service-cache`，TTL 72h > 出站队列 TTL 24h，重发不会找不到文件；
 - 如果 `useFishService=false`，完全走旧 HTTP，行为与 0.1.0 一致。
 
@@ -248,7 +248,7 @@ ctx.provide('fish.message', {
 | `fish.service` 未安装 | 走旧 HTTP；`transcriptionEnabled`/`ttsEnabled` 仍生效 |
 | `fish.service` 装了但服务没启动 | 不回退 HTTP（同地址会双倍等待）→ 上层降级：入站 `[语音（转写失败：…）]`，出站文字进补发队列 |
 | 服务返回 507 | 不回退 HTTP；上层按失败处理，保留原文/队列 |
-| 声纹失败但转写成功 | `ok:true`，`speakerName=''`；消息里不带声纹名 |
+
 | 服务返回超时 | 不回退；上层按超时失败，避免双倍等待 |
 
 ---
@@ -347,7 +347,7 @@ ctx.provide('fish.message', {
 | --- | --- |
 | `models/` | 服务原地接管，路径不变；不复制 17.7GB |
 | `voices/` | 同上；音色名不变 |
-| `speakers/` | 同上；声纹向量不变 |
+| `speakers/` | **不再存在**：服务端只做向量分析，身份库已迁到工作区 `memos/people/speakers.json` |
 | `outputs/` / `logs/` / `data/` | 服务自己管理 |
 | `config.json` | 服务自己管理；插件只读 `paths.home` |
 
@@ -403,7 +403,7 @@ ctx.provide('fish.message', {
 | # | 场景 | 步骤 | 期望 |
 | --- | --- | --- | --- |
 | 1 | QQ 文字入站 | 发「你好」 | 进入 DSH 会话，正常回复 |
-| 2 | QQ 语音入站 | 发 3 秒语音 | 转写文字 + 声纹名；无重复消息 |
+| 2 | QQ 语音入站 | 发 3 秒语音 | 转写文字；无重复消息 |
 | 3 | 服务停掉后语音入站 | 停 7880，再发语音 | `[语音（转写失败：…）]`，消息不丢；服务恢复后新消息正常 |
 | 4 | QQ 出站文字 | `[QQ]测试[/QQ]` | 收到文字 |
 | 5 | QQ 出站语音 | `[QQ][语音]晚安[/语音][/QQ]` | 收到语音条；服务停掉时文字进补发队列，恢复后重发 |

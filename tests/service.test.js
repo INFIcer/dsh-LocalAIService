@@ -200,7 +200,7 @@ test('tts：21 条 / 空文本 / 超长 / speed / language 都返回 bad_request
   await assert.rejects(stack.api.tts([]), (e) => e.code === 'bad_request')
 })
 
-test('asr：返回文字/声纹/分段；timestamps 走 /asr/segments；文件不存在 → bad_request', async (t) => {
+test('asr：返回文字/分段；timestamps 走 /asr/segments；文件不存在 → bad_request', async (t) => {
   const seen = []
   const handler = basicHandler({
     '/asr': (req, res, rec) => {
@@ -214,7 +214,6 @@ test('asr：返回文字/声纹/分段；timestamps 走 /asr/segments；文件�
         elapsed_ms: 120,
         emotion: 'HAPPY',
         events: ['Speech', 'Laughter'],
-        speaker: { name: '小明', score: 0.92, known: true },
       })
     },
     '/asr/segments': (req, res, rec) => {
@@ -235,18 +234,17 @@ test('asr：返回文字/声纹/分段；timestamps 走 /asr/segments；文件�
   t.after(() => stack.close())
   const wav = writeTempFile(stack.temp.dir, 'a.wav', 'RIFF')
 
-  const r = await stack.api.asr([wav], { speaker: true })
+  const r = await stack.api.asr([wav])
   assert.equal(r.ok, true)
   assert.equal(r.items[0].file, wav)
   assert.equal(r.items[0].text, '你好世界')
   assert.equal(r.items[0].durationMs, 1500)
   assert.equal(r.items[0].elapsedMs, 120)
-  assert.deepEqual(r.items[0].speaker, { name: '小明', score: 0.92, known: true })
   assert.equal(r.items[0].emotion, 'HAPPY')
   assert.deepEqual(r.items[0].events, ['Speech', 'Laughter'])
   assert.ok(seen[0].contentType.startsWith('multipart/form-data'))
 
-  const seg = await stack.api.asr([wav], { timestamps: true, speaker: false })
+  const seg = await stack.api.asr([wav], { timestamps: true })
   assert.equal(seg.items[0].segments.length, 2)
   assert.equal(seen[1].path, '/asr/segments')
   assert.equal(JSON.stringify(seg).includes('base64'), false)

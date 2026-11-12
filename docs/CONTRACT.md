@@ -138,7 +138,7 @@ interface FishServiceApi {
 
 - `available = 服务可达 && api_version 兼容 && 服务端 capabilities.<cap> 存在 && ready`；
 - `reason` 只在 `available=false` 时出现；
-- `whisper` 不是独立工具能力，归到 `asr` 的 `engine=whisper`；`speaker` 归到 `asr` 的 `speaker:true`；
+- `whisper` 不是独立工具能力，归到 `asr` 的 `engine=whisper`；服务端 `speaker` 能力只是声纹向量模型，不单独暴露；
 - `jobs` 永远 `available=true`（只要服务可达且 `jobs.enabled`），因为它是一个 API 组，不是模型。
 
 ### 1.3 `health()`
@@ -230,7 +230,6 @@ interface TtsResult {
 interface AsrOptions {
   language?: 'auto' | 'zh' | 'en' | 'ja' | 'ko' | 'yue' | 'nospeech'
   engine?: 'auto' | 'sensevoice' | 'whisper'
-  speaker?: boolean            // 默认 true；false 时连 campplus 都不加载
   timestamps?: boolean         // true 时走 /asr/segments（固定 whisper）
   timeoutMs?: number           // 默认 config.asrTimeoutMs
 }
@@ -246,8 +245,6 @@ interface AsrResult {
     events?: string[]            // 上游事件标签，如 ["Speech"]、["Laughter"]；没有就不出现
     durationMs?: number
     elapsedMs?: number
-    speaker?: { name: string; score: number; known: boolean } | null
-    speakerError?: string
     segments?: Array<{ start: number; end: number; text: string }>
     truncated?: boolean
   }>
@@ -258,7 +255,6 @@ interface AsrResult {
 - 文件必须是本机绝对路径；不存在 → `bad_request`；
 - 上传上限 200MB（音频 50MB）；超限 → `bad_request`，hint 提示裁剪；
 - `timestamps:true` 时用 `/asr/segments`，`segments` 最多返回 200 段；
-- `speaker` 失败不影响转写：`speaker:null` + `speakerError`，整体 `ok:true`；
 - `emotion` / `events` 来自上游 `/asr` 的富标签解析（`parse_rich_tags`），原样透传；上游没给就不出现这两个字段；
 - 临时上传文件请求结束即删。
 
@@ -562,7 +558,7 @@ interface VisionPrefs {
 | 工具 | 参数（必填加 *） | 返回 | 主要错误 |
 | --- | --- | --- | --- |
 | `fish_tts` | `texts*` (1~20)、`voice`、`speed` 0.5~2、`language`、`seed` | `items[{wavPath,ms,voice,seed,bytes}]` | `service_down`、`model_missing`、`vram_exhausted`、`timeout`、`bad_request` |
-| `fish_asr` | `files*` (1~10)、`language`、`engine`、`speaker`、`timestamps` | `items[{file,text,segments?,speaker?,engine,ms}]` | 同上 + `bad_request`（文件不存在/超限） |
+| `fish_asr` | `files*` (1~10)、`language`、`engine`、`timestamps` | `items[{file,text,segments?,engine,ms}]` | 同上 + `bad_request`（文件不存在/超限） |
 | `fish_translate` | `texts*` (1~200)、`source`、`target`（省略时自动） | `{texts,source,target,ms}` | `bad_request`（语言/长度）、`service_down`、`vram_exhausted` |
 | `fish_separate` | `file*`、`model`、`stems[]` | `{stems,dir,ms,released?}` | `model_missing`（htdemucs_ft）、`vram_exhausted`、`timeout` |
 | `fish_vision_frames` | `videoPath*`、`targetFrames` 1~10、`effort`、`planner`、`subtitles` | `{frames[],duration,subtitlesFrom,stats,ms}` | `model_missing`、`vram_exhausted`、`timeout`、`bad_request` |
@@ -654,7 +650,7 @@ interface VisionPrefs {
 ```json
 {
   "name": "fish_asr",
-  "description": "本地转写音频/视频（可一次多个）。默认 SenseVoice + 声纹；timestamps=true 时用 whisper 分段。返回文字、声纹、可选分段；不返回音频。",
+  "description": "本地转写音频/视频（可一次多个）。默认 SenseVoice；timestamps=true 时用 whisper 分段。返回文字与可选分段；不返回音频。",
   "parameters": {
     "type": "object",
     "additionalProperties": false,
@@ -668,7 +664,6 @@ interface VisionPrefs {
       },
       "language": { "type": "string", "enum": ["auto", "zh", "en", "ja", "ko", "yue", "nospeech"], "default": "auto" },
       "engine": { "type": "string", "enum": ["auto", "sensevoice", "whisper"], "default": "auto" },
-      "speaker": { "type": "boolean", "default": true, "description": "false 时跳过声纹，省 campplus 加载。" },
       "timestamps": { "type": "boolean", "default": false, "description": "true 时走 /asr/segments（固定 whisper）。" }
     },
     "required": ["files"]
@@ -688,11 +683,6 @@ interface VisionPrefs {
             "engine": { "type": "string" },
             "durationMs": { "type": "number" },
             "elapsedMs": { "type": "number" },
-            "speaker": {
-              "type": ["object", "null"],
-              "properties": { "name": { "type": "string" }, "score": { "type": "number" }, "known": { "type": "boolean" } }
-            },
-            "speakerError": { "type": "string" },
             "segments": {
               "type": "array",
               "items": {
@@ -889,11 +879,11 @@ interface VisionPrefs {
 | POST | `/cache/cleanup` | — | `{ok, expired, lru, bytesFreed, scanned}`（P2.1，调 `CacheStore.cleanup()`） |
 | POST | `/open-folder` | `{path}` | `{ok, path}`；在文件管理器里打开目录，只接受 `cacheDir` 或**服务当前音色目录**本身/子目录（realpath 校验，非 Windows 返回「暂不支持」） |
 | GET | `/audio?path=` | — | `audio/*`；只允许 `cacheDir` 内的 `.wav/.webm/.ogg/.opus/.mp3/.m4a`（P2） |
-| POST | `/transcribe-upload` | multipart `file` + `durationMs?` + `language?` + `speaker?` | `{ok, text, ms, elapsedMs?, language?, speaker?}`（P2，临时文件请求结束即删） |
+| POST | `/transcribe-upload` | multipart `file` + `durationMs?` + `language?` | `{ok, text, ms, elapsedMs?, language?}`（P2，临时文件请求结束即删） |
 | POST | `/voice-upload` | multipart `file` + `durationMs?` | `{ok, path, bytes, mime}`（P2，存 `cacheDir/voice`） |
 | POST | `/describe-upload` | multipart `file`（`image/*`）+ `mode?` + `scope?` + `preset?` | `{ok, text, mode, scope, preset?, ms, bytes}`（v0.4；v0.5 加 `scope`/`preset`。`scope=session` 用会话识图提示词、不传 `preset`；图片只存临时文件、请求结束即删） |
 | GET | `/audio/:id` | — | `audio/wav` 流；id 映射到缓存文件，防目录穿越 |
-| POST | `/asr` | multipart `file` + `language?` + `speaker?` | `{ok, text, speaker?, segments?}` |
+| POST | `/asr` | multipart `file` + `language?` | `{ok, text, segments?}` |
 | GET | `/logs` | `?lines=200&file=service` | `{ok, lines:[]}`（代理 `/admin/logs`） |
 | POST | `/service/:action` | `action=start\|stop\|restart` | `{ok, state}`；start 等待 `/health` **HTTP 200**（不等 `ok:true`）或 120s 超时 |
 | GET | `/install/status` | — | `InstallStatus` |
@@ -1093,7 +1083,7 @@ interface FishMessageApi {
   "timeoutMs": 360000,
   "sideEffect": false,
   "idempotent": true,
-  "description": "取一条 QQ 语音 → 转写 → 声纹 → 返回；不改动消息。"
+  "description": "取一条 QQ 语音 → 转写 → 返回；不改动消息。"
 }
 ```
 
@@ -1108,7 +1098,7 @@ interface FishMessageApi {
 
 | 工具 | 参数 | 返回 | 依赖 |
 | --- | --- | --- | --- |
-| `voice_note_analyze` | `messageId?`、`filePath?`、`language?`、`identifySpeaker?` | `{text,speaker,language,durationMs,engine}` | service + message |
+| `voice_note_analyze` | `messageId?`、`filePath?`、`language?` | `{text,language,durationMs,engine}` | service + message |
 | `say_as_voice` | `text*`、`voice?`、`sessionId?`、`idempotencyKey?` | `{sent,wavPath,messageId?,ms,deduplicated?}` | service + message |
 | `translate_and_speak` | `text*`、`source`、`target*`、`voice?`、`sessionId?`、`idempotencyKey?` | `{sourceText,translatedText,wavPath,sent,stage?}` | service + message |
 | `long_text_read` | `text?`、`filePath?`、`maxCharsPerChunk?`、`voice?`、`sessionId?`、`idempotencyKey?` | `{chunks[],sentCount,wavPaths[]}` | service + message |
@@ -1122,15 +1112,14 @@ interface FishMessageApi {
 ```json
 {
   "name": "voice_note_analyze",
-  "description": "分析一条 QQ 语音消息：取音频 → 本地转写 → 声纹识别。只读，不改消息。需要 fish-message 0.2+。",
+  "description": "分析一条 QQ 语音消息：取音频 → 本地转写。只读，不改消息。需要 fish-message 0.2+。",
   "parameters": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
       "messageId": { "type": "string", "description": "QQ 消息 id；与 filePath 二选一。" },
       "filePath": { "type": "string", "description": "本机音频绝对路径；与 messageId 二选一。" },
-      "language": { "type": "string", "enum": ["auto", "zh", "en", "ja", "ko", "yue"], "default": "auto" },
-      "identifySpeaker": { "type": "boolean", "default": true, "description": "false 时跳过声纹。" }
+      "language": { "type": "string", "enum": ["auto", "zh", "en", "ja", "ko", "yue"], "default": "auto" }
     }
   }
 }
