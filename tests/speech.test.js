@@ -204,10 +204,10 @@ test('分段：单句超过 maxChars 才按字数硬切', () => {
 
 test('朗读化：版本号、小数、百分比、带单位数值都读成中文', () => {
   const spoken = (input) => prepareSpeech(input).text
-  assert.equal(spoken('版本 2.5.0 已发布。'), '版本 二点五点零 已发布。')
-  assert.equal(spoken('dsh-context 0.84.0 修好了。'), 'dsh context 零点八四点零 修好了。')
-  assert.equal(spoken('CPU 占用 87.5%，延迟 69ms。'), 'CPU 占用 百分之八十七点五，延迟 六十九毫秒。')
-  assert.equal(spoken('延迟 69ms，占用 87.5%。'), '延迟 六十九毫秒，占用 百分之八十七点五。')
+  assert.equal(spoken('版本 2.5.0 已发布。'), '版本二点五点零已发布。')
+  assert.equal(spoken('dsh-context 0.84.0 修好了。'), 'dsh context 零点八四点零修好了。')
+  assert.equal(spoken('CPU 占用 87.5%，延迟 69ms。'), 'CPU 占用百分之八十七点五，延迟六十九毫秒。')
+  assert.equal(spoken('延迟 69ms，占用 87.5%。'), '延迟六十九毫秒，占用百分之八十七点五。')
 })
 
 test('朗读化：行内代码里的标识符整段丢弃，表格/标题/列表标记不念', () => {
@@ -215,7 +215,7 @@ test('朗读化：行内代码里的标识符整段丢弃，表格/标题/列表
   const inline = spoken('\u0060lastBoot.confirmed=true\u0060 不用念，\u00604d35203\u0060 也不用。')
   assert.ok(!inline.includes('lastBoot'), inline)
   assert.ok(!inline.includes('4d35203'), inline)
-  assert.equal(inline, '不用念， 也不用。')
+  assert.equal(inline, '不用念，也不用。')
   assert.equal(
     spoken('| 名称 | 版本 |\n| --- | --- |\n| 内核 | 2.5.0 |'),
     '名称，版本。内核，二点五点零',
@@ -232,11 +232,33 @@ test('朗读化：对已朗读化的文本再跑一遍结果不变（幂等）',
     '| 名称 | 版本 |\n| --- | --- |\n| 内核 | 2.5.0 |',
     '2026-11-12 9:07 温度 26\u00b0C，电话 13812345678。',
     '开 4 个并发，ratio 是 0.5。',
+    '本地 AI 服务 69ms 响应，共 8 条。',
+    '甲。。乙；。',
   ]
   for (const input of inputs) {
     const once = prepareSpeech(input).text
     const twice = prepareSpeech(once).text
     assert.equal(twice, once, `不幂等：${input}`)
   }
+})
+
+test('朗读化：中文数字两侧不留空格，英文词间空格保留', () => {
+  const spoken = (input) => prepareSpeech(input).text
+  // 数字和单位读成汉字后两侧的空格去掉，否则念出来会多一个停顿。
+  assert.equal(
+    spoken('本地 AI 服务 69ms 响应，共 8 条，dsh context 正常。'),
+    '本地 AI 服务六十九毫秒响应，共八条，dsh context 正常。',
+  )
+  // 英文词之间、中英文之间的空格是词边界，不能被一起删掉。
+  assert.equal(spoken('本地 AI 服务和 dsh context 都正常。'), '本地 AI 服务和 dsh context 都正常。')
+  assert.ok(!/[\u4e00-\u9fff] [\u4e00-\u9fff]/.test(spoken('版本 2.5.0 已发布，共 8 条')))
+})
+
+test('朗读化：连续标点收敛成一个，句末优先', () => {
+  const spoken = (input) => prepareSpeech(input).text
+  assert.equal(spoken('甲。。乙；。'), '甲。乙。')
+  assert.equal(spoken('版本 2.5.0 已发布！？。'), '版本二点五点零已发布。')
+  assert.equal(spoken('结束：，'), '结束，')
+  assert.equal(spoken('先这样；。\n再那样：，\n完了。。'), '先这样。再那样。完了。')
 })
 

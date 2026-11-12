@@ -107,13 +107,13 @@ test('tts：合成前统一朗读化，缓存按改写后的文本命中', async
   ])
   assert.equal(result.ok, true)
   assert.deepEqual(sent.map((body) => body.text), [
-    '版本 二点五点零 已发布，延迟 六十九毫秒。',
+    '版本二点五点零已发布，延迟六十九毫秒。',
     '名称，版本。内核，二点五点零',
     '不用念。',
   ])
 
   // 同一段内容换成朗读化后的写法再合成：同样的缓存 key，不再请求服务端。
-  const again = await stack.api.tts(['版本 二点五点零 已发布，延迟 六十九毫秒。'])
+  const again = await stack.api.tts(['版本二点五点零已发布，延迟六十九毫秒。'])
   assert.equal(sent.length, 3)
   assert.equal(again.items[0].cached, true)
   assert.equal(again.items[0].wavPath, result.items[0].wavPath)
