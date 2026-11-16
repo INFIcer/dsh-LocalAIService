@@ -283,15 +283,18 @@ test('autoReadSessions：默认空表；旧配置没有该字段时行为不变'
   }
 })
 
-test('localDescribe：默认开；旧配置缺字段按开；明确关闭才关；env 可覆盖', () => {
+test('localDescribe：默认关；旧配置缺字段按关；明确开启才开；env 可覆盖', () => {
   const temp = makeTempDir()
   try {
-    assert.equal(defaultConfig(temp.dir).localDescribe, true)
+    assert.equal(defaultConfig(temp.dir).localDescribe, false)
 
-    // 旧配置没有该字段：按开启处理。
-    assert.equal(normalizeConfig({ autoRead: true }, { homeDir: temp.dir }).localDescribe, true)
-    // 无法识别的值：回落默认（开），不抛错。
-    assert.equal(normalizeConfig({ localDescribe: '乱写' }, { homeDir: temp.dir }).localDescribe, true)
+    // 旧配置没有该字段：按关闭处理。
+    assert.equal(normalizeConfig({ autoRead: true }, { homeDir: temp.dir }).localDescribe, false)
+    // 无法识别的值：回落默认（关），不抛错。
+    assert.equal(normalizeConfig({ localDescribe: '乱写' }, { homeDir: temp.dir }).localDescribe, false)
+    for (const value of [true, 'true', 1, '1']) {
+      assert.equal(normalizeConfig({ localDescribe: value }, { homeDir: temp.dir }).localDescribe, true)
+    }
     for (const value of [false, 'false', 0, '0']) {
       assert.equal(normalizeConfig({ localDescribe: value }, { homeDir: temp.dir }).localDescribe, false)
     }
@@ -303,15 +306,15 @@ test('localDescribe：默认开；旧配置缺字段按开；明确关闭才关�
     const on = applyEnv(defaultConfig(temp.dir), { FISH_SERVICE_LOCAL_DESCRIBE: '1' }, { homeDir: temp.dir })
     assert.equal(on.config.localDescribe, true)
 
-    // 持久化：保存后重读仍是关。
+    // 持久化：保存后重读仍是开。
     const store = new ConfigStore({ homeDir: temp.dir })
     store.load({}, {})
-    assert.equal(store.current.localDescribe, true)
-    store.save({ ...store.current, localDescribe: false })
+    assert.equal(store.current.localDescribe, false)
+    store.save({ ...store.current, localDescribe: true })
     const raw = JSON.parse(readFileSync(join(temp.dir, 'fish-service-config.json'), 'utf8'))
-    assert.equal(raw.localDescribe, false)
+    assert.equal(raw.localDescribe, true)
     const again = new ConfigStore({ homeDir: temp.dir })
-    assert.equal(again.load({}, {}).localDescribe, false)
+    assert.equal(again.load({}, {}).localDescribe, true)
   } finally {
     temp.cleanup()
   }

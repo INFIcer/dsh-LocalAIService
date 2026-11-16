@@ -573,26 +573,26 @@ test('config.set：识图档位非法回默认，提示词只认四档且超长�
   assert.equal(stack.api.config.get().visionPresets.brief.length, 4000)
 })
 
-test('visionPrefs：默认开、随配置变、可经 config.set 写入；不探服务', async (t) => {
+test('visionPrefs：默认关、随配置变、可经 config.set 写入；不探服务', async (t) => {
   const stack = await makeStack()
   t.after(() => stack.close())
 
   // 只读本地配置：服务一次都没探过，也要直接返回。
   assert.deepEqual(stack.api.visionPrefs(), {
-    localDescribe: true,
-    visionSessionReady: true,
-    visionSessionPrompt: defaultSessionVisionPrompt,
-    visionDefaultPreset: 'detailed',
-  })
-  assert.equal(stack.api.config.get().localDescribe, true)
-
-  const result = await stack.api.config.set({ localDescribe: false, visionSessionPrompt: '我的会话提示' })
-  assert.equal(result.ok, true)
-  assert.ok(result.applied.includes('localDescribe'))
-  assert.deepEqual(stack.api.visionPrefs(), {
     localDescribe: false,
     visionSessionReady: false,
     visionSessionPrompt: '',
+    visionDefaultPreset: 'detailed',
+  })
+  assert.equal(stack.api.config.get().localDescribe, false)
+
+  const result = await stack.api.config.set({ localDescribe: true, visionSessionPrompt: '我的会话提示' })
+  assert.equal(result.ok, true)
+  assert.ok(result.applied.includes('localDescribe'))
+  assert.deepEqual(stack.api.visionPrefs(), {
+    localDescribe: true,
+    visionSessionReady: true,
+    visionSessionPrompt: '我的会话提示',
     visionDefaultPreset: 'detailed',
   })
 

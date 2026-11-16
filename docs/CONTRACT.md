@@ -545,14 +545,14 @@ interface DescribeResult {
 
 ```ts
 interface VisionPrefs {
-  localDescribe: boolean      // 设置页「本地识图」开关；未配置时为 true
+  localDescribe: boolean      // 设置页「本地识图」开关；未配置时为 false
   visionSessionReady: boolean // 会话识图是否可用（当前与 localDescribe 同值）
   visionSessionPrompt: string // 会话识图实际用的提示词；关闭时为空串
   visionDefaultPreset: VisionPresetName // 工具识图默认档位，缺省 'detailed'
 }
 ```
 
-- 只读本地配置：`localDescribe: config.localDescribe !== false`，因此旧配置文件（没有该字段）返回 `true`；
+- 只读本地配置：`localDescribe: config.localDescribe !== false`，配置在归一化时已把缺字段补成 `false`，因此旧配置文件（没有该字段）返回 `false`，只有显式打开才是 `true`；
 - `visionSessionPrompt`：配置里留空时返回内置「详细」档文本（关闭时返回空串），调用方可直接展示或转发；
 - `visionDefaultPreset`：工具识图（`scope='tool'`）未显式指定 `preset` 时用的档位，取值 `brief/standard/detailed/text`，配置非法时回落 `detailed`；
 - 同步返回，不抛异常；设置页改完立即生效，无需重启；
@@ -949,7 +949,7 @@ interface VisionPrefs {
   "requestTimeoutMs": 180000,
   "asrTimeoutMs": 300000,
   "visionTimeoutMs": 600000,
-  "localDescribe": true,
+  "localDescribe": false,
   "visionPresets": {
     "brief": "",
     "standard": "",
@@ -998,7 +998,7 @@ interface VisionPrefs {
 | `requestTimeoutMs` | int | 180000 | 1000~1800000 | TTS/一般 |
 | `asrTimeoutMs` | int | 300000 | 1000~1800000 | ASR/分离 |
 | `visionTimeoutMs` | int | 600000 | 1000~1800000 | 视觉 |
-| `localDescribe` | bool | true | — | 本地识图总开关（v0.4）；关闭时工具层直接 `not_supported`；旧配置缺字段按 true |
+| `localDescribe` | bool | false | — | 本地识图总开关（v0.4）；默认关闭；关闭时工具层直接 `not_supported`；旧配置缺字段按 false |
 | `visionPresets` | object | 四档内置提示词 | 只认 `brief/standard/detailed/text` 四个字符串键，每个 ≤4000 字 | 工具识图四档提示词；空串表示用内置默认，缺字段自动补默认（v0.5） |
 | `visionDefaultPreset` | enum | `detailed` | `brief/standard/detailed/text` | 工具识图默认档；非法值回退 `detailed`（v0.5） |
 | `visionSessionPrompt` | string | `""` | ≤4000 字 | 会话识图（输入框旁按钮）单独用的提示词；留空时与「详细」档一致（v0.5） |

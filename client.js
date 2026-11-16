@@ -1710,7 +1710,7 @@ select.fish-select option:checked {
       return imageExts.some((ext) => name.endsWith(ext))
     }
 
-    /** 偏好里的「本地识图」是否开着（默认开）。 */
+    /** 偏好里的「本地识图」是否开着（默认关）。 */
     function localVisionOn(config) {
       return !(config && config.localDescribe === false)
     }
