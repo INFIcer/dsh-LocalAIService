@@ -229,6 +229,9 @@ test('设置页 Section 用真实 /state 能渲染出内容', async () => {
 
   assert.match(root, /能力/, `渲染结果应包含能力表，实际：${root.slice(0, 300)}`)
   assert.match(root, /8 \/ 8 项可用/)
+  // 状态卡片里的「释放显存」入口与说明。
+  assert.match(root, /释放显存/)
+  assert.match(root, /卸载当前没有任务在用的模型；正在跑的任务会跳过。/)
 })
 
 test('设置页 Section 在服务离线（state ok:false 或 null）时不崩', async () => {

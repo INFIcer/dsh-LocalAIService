@@ -802,6 +802,53 @@ test('jobs.result：取任务结果；未完成时回 not_ready 而不是抛错'
   await assert.rejects(stack.api.jobs.result(''), (e) => e.code === 'bad_request')
 })
 
+test('vram.unload：请求体 all/skip_busy 默认，models 可选；返回映射与错误码', async (t) => {
+  const sent = []
+  const stack = await makeStack({
+    handler: basicHandler({
+      '/vram/unload': (req, res, rec) => {
+        sent.push(parseBody(rec))
+        sendJson(res, 200, { ok: true, released: ['tts', 'separate'], skipped: ['asr'], free_mb: 7100, total_mb: 8192 })
+      },
+    }),
+  })
+  t.after(() => stack.close())
+
+  assert.equal(typeof stack.api.vram.unload, 'function')
+  assert.deepEqual(await stack.api.vram.unload(), {
+    ok: true,
+    released: ['tts', 'separate'],
+    skipped: ['asr'],
+    freeMb: 7100,
+    totalMb: 8192,
+  })
+  // 默认全卸，但跳过正在使用的模型（服务端判断忙不忙）。
+  assert.deepEqual(sent[0], { all: true, skip_busy: true })
+
+  await stack.api.vram.unload({ all: false, models: ['tts'], skipBusy: false })
+  assert.deepEqual(sent[1], { all: false, models: ['tts'], skip_busy: false })
+
+  // 单个模型名也接受；空白项不发给服务端。
+  await stack.api.vram.unload({ models: ' vision ' })
+  assert.deepEqual(sent[2].models, ['vision'])
+
+  const bad = await makeStack({
+    handler: basicHandler({
+      '/vram/unload': (req, res) => sendJson(res, 400, { ok: false, error: 'invalid_model', detail: '不认识的模型名：nope' }),
+    }),
+  })
+  t.after(() => bad.close())
+  await assert.rejects(bad.api.vram.unload({ models: ['nope'] }), (error) => error.code === 'bad_request')
+
+  const down = await makeStack({
+    handler: basicHandler({
+      '/vram/unload': (req, res) => sendJson(res, 500, { ok: false, error: 'engine_error', detail: '卸载失败' }),
+    }),
+  })
+  t.after(() => down.close())
+  await assert.rejects(down.api.vram.unload(), (error) => error.code === 'upstream_error')
+})
+
 test('translateJobs：提交 / 查状态 / 取译文 / 取消，旧版服务抛 not_supported', async (t) => {
   const collect = []
   const stack = await makeStack({

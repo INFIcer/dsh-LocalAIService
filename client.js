@@ -2295,6 +2295,30 @@ select.fish-select option:checked {
       download: '下载',
       jobs: '任务队列',
     }
+
+    // /vram/unload 用的是服务端模型名（能力名）；这里换成用户看得懂的说法。
+    const vramModelLabelZh = {
+      tts: '语音合成',
+      asr: '语音识别',
+      whisper: '语音识别',
+      speaker: '声纹',
+      separate: '人声分离',
+      translate: '翻译',
+      vision: '识图',
+    }
+
+    /** 卸载结果 → 状态行文案；跳过的只报个数，名字对用户没有额外用处。 */
+    function vramReleaseCopy(result) {
+      const released = [...new Set((Array.isArray(result && result.released) ? result.released : [])
+        .map((name) => vramModelLabelZh[String(name)] || String(name == null ? '' : name).trim())
+        .filter(Boolean))]
+      const skipped = (Array.isArray(result && result.skipped) ? result.skipped : [])
+        .filter((name) => String(name == null ? '' : name).trim())
+      const base = released.length ? `已释放：${released.join('、')}` : '没有可释放的模型'
+      return skipped.length
+        ? `${base}；有 ${skipped.length} 个模型正在使用，已跳过。`
+        : `${base}。`
+    }
     const translationLanguageDropdown = [
       { value: 'zh', label: '中文' },
       { value: 'en', label: '英文' },
@@ -2577,6 +2601,19 @@ select.fish-select option:checked {
         else setSay(`打开管理界面失败：${(r && r.hint) || '请稍后重试。'}`)
       }
 
+      // 释放显存：只卸空闲模型，正在跑的任务由服务端跳过。
+      const releaseVram = async () => {
+        setBusy(true)
+        const r = await post('/vram-unload', {})
+        setBusy(false)
+        if (r && r.ok === true) {
+          setSay(vramReleaseCopy(r))
+          await pull()
+        } else {
+          setSay(`释放显存失败：${(r && r.hint) || '请稍后重试。'}`)
+        }
+      }
+
       if (!state) {
         return h('div', { className: 'fish-service-settings', style: S.wrap },
           h('div', { style: S.h1 }, '本地 AI'),
@@ -2836,6 +2873,9 @@ select.fish-select option:checked {
           + `｜最近检查 ${health.checkedAt ? new Date(health.checkedAt).toLocaleTimeString('zh-CN', { hour12: false }) : '—'}`),
         h('div', { style: { ...S.dim, marginTop: 2 } },
           '朗读、语音输入与各项能力都在本机完成，不联网，也不产生额外费用。'),
+        h('div', { style: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: 4 } },
+          h('button', { type: 'button', style: S.btn, onClick: releaseVram, disabled: busy }, '释放显存'),
+          h('span', { style: S.dim }, '卸载当前没有任务在用的模型；正在跑的任务会跳过。')),
         (health.lastError && health.lastError.hint)
           ? h('div', { style: { ...S.danger, marginTop: 4 } }, `最近错误：${health.lastError.hint}`)
           : null,
@@ -3021,6 +3061,20 @@ select.fish-select option:checked {
         setBusy(false)
       }
 
+      const releaseVram = async (event) => {
+        event?.stopPropagation?.()
+        setBusy(true)
+        setPrompt('')
+        const result = await post('/vram-unload', {})
+        setBusy(false)
+        if (!result || result.ok !== true) {
+          setPrompt((result && result.hint) || '释放显存失败，请稍后再试。')
+          return
+        }
+        setPrompt(vramReleaseCopy(result))
+        await pull()
+      }
+
       const offline = metricsOffline(state)
       const online = Boolean(state.load && !offline && state.data && state.data.ok === true)
       const data = (online && state.data) || {}
@@ -3074,6 +3128,12 @@ select.fish-select option:checked {
             disabled: busy,
             onClick: openAdmin,
           }, '打开管理界面'),
+          offline ? null : h('button', {
+            type: 'button',
+            className: 'fish-btn',
+            disabled: busy,
+            onClick: releaseVram,
+          }, '释放显存'),
           h('button', { type: 'button', className: 'fish-btn', disabled: busy, onClick: refresh }, '刷新')))
 
       return h('div', {
@@ -4620,6 +4680,7 @@ select.fish-select option:checked {
       vramColor,
       formatVisual,
       metricsOffline,
+      vramReleaseCopy,
       speechAttachmentName,
       fetchSessionConversation,
       attachSpeechAttachment,

@@ -142,7 +142,7 @@ function setupEnv({ apiOverrides = {}, initialSnapshot = snapshot(), refreshImpl
   return { routes, api, config, configStore, capabilities, calls, dispose, call }
 }
 
-test('注册 25 条约定路由；全部 kind=exact', () => {
+test('注册 26 条约定路由；全部 kind=exact', () => {
   const env = setupEnv()
   assert.deepEqual([...env.routes.keys()].sort(), [
     '/dsh-fish-service/audio',
@@ -170,6 +170,7 @@ test('注册 25 条约定路由；全部 kind=exact', () => {
     '/dsh-fish-service/translate/jobs/status',
     '/dsh-fish-service/voice-upload',
     '/dsh-fish-service/voices',
+    '/dsh-fish-service/vram-unload',
   ])
   env.dispose()
   assert.equal(env.routes.size, 0)
@@ -393,6 +394,62 @@ test('POST /translate：选中文字翻译；空文本 400；服务错 502', asy
   assert.equal(r.json.code, 'service_down')
 })
 
+
+test('POST /vram-unload：成功透传卸载结果；方法和来源也校验', async () => {
+  const calls = []
+  const env = setupEnv({
+    apiOverrides: {
+      vram: {
+        unload: async (opts) => {
+          calls.push(opts)
+          return { ok: true, released: ['tts', 'separate'], skipped: ['asr'], freeMb: 7100, totalMb: 8192 }
+        },
+      },
+    },
+  })
+  const ok = await env.call('/dsh-fish-service/vram-unload', {
+    method: 'POST',
+    headers: { host: '127.0.0.1:10154' },
+  })
+  assert.equal(ok.res.statusCode, 200)
+  assert.deepEqual(ok.json, { ok: true, released: ['tts', 'separate'], skipped: ['asr'], freeMb: 7100, totalMb: 8192 })
+  // 固定只卸空闲模型：正在跑的任务由服务端跳过，插件不猜。
+  assert.deepEqual(calls, [{ all: true, skipBusy: true }])
+
+  const wrongMethod = await env.call('/dsh-fish-service/vram-unload')
+  assert.equal(wrongMethod.res.statusCode, 405)
+
+  const crossSite = await env.call('/dsh-fish-service/vram-unload', {
+    method: 'POST',
+    headers: { host: '127.0.0.1:10154', origin: 'http://evil.example' },
+  })
+  assert.equal(crossSite.res.statusCode, 403)
+  assert.deepEqual(crossSite.json, { ok: false, code: 'bad_request', hint: '请求来源不受信任，已拒绝。' })
+  assert.equal(calls.length, 1)
+})
+
+test('POST /vram-unload：服务报错按错误码给 400 / 500', async () => {
+  const bad = setupEnv({
+    apiOverrides: { vram: { unload: async () => { throw makeError('bad_request', { hint: '模型名无法识别' }) } } },
+  })
+  const badResult = await bad.call('/dsh-fish-service/vram-unload', {
+    method: 'POST',
+    headers: { host: '127.0.0.1:10154' },
+  })
+  assert.equal(badResult.res.statusCode, 400)
+  assert.equal(badResult.json.code, 'bad_request')
+  assert.match(badResult.json.hint, /模型名/)
+
+  const down = setupEnv({
+    apiOverrides: { vram: { unload: async () => { throw makeError('service_down', { hint: '本地 AI 没在运行' }) } } },
+  })
+  const downResult = await down.call('/dsh-fish-service/vram-unload', {
+    method: 'POST',
+    headers: { host: '127.0.0.1:10154' },
+  })
+  assert.equal(downResult.res.statusCode, 500)
+  assert.equal(downResult.json.code, 'service_down')
+})
 
 test('路由异常兜底：handler 抛错 → 500 结构化 JSON', async () => {
   const env = setupEnv({

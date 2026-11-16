@@ -128,3 +128,33 @@ test('指标离线：只有拿到 ok:true 才算在线', () => {
   assert.equal(service.metricsOffline({ load: true, data: { ok: true } }), false)
   assert.equal(service.metricsOffline(null), false)
 })
+
+test('释放显存文案：已释放 / 没有可释放 / 跳过忙碌模型', () => {
+  assert.equal(
+    service.vramReleaseCopy({ ok: true, released: ['tts', 'separate'], skipped: [] }),
+    '已释放：语音合成、人声分离。',
+  )
+  assert.equal(service.vramReleaseCopy({ ok: true, released: [], skipped: [] }), '没有可释放的模型。')
+  assert.equal(
+    service.vramReleaseCopy({ ok: true, released: ['tts'], skipped: ['asr', 'vision'] }),
+    '已释放：语音合成；有 2 个模型正在使用，已跳过。',
+  )
+  assert.equal(
+    service.vramReleaseCopy({ ok: true, released: [], skipped: ['asr'] }),
+    '没有可释放的模型；有 1 个模型正在使用，已跳过。',
+  )
+  // 服务端将来加新名字时原样展示，不吞掉。
+  assert.equal(service.vramReleaseCopy({ ok: true, released: ['custom'], skipped: [] }), '已释放：custom。')
+  assert.equal(service.vramReleaseCopy({ ok: true, released: ['tts', 'tts'], skipped: [] }), '已释放：语音合成。')
+  assert.equal(service.vramReleaseCopy({ ok: true, released: ['', null], skipped: [''] }), '没有可释放的模型。')
+  assert.equal(service.vramReleaseCopy(null), '没有可释放的模型。')
+})
+
+test('释放显存入口：胶囊面板与设置页都调用 /vram-unload', () => {
+  const sourceCode = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+  // 两处入口：状态胶囊浮层、设置页状态卡片；按钮文案与说明各出现一次。
+  assert.equal((sourceCode.match(/'释放显存'/g) || []).length, 2)
+  assert.equal((sourceCode.match(/post\('\/vram-unload', \{\}\)/g) || []).length, 2)
+  assert.match(sourceCode, /卸载当前没有任务在用的模型；正在跑的任务会跳过。/)
+  assert.match(sourceCode, /vramReleaseCopy\(result\)/)
+})
