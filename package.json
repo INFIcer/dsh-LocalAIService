@@ -1,6 +1,6 @@
 {
   "name": "dsh-fish-service",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "DSH 本地 AI 服务门面：fish.service（Cordis 服务）+ 9 个 Agent 工具 + 设置页。唯一知道 localai 服务地址的地方。",
   "license": "MIT",
   "type": "module",
