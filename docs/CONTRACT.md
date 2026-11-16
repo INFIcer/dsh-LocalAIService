@@ -1,7 +1,7 @@
 # 接口契约（CONTRACT）
 
-> 版本：`v0.6`（2026-11-10）：新增 `GET /metrics`（显存 / 模型 / 队列 / 版本，1 秒缓存，服务离线也返回 200 + `ok:false`）；客户端输入框左下加本地 AI 状态胶囊（2 秒轮询，详情浮层）。向后兼容。
-> 前版：`v0.5`（识图提示词分四档）、`v0.4`（`visionPrefs` / `localDescribe` / `/describe-upload`）、`v0.3`（`visionDescribe` / `fish_describe_image` / 音色目录）、`v0.1`（P0 冻结稿）
+> 版本：`v0.7`（2026-11-16）：新增 `fish.service.vram.unload()` 与宿主路由 `POST /vram-unload`（只卸空闲模型，跳过正在跑的）；客户端状态胶囊与设置页加「释放显存」按钮。向后兼容。
+> 前版：`v0.6`（`GET /metrics` + 状态胶囊）、`v0.5`（识图提示词分四档）、`v0.4`（`visionPrefs` / `localDescribe` / `/describe-upload`）、`v0.3`（`visionDescribe` / `fish_describe_image` / 音色目录）、`v0.1`（P0 冻结稿）
 > 适用：`dsh-fish-service` / `localai-service 2.5.x`
 > 原则：**先改本文，再改代码**。P1 只实现本文已写明的字段；新增字段必须向后兼容。
 
@@ -561,6 +561,23 @@ interface VisionPrefs {
 - 本插件内部也用它：`POST /describe-upload` 在关闭时直接 400，并从这里取默认档位；
   `fish_describe_image` 在关闭时工具层直接返回 `not_supported`；工具提示段在关闭时输出空串。
 
+### 1.18 `vram.unload(opts)`（v0.7）
+
+卸载本地模型释放显存，供状态胶囊和设置页使用；后续请求会按需重新加载。
+
+```ts
+vram.unload(opts?: {
+  all?: boolean      // 缺省 true：卸载全部已加载模型
+  models?: string[] | string // 指定能力名（tts/asr/whisper/speaker/separate/translate/vision）；不传则按 all
+  skipBusy?: boolean // 缺省 true：只卸没有任务在跑的模型
+}): Promise<{ ok: boolean; released: string[]; skipped: string[]; freeMb: number; totalMb: number }>
+```
+
+- 调 localai `POST /vram/unload`，请求体固定为 `{all, models?, skip_busy}`，超时 10 秒；
+- `skip_busy=true` 时服务端只卸空闲模型，正在跑的任务对应的模型名放进 `skipped`；
+- 旧版服务不认识 `skip_busy` 会忽略它，按 `all` / `models` 处理（可能卸掉正在用的模型，属预期降级）；
+- 失败按统一错误映射抛出（`bad_request` / `service_down` / `upstream_error` / `timeout` 等）。
+
 ---
 
 ## 2. DSH 工具契约
@@ -903,6 +920,7 @@ interface VisionPrefs {
 | GET | `/cache/stats` | — | `{ok, kind:"tts", files, bytes, hits, misses, hitRate}`（P2.1，服务层内存计数） |
 | POST | `/cache/clear` | `{kind?}` | `{ok, kind, files, bytes, kinds}`；省略 kind 清产物但保留 `voice`（P2.1） |
 | POST | `/cache/cleanup` | — | `{ok, expired, lru, bytesFreed, scanned}`（P2.1，调 `CacheStore.cleanup()`） |
+| POST | `/vram-unload` | — | `{ok, released, skipped, freeMb, totalMb}`；固定调 `vram.unload({all:true, skipBusy:true})`，只卸空闲模型、忙的进 `skipped`；`bad_request` → 400，其它错误 500（v0.7） |
 | POST | `/open-folder` | `{path}` | `{ok, path}`；在文件管理器里打开目录，只接受 `cacheDir` 或**服务当前音色目录**本身/子目录（realpath 校验，非 Windows 返回「暂不支持」） |
 | POST | `/open-webui` | — | `{ok:true}`；先探测服务可达，只拼 `/ui`，Windows 用 `cmd start` 打开；非 Windows 200 + `not_supported` |
 | GET | `/audio?path=` | — | `audio/*`；只允许 `cacheDir` 内的 `.wav/.webm/.ogg/.opus/.mp3/.m4a`，≤128MB（P2） |
