@@ -11,11 +11,14 @@ import {
   visionSectionOrder,
 } from '../lib/prompt.js'
 
-test('识图提示：开启时让模型优先用本机识图，关闭时为空串', () => {
+test('识图提示：图能直接看到就不重复识别，只在拿不到画面时才用本机识图', () => {
   for (const config of [{ localDescribe: true }, {}, undefined, null]) {
     const text = visionPrompt(config)
     assert.match(text, /fish_describe_image/, JSON.stringify(config))
     assert.match(text, /本机/)
+    // 用户发进对话的图本来就在上下文里，提示不能再鼓励「优先调用」。
+    assert.match(text, /不要再用/)
+    assert.match(text, /拿不到画面/)
     assert.equal(text.includes('{{'), false, '提示词里不能出现插值语法')
   }
   assert.equal(visionPrompt({ localDescribe: false }), '')
