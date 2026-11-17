@@ -1,4 +1,4 @@
-# 重启 DSH 加载 dsh-fish-service 的 P2 代码，并做界面入口验收。
+# 重启 DSH 加载 dsh-LocalAIService 的 P2 代码，并做界面入口验收。
 #
 # 用法（父 agent 执行；普通会话里不要跑，会杀掉自己）：
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\restart-p2-verify.ps1
@@ -10,7 +10,7 @@ $inner = 'C:\Users\Administrator\.dsh\_restart\dsh-restart.ps1'
 if (-not (Test-Path -LiteralPath $inner)) { throw "找不到重启脚本：$inner" }
 
 $wake = @'
-【dsh-fish-service P2 已加载】DSH 已重启。请做 P2 验收（界面入口）：
+【dsh-LocalAIService P2 已加载】DSH 已重启。请做 P2 验收（界面入口）：
 
 1) 设置 → 本地 AI：应看到「朗读」「语音输入」两个分区；把语速改成 1.2、单次最大字数改成 1500，保存后刷新页面确认仍在。
 2) 任选一条助手回复，操作行（复制按钮右侧）应只有一个喇叭按钮：点一下出现转圈→播放；再点停止；播放中点另一条消息的朗读，上一条应立刻停。

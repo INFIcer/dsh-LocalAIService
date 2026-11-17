@@ -7,7 +7,7 @@ import vm from 'node:vm'
 
 const realStatus = {
   ok: true,
-  plugin: { name: 'dsh-fish-service', version: '0.6.0' },
+  plugin: { name: 'dsh-LocalAIService', version: '0.6.0' },
   config: {
     baseUrl: 'http://127.0.0.1:7880',
     autoRead: true,

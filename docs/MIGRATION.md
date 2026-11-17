@@ -118,7 +118,7 @@ pwsh -NoProfile -File "E:\dsh-fish-message\tools\restart-dsh.ps1"
 ### 2.6 回滚（恢复到旧 TTS）
 
 1. 把 `@memef1f1y/dsh-plugin-tts` 加回 `dsh.profile.bundles`（放在 `dsh-fish-message` 之前/之后都行，但**只能有一个朗读入口**）；
-2. 在 `fish-service` 设置里关闭「朗读按钮」和「自动朗读」（或临时把 `dsh-fish-service` 从 bundles 移除）；
+2. 在 `fish-service` 设置里关闭「朗读按钮」和「自动朗读」（或临时把 `dsh-LocalAIService` 从 bundles 移除）；
 3. 重启 DSH；
 4. 确认旧 TTS 设置页与朗读按钮恢复；
 5. `~\.dsh\tts-rvc\settings.json` 全程未改，RVC/Index 地址还在。
@@ -131,7 +131,7 @@ pwsh -NoProfile -File "E:\dsh-fish-message\tools\restart-dsh.ps1"
 
 - 有 `fish.service`：入站转写/出站语音走统一门面（地址、错误、缓存都统一）；
 - 没有 `fish.service`：保持现有 HTTP 行为，**不报错、不阻塞**；
-- `dsh-fish-message` 的 `package.json` **不新增**对 `dsh-fish-service` 的依赖（避免循环/强制安装）。
+- `dsh-fish-message` 的 `package.json` **不新增**对 `dsh-LocalAIService` 的依赖（避免循环/强制安装）。
 
 ### 3.2 改动点（按文件）
 
@@ -384,7 +384,7 @@ ctx.provide('fish.message', {
 | 步 | 动作 | 验证 | 回滚 |
 | --- | --- | --- | --- |
 | 0 | 备份 profile `package.json`/`cordis.patch.yml`/`fish-message-config.json` | 备份文件存在 | 恢复备份 |
-| 1 | 装 `dsh-fish-service`（P1），**先不启用朗读 UI** | 设置页能看到状态，`fish_service_status` 正常 | 从 bundles 移除 fish-service |
+| 1 | 装 `dsh-LocalAIService`（P1），**先不启用朗读 UI** | 设置页能看到状态，`fish_service_status` 正常 | 从 bundles 移除 fish-service |
 | 2 | 接管 7880，导入 `baseUrl`/`ttsVoice` | `installMode=adopted`，`defaultVoice=dafeiyu` | 删 `fish-service-install.json` |
 | 3 | 禁用旧 TTS（确保不在 bundles） | 页面无旧朗读按钮、无 `/dsh-tts-api` | 加回 bundles |
 | 4 | 启用 fish-service 朗读按钮（P2） | 每条消息一个按钮，可播放 | 设置里关朗读/移除 bundles |
@@ -422,7 +422,7 @@ ctx.provide('fish.message', {
 ### 9.1 只回滚朗读入口
 
 - `fish-service` 设置里关「朗读按钮」「自动朗读」；
-- 或从 `dsh.profile.bundles` 移除 `dsh-fish-service`；
+- 或从 `dsh.profile.bundles` 移除 `dsh-LocalAIService`；
 - 旧 TTS 加回 bundles（如果之前移除了）；
 - 重启 DSH。
 

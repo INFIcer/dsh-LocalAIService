@@ -12,7 +12,7 @@
 | 术语 | 含义 |
 | --- | --- |
 | 服务层 / localai | `E:\LocalAIService` 的 Python FastAPI 服务，`python -m localai serve`，默认 `127.0.0.1:7880` |
-| `fish-service` | 插件 `dsh-fish-service`；DSH 侧唯一知道服务地址的地方 |
+| `fish-service` | 插件 `dsh-LocalAIService`；DSH 侧唯一知道服务地址的地方 |
 | `fish.service` | `fish-service` 通过 `ctx.provide('fish.service', api)` 暴露的 Cordis 服务 |
 | `fish.message` | 规划中由 `dsh-fish-message` 暴露的 Cordis 服务（当前 0.1.0 **还没有**） |
 | 能力（capability） | 服务层的 `tts / asr / whisper / translate / speaker / separate / media / download / vision / jobs` |
@@ -220,7 +220,7 @@
 └───────────────▲──────────────────────────────────────────────────────┘
                 │ 宿主 HTTP 路由 /dsh-fish-service/*（浏览器不接触 token）
 ┌───────────────┴──────────────────────────────────────────────────────┐
-│ dsh-fish-service（DSH 宿主插件）                                      │
+│ dsh-LocalAIService（DSH 宿主插件）                                      │
 │  ├─ fish.service（Cordis）：capabilities/health/ensureReady/tts/asr/  │
 │  │   translate/separate/visionFrames/mediaProbe/jobs/config/events    │
 │  ├─ 9 个 Agent 工具（fish_tts / fish_asr / … / fish_service_status）  │
@@ -258,7 +258,7 @@ UI 额外走 GET /dsh-fish-service/audio/<id> 流式播放；Agent 只拿路径�
 
 ## 6. 职责边界
 
-| 事情 | localai-service | dsh-fish-service | dsh-fish-message | 其它插件 |
+| 事情 | localai-service | dsh-LocalAIService | dsh-fish-message | 其它插件 |
 | --- | --- | --- | --- | --- |
 | 监听地址 / token 的唯一配置 | 自己监听；token 由 env 提供 | **唯一保存 `baseUrl`/token 的地方** | 兼容旧字段，可选引用 | 不保存 |
 | 健康检查 | 提供 `/health`、`/capabilities` | 轮询、缓存、翻译成 `health()` | 不需要 | 不需要 |
@@ -301,14 +301,14 @@ fish-service  →  ✗ fish-message
 
 ---
 
-## 8. `dsh-fish-service` 设计
+## 8. `dsh-LocalAIService` 设计
 
 ### 8.1 目标目录结构（P1 建立）
 
 ```text
-E:\dsh-fish-service\
+E:\dsh-LocalAIService\
 ├─ package.json                 # dsh.bundle.patch / dsh.client / exports["./client"]
-├─ cordis.patch.yml             # - insert: [{id: fish-service, name: dsh-fish-service}]
+├─ cordis.patch.yml             # - insert: [{id: fish-service, name: dsh-LocalAIService}]
 ├─ lib\
 │  ├─ host.js                   # apply：装配 config/service/tools/routes/install，ctx.effect 清理
 │  ├─ config.js                 # 默认值、schemastery schema、env 覆盖、迁移导入
@@ -816,7 +816,7 @@ GET /admin/system
 
 | 中文 | 代码/字段 |
 | --- | --- |
-| 服务门面 | `fish.service` / `dsh-fish-service` |
+| 服务门面 | `fish.service` / `dsh-LocalAIService` |
 | 能力 | capability |
 | 就绪 | `ready` |
 | 已加载 | `loaded` |

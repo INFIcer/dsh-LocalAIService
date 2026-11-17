@@ -2,7 +2,7 @@
 
 > 版本：`v0.7`（2026-11-16）：新增 `fish.service.vram.unload()` 与宿主路由 `POST /vram-unload`（只卸空闲模型，跳过正在跑的）；客户端状态胶囊与设置页加「释放显存」按钮。向后兼容。
 > 前版：`v0.6`（`GET /metrics` + 状态胶囊）、`v0.5`（识图提示词分四档）、`v0.4`（`visionPrefs` / `localDescribe` / `/describe-upload`）、`v0.3`（`visionDescribe` / `fish_describe_image` / 音色目录）、`v0.1`（P0 冻结稿）
-> 适用：`dsh-fish-service` / `localai-service 2.5.x`
+> 适用：`dsh-LocalAIService` / `localai-service 2.5.x`
 > 原则：**先改本文，再改代码**。P1 只实现本文已写明的字段；新增字段必须向后兼容。
 
 ---

@@ -1,4 +1,4 @@
-# dsh-fish-service
+# dsh-LocalAIService
 
 在 DSH 里使用本机 AI 的插件：朗读回复、用麦克风说话、把音视频转成文字，也给 Agent 提供本机的语音与媒体处理能力。
 所有处理都在本机完成，不联网，也不会产生额外的调用费用。
@@ -27,7 +27,7 @@
 请用命令行安装（手动改配置容易漏掉依赖），把路径换成本机的实际位置：
 
 ```powershell
-dsh plugin --profile desktop add E:\dsh-fish-service
+dsh plugin --profile desktop add E:\dsh-LocalAIService
 ```
 
 安装完成后重启 DSH，插件才会加载。安装过程不会启动或重启本地 AI。

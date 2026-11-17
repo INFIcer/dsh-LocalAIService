@@ -1,4 +1,4 @@
-// dsh-fish-service · 客户端插件（DSH Web）
+// dsh-LocalAIService · 客户端插件（DSH Web）
 //
 // 纯原生 JS + React（DSH 平台自带），没有 npm、没有 CDN、没有构建步骤。
 //
@@ -22,7 +22,7 @@
 //   插入失败不能直接改 DOM（会丢 React 状态），要求用户重试或走剪贴板兜底。
 
 window.__ModuleLoader__.load({
-  id: 'dsh-fish-service',
+  id: 'dsh-LocalAIService',
   factory: (require) => {
     const module = { exports: {} }
     const exports = module.exports
@@ -1219,7 +1219,7 @@ select.fish-select option:checked {
       generation: 0,
     }
 
-    const choiceKey = 'dsh-fish-service.voice-choice'
+    const choiceKey = 'dsh-LocalAIService.voice-choice'
 
     function rememberedChoice() {
       try {
@@ -1503,7 +1503,7 @@ select.fish-select option:checked {
         if (ids.length === 0) return false
         return inputActions.addAttachments(ids) === true
       } catch (error) {
-        try { console.warn('[dsh-fish-service] 语音附件失败', error) } catch { /* 忽略 */ }
+        try { console.warn('[dsh-LocalAIService] 语音附件失败', error) } catch { /* 忽略 */ }
         return false
       }
     }
@@ -4468,7 +4468,7 @@ select.fish-select option:checked {
             count += 1
             timer = setTimeout(execute, readyRetryIntervalMs)
           } else {
-            try { console.warn('[dsh-fish-service] 服务没就绪，注册已放弃') } catch { /* 忽略 */ }
+            try { console.warn('[dsh-LocalAIService] 服务没就绪，注册已放弃') } catch { /* 忽略 */ }
           }
           return
         }
@@ -4514,7 +4514,7 @@ select.fish-select option:checked {
           })
           return typeof summary === 'function' ? summary : () => {}
         } catch (error) {
-          try { console.warn('[dsh-fish-service] 注册双语翻译卡片失败', error) } catch { /* 忽略 */ }
+          try { console.warn('[dsh-LocalAIService] 注册双语翻译卡片失败', error) } catch { /* 忽略 */ }
           return () => {}
         }
       })
@@ -4527,7 +4527,7 @@ select.fish-select option:checked {
         return slotsRegister(ctx, slot, configItem, component)
       } catch (error) {
         // 槽位在这个 DSH 版本不存在时不要让整个插件挂掉。
-        try { console.warn('[dsh-fish-service] 注册槽位失败', slot, error) } catch { /* 忽略 */ }
+        try { console.warn('[dsh-LocalAIService] 注册槽位失败', slot, error) } catch { /* 忽略 */ }
         return () => {}
       }
     }
@@ -4568,7 +4568,7 @@ select.fish-select option:checked {
           if (typeof disposer === 'function') summary.push(disposer)
         }
       } catch (error) {
-        try { console.warn('[dsh-fish-service] 注册选中交互失败', error) } catch { /* 忽略 */ }
+        try { console.warn('[dsh-LocalAIService] 注册选中交互失败', error) } catch { /* 忽略 */ }
       }
       try {
         const slots = ctx.get('slots')
@@ -4580,7 +4580,7 @@ select.fish-select option:checked {
           if (typeof disposer === 'function') summary.push(disposer)
         }
       } catch (error) {
-        try { console.warn('[dsh-fish-service] 注册选中文字槽位失败', error) } catch { /* 忽略 */ }
+        try { console.warn('[dsh-LocalAIService] 注册选中文字槽位失败', error) } catch { /* 忽略 */ }
       }
       return () => {
         for (const fn of summary.splice(0)) {
