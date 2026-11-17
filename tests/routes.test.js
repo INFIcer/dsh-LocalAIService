@@ -142,7 +142,7 @@ function setupEnv({ apiOverrides = {}, initialSnapshot = snapshot(), refreshImpl
   return { routes, api, config, configStore, capabilities, calls, dispose, call }
 }
 
-test('注册 26 条约定路由；全部 kind=exact', () => {
+test('注册 32 条约定路由；全部 kind=exact', () => {
   const env = setupEnv()
   assert.deepEqual([...env.routes.keys()].sort(), [
     '/dsh-fish-service/audio',
@@ -151,6 +151,12 @@ test('注册 26 条约定路由；全部 kind=exact', () => {
     '/dsh-fish-service/cache/stats',
     '/dsh-fish-service/describe-upload',
     '/dsh-fish-service/health',
+    '/dsh-fish-service/install/adopt',
+    '/dsh-fish-service/install/cancel',
+    '/dsh-fish-service/install/logs',
+    '/dsh-fish-service/install/preflight',
+    '/dsh-fish-service/install/start',
+    '/dsh-fish-service/install/status',
     '/dsh-fish-service/logs',
     '/dsh-fish-service/metrics',
     '/dsh-fish-service/open-folder',

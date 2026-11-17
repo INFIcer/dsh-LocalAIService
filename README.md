@@ -22,9 +22,9 @@
 ## 2. 安装
 
 前置条件：本机已经安装并启动配套的本地 AI，且首次使用所需的模型已经下载好。
-本插件只负责调用，不负责安装、启动或升级本地 AI。
+如果还没有服务端，可以用「一键部署」把服务端装起来（见下一节）；插件仍然只通过 HTTP 调用本地 AI，不接管它的推理。
 
-请用命令行安装（手动改配置容易漏掉依赖），把路径换成本机的实际位置：
+请用命令行安装插件（手动改配置容易漏掉依赖），把路径换成本机的实际位置：
 
 ```powershell
 dsh plugin --profile desktop add E:\dsh-LocalAIService
@@ -32,7 +32,67 @@ dsh plugin --profile desktop add E:\dsh-LocalAIService
 
 安装完成后重启 DSH，插件才会加载。安装过程不会启动或重启本地 AI。
 
-## 3. 使用
+## 3. 一键部署（Windows x64）
+
+> 状态：安装器后端与宿主路由已实现；设置页的安装向导按钮由下一版客户端接入。
+> 现在可直接调用 `/dsh-fish-service/install/*` 这组路由（见下），安装过程与设置页使用的是同一套代码。
+
+插件检测不到本地服务时，可以从插件里把服务端下载到本机、建虚拟环境、启动并下载模型，最后把插件切到新服务上。
+安装器只用 7880 端口，不装驱动、不装系统级 Python、不注册 Windows 服务。
+
+**体积与耗时（首次安装，实测/估算）**
+
+| 组成 | 体积 | 耗时 |
+| --- | --- | --- |
+| 服务端代码 | 约 3.4MB（含 `.git`，zip 约 1.2MB） | 10~60 秒 |
+| 虚拟环境 + 核心依赖 | 约 100~600MB（实测 96.5MB） | 2~5 分钟 |
+| 引擎依赖（torch cu130 等） | 约 6.5GB | 10~30 分钟；可在开始安装时选 `skipEngine` 跳过 |
+| 模型：默认勾选 | 约 9.1GB | 10~40 分钟，取决于网速 |
+| 模型：全量 | 约 17.7GB | 更久 |
+
+安装目录默认 `%LOCALAPPDATA%\localai-service`，也可在调用时指定；不允许盘符根、系统目录、网络路径与 junction。
+安装日志在 `%USERPROFILE%\.dsh\fish-service-install.log`（DSH_HOME 自定义时随 DSH_HOME），服务的日志在 `<安装目录>\logs\service.*.log`。
+
+**能做什么**
+
+- 预检：Windows 版本/架构、磁盘余量（代码 + venv + 所选模型 + 10%）、NVIDIA 显卡与驱动版本（只比较）、7880 端口占用、已有安装标记、git、Python 3.11~3.13、网络（GitHub/PyPI/PyTorch，5 秒超时）、ffmpeg、目录写权限；
+- 安装：`git clone --depth 1` 拉代码（失败回退 codeload zip）→ `python -m venv` → core 依赖 → 可选引擎依赖（固定 `--index-url .../cu130`）→ 启动 `start_ai_service.ps1` → `/health` HTTP 200 → `/capabilities` 校验 `api_version=1` → 写插件配置与安装状态；
+- 模型：调用服务端 `/admin/models` 与 `/admin/models/download`，按「必需 → 推荐 → 可选」串行下载并轮询进度；模型缺失不算安装失败，但会如实列出未完成项；
+- 接管：检测到 7880 上已有 localai-service 时，只读接管，不重装、不移动目录、不重启服务；
+- 取消：杀进程树并回滚本次创建的路径；`models/voices/data/outputs/logs/config.json` 永远保留。
+
+**不能做什么**
+
+- 不安装 CUDA 驱动、不装系统级 Python、不注册 Windows 服务或计划任务（开机自启尚未实现）；
+- 不支持 uv 自动引导、离线包、manifest/SHA256 校验、升级与卸载（后续版本）；服务端仓库没有 release/tag，安装的是 `main` 分支；
+- 只支持 Windows 10 19045+ / Windows 11 x64；固定 7880 端口，不自动换端口；
+- 不修改已存在的非空目录；目录里有文件且没有本插件安装标记时直接拒绝，避免覆盖用户代码。
+
+**失败怎么排查**
+
+1. `GET /dsh-fish-service/install/status` 看 `error.hint`、失败的步骤与 `steps[]`；
+2. `GET /dsh-fish-service/install/logs?lines=200` 看完整命令输出；git clone 失败通常是网络/代理，pip 失败通常是 PyPI 镜像，torch 失败看磁盘与 pytorch 索引；
+3. 启动失败看 `<安装目录>\logs\service.err.log`，常见原因是 7880 被占、路径含特殊字符、依赖没装完；
+4. 重装前先删除 `<安装目录>\.dsh-fish-service-install.json` 并清空代码目录（models/voices/data 可保留）；
+5. 上一次安装被 DSH 重启打断时，状态文件里的 `status` 可能是 `installing`，按第 4 条清理后重试。
+
+**调用示例**
+
+```powershell
+# 预检（只读；installDir 可省略）
+curl.exe -s -X POST http://127.0.0.1:14792/dsh-fish-service/install/preflight -H "content-type: application/json" -d '{}'
+# 开始安装（异步返回 taskId；skipEngine 默认 false，客户端可按需传 true）
+curl.exe -s -X POST http://127.0.0.1:14792/dsh-fish-service/install/start -H "content-type: application/json" -d '{"skipEngine":true,"models":["tts","asr","speaker","vad","separate"]}'
+# 轮询状态 / 取消 / 日志 / 接管
+curl.exe -s http://127.0.0.1:14792/dsh-fish-service/install/status
+curl.exe -s -X POST http://127.0.0.1:14792/dsh-fish-service/install/cancel
+curl.exe -s "http://127.0.0.1:14792/dsh-fish-service/install/logs?lines=200"
+curl.exe -s -X POST http://127.0.0.1:14792/dsh-fish-service/install/adopt
+```
+
+> DSH Web 的实际端口以运行时为准（上面用 14792 只是示例）。
+
+## 4. 使用
 
 **朗读回复**：把鼠标移到回复下方的操作行，点喇叭按钮。准备期间按钮显示转圈，播放中显示暂停图标；
 分段朗读时按钮旁会显示进度（如 2/5）。切换消息或再点一次即停止。
@@ -89,7 +149,10 @@ dsh plugin --profile desktop add E:\dsh-LocalAIService
 
 ## 已知缺陷
 
-- 不在插件内安装、启动、升级或卸载本地 AI，也不下载模型。
+- 一键部署只覆盖「全新安装 + 接管」；升级、卸载、开机自启、离线包尚未实现。
+- 一键部署的安装/取消/模型下载是后台任务，同一时刻只允许一个；取消会回滚本次创建的文件（用户数据除外）。
+- 安装器固定使用 7880 端口；端口被其它程序占用时只给提示，不自动换端口。
+- 不要同时用命令行再跑一次安装；安装目录里有本插件的标记时会被拒绝。
 - 不支持直接分析网络视频，需要先把视频保存到本机。
 - 长视频处理耗时较长，期间没有进度提示。
 - 本地识图通常要几秒（首次还要等模型加载）；识别期间按钮显示转圈，不能重复点。识别失败时输入框不变，只提示一句。

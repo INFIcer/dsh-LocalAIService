@@ -118,7 +118,7 @@ export function writeTempFile(dir, name, content = 'x') {
  * 组装一套真的 LocalAIClient + CapabilityService + CacheStore + fish.service。
  * 返回的 mock 必须 close，临时目录必须 cleanup。
  */
-export async function makeStack({ handler = basicHandler(), config = {}, ttlMs = 30000 } = {}) {
+export async function makeStack({ handler = basicHandler(), config = {}, ttlMs = 30000, installerOptions = null } = {}) {
   const mock = await startMock(handler)
   const temp = makeTempDir()
   const store = new ConfigStore({ homeDir: temp.dir })
@@ -147,7 +147,15 @@ export async function makeStack({ handler = basicHandler(), config = {}, ttlMs =
     logger,
     ttlMs,
   })
-  const api = createFishServiceApi({ configStore: store, client, capabilities, cache, logger, version: '0.1.0' })
+  const api = createFishServiceApi({
+    configStore: store,
+    client,
+    capabilities,
+    cache,
+    logger,
+    version: '0.1.0',
+    ...(installerOptions ? { installerOptions } : {}),
+  })
 
   return {
     api,
