@@ -674,6 +674,34 @@ select.fish-select option:checked {
 @container fish-tr (max-width: 380px) {
   .fish-tr-grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
 }
+
+/* 设置页「服务端」：一键部署的状态行、进度条、步骤列表与日志块。
+   颜色全部走 DSH 主题变量并带兜底色，浅色/深色主题都不至于看不见。 */
+.fish-install-line { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.fish-install-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+.fish-install-bar {
+  height: 6px; margin: 8px 0 4px; border-radius: 999px; overflow: hidden;
+  background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.16));
+}
+.fish-install-bar i {
+  display: block; height: 100%; border-radius: inherit;
+  background: var(--dsw-alias-state-business-primary, #2f6fed);
+  transition: width .2s linear;
+}
+.fish-install-steps { display: flex; flex-direction: column; gap: 3px; margin-top: 8px; font-size: 12px; }
+.fish-install-step { display: flex; gap: 8px; align-items: baseline; }
+.fish-install-step-icon { flex: none; width: 14px; text-align: center; opacity: .55; }
+.fish-install-step[data-status="running"] .fish-install-step-icon,
+.fish-install-step[data-status="done"] .fish-install-step-icon {
+  opacity: 1; color: var(--dsw-alias-state-business-primary, #2f6fed);
+}
+.fish-install-step[data-status="failed"] .fish-install-step-icon {
+  opacity: 1; color: var(--dsw-alias-state-error-primary, #c0392b);
+}
+.fish-install-step[data-status="skipped"] .fish-install-step-title { text-decoration: line-through; opacity: .55; }
+.fish-install-step-msg { opacity: .6; }
+.fish-install-models { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 2px 0 4px; }
+.fish-install-model { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
 `
 
     // 样式只注入一次：每个消息都渲染一份 <style> 会把 DOM 撑爆。
@@ -2458,6 +2486,573 @@ select.fish-select option:checked {
       return h('span', { style: { ...S.badge, ...(ok ? S.ok : S.danger) } }, text)
     }
 
+    // ---------------- 一键部署（设置页「服务端」） ----------------
+    //
+    // 后端把安装拆成「预检 → 异步任务 + 状态轮询」；界面只做三件事：
+    // 把预检结论翻成中文、把步骤与日志显示出来、把面板里的选项原样交给后端。
+    // 任务在插件进程里跑，关掉设置页不影响安装；重新打开时靠 /install/status 还原进度。
+
+    /** 状态轮询间隔：与设置页 /state 的 5 秒轮询分开，安装进度需要更细。 */
+    const installPollMs = 1800
+    const installLogLines = 200
+    const installTotalCopy = '预计占用约 17 GB（环境约 6.5 GB + 模型约 9 GB），首次安装约 20~60 分钟，取决于网速。'
+
+    /**
+     * 安装状态 → 状态区该显示哪一种。
+     * 有任务时 status.state 优先（running/succeeded/failed/canceled）；
+     * 没有任务时看 installMode（managed=本插件装的、adopted=接管已有服务）与 lastState。
+     */
+    function installView(status) {
+      const item = status && typeof status === 'object' ? status : {}
+      const state = String(item.state || '')
+      const mode = String(item.installMode || 'unknown')
+      const last = item.lastState && typeof item.lastState === 'object' ? item.lastState : {}
+      const service = item.service && typeof item.service === 'object' ? item.service : {}
+      if (state === 'running') return { kind: 'running' }
+      if (state === 'succeeded') return { kind: 'succeeded' }
+      if (state === 'failed') return { kind: 'failed' }
+      if (state === 'canceled') return { kind: 'canceled' }
+      const version = String(last.serviceVersion || service.serviceVersion || '')
+      if (mode === 'adopted') {
+        return { kind: 'adopted', version, baseUrl: String(service.baseUrl || '') }
+      }
+      if (mode === 'managed' || state === 'installed' || last.status === 'installed') {
+        return { kind: 'installed', version, installDir: String(item.installDir || last.installDir || '') }
+      }
+      return { kind: 'unknown' }
+    }
+
+    /** 目标安装目录：面板里改过就用面板值，否则用后端给的默认值。 */
+    function resolveInstallDir(status, form) {
+      const panel = String((form && form.installDir) || '').trim()
+      if (panel) return panel
+      return String((status && status.defaultInstallDir) || '').trim()
+    }
+
+    /** 预检请求体：路由只接受 installDir。 */
+    function installPreflightBody(status, form) {
+      const installDir = resolveInstallDir(status, form)
+      return installDir ? { installDir } : {}
+    }
+
+    /**
+     * 模型勾选：没改过 = 全选（按 catalog 顺序）；后端没给 catalog 时返回 null，
+     * 表示「交给后端默认」，避免把空数组当成「一个都不装」。
+     */
+    function installModelSelection(status, form) {
+      const catalog = Array.isArray(status && status.catalog)
+        ? status.catalog.filter((item) => item && item.capability)
+        : []
+      if (!catalog.length) return null
+      const picked = Array.isArray(form && form.models)
+        ? form.models
+        : catalog.map((item) => item.capability)
+      return catalog
+        .map((item) => String(item.capability))
+        .filter((name) => picked.includes(name))
+    }
+
+    /** 开始安装的请求体：与预检共用同一个 installDir。 */
+    function installStartBody(status, form) {
+      const body = installPreflightBody(status, form)
+      body.skipEngine = Boolean(form && form.skipEngine === true)
+      const models = installModelSelection(status, form)
+      if (models) body.models = models
+      return body
+    }
+
+    /** 后端错误 → 用户看得懂的一句话；只有中文提示才原样用，英文/网络错误统一兜住。 */
+    function installErrorText(result) {
+      if (!result || typeof result !== 'object') return '连不上插件后端，请确认 DSH 正常运行后重试。'
+      const code = String(result.code || '')
+      const hint = String(result.hint || '').trim()
+      if (code === 'busy') return '已经有一个安装任务在运行，请等待完成或先取消。'
+      if (code === 'service_down') return '没有找到可接管的本地 AI 服务，请先启动服务后重试。'
+      if (code === 'not_supported') return '一键安装只支持 Windows 10/11 x64。'
+      if (code === 'canceled') return '安装已取消。'
+      if (/[\u4e00-\u9fa5]/.test(hint)) return hint
+      if (code === 'upstream_error') return '连不上插件后端，请确认 DSH 正常运行后重试。'
+      return '操作没有成功，请稍后重试。'
+    }
+
+    /** 预检 blocker → 中文行；detail 只在有内容时用括号附上。 */
+    function installBlockerLines(blockers) {
+      if (!Array.isArray(blockers)) return []
+      return blockers.map((item) => {
+        const hint = String((item && item.hint) || '').trim()
+        const detail = String((item && item.detail) || '').trim()
+        if (!hint) return detail || '环境检查没有通过。'
+        if (!detail || hint.includes(detail)) return hint
+        return hint + '（' + detail + '）'
+      }).filter(Boolean)
+    }
+
+    /** 预检 warning → 一行小字；后端提示本身就是中文短句，直接连起来。 */
+    function installWarningLine(warnings) {
+      if (!Array.isArray(warnings)) return ''
+      return warnings
+        .map((item) => String((item && item.hint) || '').trim())
+        .filter(Boolean)
+        .join('；')
+    }
+
+    /** 步骤状态图标：pending 灰点、running 转圈、done 勾、failed 叉、skipped 横线。 */
+    function installStepIcon(step) {
+      const state = String((step && step.status) || 'pending')
+      if (state === 'running') return h('span', { className: 'fish-install-step-icon' }, iconSpinner(12))
+      if (state === 'done') return h('span', { className: 'fish-install-step-icon' }, '✓')
+      if (state === 'failed') return h('span', { className: 'fish-install-step-icon' }, '✕')
+      if (state === 'skipped') return h('span', { className: 'fish-install-step-icon' }, '–')
+      return h('span', { className: 'fish-install-step-icon' }, '·')
+    }
+
+    /**
+     * 设置页「服务端」：状态区 + 一键部署 + 自定义 + 进度/步骤/日志。
+     *
+     * 一键入口与自定义面板读同一份表单（目录/跳过显卡/模型），改过面板再点一键，
+     * 用的也是面板值。状态轮询只在这里跑，不碰 Section 的 /state 轮询。
+     */
+    function installChunk(props) {
+      const refreshRef = React.useRef(null)
+      refreshRef.current = props && typeof props.onStateRefresh === 'function' ? props.onStateRefresh : null
+      const [status, setStatus] = React.useState(null)
+      const [loading, setLoading] = React.useState(true)
+      const [polling, setPolling] = React.useState(false)
+      const [busy, setBusy] = React.useState('')
+      const [say, setSay] = React.useState(null)
+      const [pre, setPre] = React.useState(null)
+      const [logs, setLogs] = React.useState(null)
+      const [logsOpen, setLogsOpen] = React.useState(false)
+      const [confirming, setConfirming] = React.useState('')
+      const [customOpen, setCustomOpen] = React.useState(false)
+      const [dir, setDir] = React.useState('')
+      const [skipEngine, setSkipEngine] = React.useState(false)
+      const [models, setModels] = React.useState(null)
+      const prevStateRef = React.useRef('')
+      const failCountRef = React.useRef(0)
+      const staleText = '读取安装状态失败，正在自动重试…'
+
+      // 状态回来时决定要不要继续轮询；只在状态真正切换时弹提示，避免每次轮询都改文案。
+      const applyStatus = (next) => {
+        if (!next || typeof next !== 'object') return
+        setStatus(next)
+        setLoading(false)
+        const state = String(next.state || '')
+        const changed = prevStateRef.current !== state
+        prevStateRef.current = state
+        setPolling(state === 'running')
+        if (state !== 'running') failCountRef.current = 0
+        if (!changed) return
+        if (state === 'succeeded') {
+          setSay({ kind: 'ok', text: '部署完成，服务已启动，插件已切换到该服务。' })
+        } else if (state === 'canceled') {
+          setSay({ kind: 'info', text: '安装已取消，可以重新部署。' })
+        }
+        // 任务结束（成功/失败/取消）都重新拉一次 /state：服务在线状态与安装模式可能都变了。
+        if (state === 'succeeded' || state === 'failed' || state === 'canceled') {
+          if (refreshRef.current) refreshRef.current()
+        }
+      }
+
+      const pullStatus = async (initial) => {
+        const next = await get('/install/status')
+        if (!next || next.ok !== true) {
+          failCountRef.current += 1
+          if (initial) {
+            setLoading(false)
+            setSay({ kind: 'err', text: '读取安装状态失败，请关闭设置页后重开再试。' })
+          } else if (failCountRef.current === 3) {
+            setSay({ kind: 'err', text: staleText })
+          }
+          return
+        }
+        failCountRef.current = 0
+        setSay((prev) => (prev && prev.text === staleText ? null : prev))
+        applyStatus(next)
+      }
+
+      React.useEffect(() => { void pullStatus(true) }, [])
+      // 只有任务在跑时才开定时器；状态一旦不是 running，effect 清理会把它停掉。
+      React.useEffect(() => {
+        if (!polling) return undefined
+        const timer = setInterval(() => { void pullStatus() }, installPollMs)
+        return () => clearInterval(timer)
+      }, [polling])
+
+      const defaultDir = String((status && status.defaultInstallDir) || '')
+      React.useEffect(() => {
+        if (!defaultDir) return
+        setDir((value) => (value ? value : defaultDir))
+      }, [defaultDir])
+
+      const form = { installDir: dir, skipEngine, models }
+      const catalog = Array.isArray(status && status.catalog)
+        ? status.catalog.filter((item) => item && item.capability)
+        : []
+      const picked = installModelSelection(status, form) || []
+      const disabled = Boolean(busy)
+
+      const primaryLabel = (idleLabel) => (busy === 'install' ? '正在准备安装…' : idleLabel)
+
+      const runInstall = async (withStart = true) => {
+        if (busy) return
+        setBusy('install')
+        setConfirming('')
+        setPre(null)
+        setLogsOpen(false)
+        setLogs(null)
+        setSay({ kind: 'info', text: withStart ? '正在检查环境，通过后自动开始安装…' : '正在检查环境…' })
+        const checked = await post('/install/preflight', installPreflightBody(status, form))
+        if (!checked || checked.ok !== true) {
+          const blockers = Array.isArray(checked && checked.blockers) ? checked.blockers : []
+          setBusy('')
+          setPre({ blockers, warnings: Array.isArray(checked && checked.warnings) ? checked.warnings : [] })
+          setSay(blockers.length
+            ? { kind: 'err', text: '环境检查没有通过，按下面每条提示处理后再试。' }
+            : { kind: 'err', text: '环境检查失败：' + installErrorText(checked) })
+          return
+        }
+        setPre({ blockers: [], warnings: Array.isArray(checked.warnings) ? checked.warnings : [] })
+        if (!withStart) {
+          setBusy('')
+          setSay({ kind: 'ok', text: '环境检查通过，可以开始安装。' })
+          return
+        }
+        const started = await post('/install/start', installStartBody(status, form))
+        if (!started || started.ok !== true) {
+          setBusy('')
+          if (Array.isArray(started && started.blockers) && started.blockers.length) {
+            setPre({ blockers: started.blockers, warnings: Array.isArray(started.warnings) ? started.warnings : [] })
+          }
+          setSay({ kind: 'err', text: '开始安装失败：' + installErrorText(started) })
+          if (started && started.code === 'busy') {
+            setPolling(true)
+            await pullStatus()
+          }
+          return
+        }
+        setBusy('')
+        applyStatus({
+          ok: true,
+          state: 'running',
+          percent: 0,
+          message: '准备安装',
+          steps: Array.isArray(started.steps) ? started.steps : [],
+        })
+        await pullStatus()
+      }
+
+      const cancelInstall = async () => {
+        if (busy) return
+        setConfirming('')
+        setBusy('cancel')
+        const result = await post('/install/cancel', {})
+        setBusy('')
+        if (result && result.ok === true) {
+          setSay({ kind: 'info', text: String(result.message || '已取消安装。') })
+          await pullStatus()
+          if (refreshRef.current) refreshRef.current()
+        } else {
+          setSay({ kind: 'err', text: '取消失败：' + installErrorText(result) })
+        }
+      }
+
+      const adoptService = async () => {
+        if (busy) return
+        setBusy('adopt')
+        setSay({ kind: 'info', text: '正在查找本机已有的本地 AI 服务…' })
+        const result = await post('/install/adopt', {})
+        setBusy('')
+        if (result && result.ok === true) {
+          const version = result.serviceVersion ? '（v' + result.serviceVersion + '）' : ''
+          setSay({ kind: 'ok', text: '已接管 ' + (result.baseUrl || '本机服务') + version + '，插件会直接使用它。' })
+          if (refreshRef.current) refreshRef.current()
+          await pullStatus()
+        } else {
+          setSay({ kind: 'err', text: '接管失败：' + installErrorText(result) })
+        }
+      }
+
+      const toggleLogs = async () => {
+        if (logsOpen) {
+          setLogsOpen(false)
+          return
+        }
+        if (busy) return
+        setBusy('logs')
+        const result = await get('/install/logs?lines=' + installLogLines)
+        setBusy('')
+        if (result && result.ok === true) {
+          setLogs(Array.isArray(result.lines) ? result.lines : [])
+          setLogsOpen(true)
+        } else {
+          setSay({ kind: 'err', text: '读取安装日志失败：' + installErrorText(result) })
+        }
+      }
+
+      const toggleModel = (capability, on) => {
+        const next = on
+          ? [...new Set([...picked, capability])]
+          : picked.filter((name) => name !== capability)
+        setModels(next)
+      }
+
+      const view = installView(status)
+      const progress = Math.max(0, Math.min(100, Math.trunc(Number(status && status.percent) || 0)))
+      const steps = Array.isArray(status && status.steps) ? status.steps : []
+      const tail = Array.isArray(status && status.logTail) ? status.logTail.slice(-8) : []
+      const blockerLines = installBlockerLines(pre && pre.blockers)
+      const warningLine = installWarningLine(pre && pre.warnings)
+
+      let statusBlock = null
+      if (view.kind === 'running') {
+        const title = String((status && status.message) || '正在安装…')
+        statusBlock = h('div', null,
+          h('div', { className: 'fish-install-line' },
+            h('span', { style: { fontWeight: 600 } }, '正在安装'),
+            h('span', { style: { ...S.dim, flex: '1 1 auto', minWidth: 0 } }, title),
+            h('span', { style: S.dim }, progress + '%'),
+            confirming === 'cancel'
+              ? h(React.Fragment, null,
+                  h('button', {
+                    type: 'button',
+                    className: 'fish-btn',
+                    disabled,
+                    onClick: () => { void cancelInstall() },
+                  }, busy === 'cancel' ? '正在取消…' : '确认取消'),
+                  h('button', {
+                    type: 'button',
+                    className: 'fish-btn',
+                    disabled,
+                    onClick: () => setConfirming(''),
+                  }, '继续安装'))
+              : h('button', {
+                  type: 'button',
+                  className: 'fish-btn',
+                  disabled,
+                  onClick: () => setConfirming('cancel'),
+                }, '取消')),
+          confirming === 'cancel'
+            ? h('div', { style: { ...S.hint, marginTop: 4 } }, '会中断并清理本次安装（已下载的模型保留）。')
+            : null,
+          h('div', {
+            className: 'fish-install-bar',
+            role: 'progressbar',
+            'aria-valuenow': progress,
+            'aria-valuemin': 0,
+            'aria-valuemax': 100,
+          }, h('i', { style: { width: progress + '%' } })))
+      } else if (view.kind === 'succeeded') {
+        statusBlock = h('div', null,
+          h('div', { style: S.ok }, '部署完成。'),
+          h('div', { style: S.dim }, '已保存设置，插件已切换到该服务。'))
+      } else if (view.kind === 'failed') {
+        const errorHint = String((status && status.error && status.error.hint) || '安装失败，请查看安装日志。')
+        statusBlock = h('div', null,
+          h('div', { style: S.danger }, '安装失败：' + errorHint),
+          h('div', { className: 'fish-install-actions' },
+            h('button', {
+              type: 'button',
+              className: 'fish-btn',
+              'data-primary': '1',
+              disabled,
+              onClick: () => { void runInstall(true) },
+            }, primaryLabel('重试'))))
+      } else if (view.kind === 'canceled') {
+        statusBlock = h('div', null,
+          h('div', { style: S.dim }, '安装已取消，已清理本次创建的文件。'),
+          h('div', { className: 'fish-install-actions' },
+            h('button', {
+              type: 'button',
+              className: 'fish-btn',
+              'data-primary': '1',
+              disabled,
+              onClick: () => { void runInstall(true) },
+            }, primaryLabel('重新部署'))))
+      } else if (view.kind === 'installed') {
+        const versionText = view.version ? ' v' + view.version : ''
+        statusBlock = h('div', null,
+          h('div', null, '已安装' + versionText + '。'),
+          view.installDir ? h('div', { style: S.hint }, '安装目录：' + view.installDir) : null,
+          confirming === 'redeploy'
+            ? h('div', null,
+                h('div', { style: { ...S.hint, marginTop: 4 } }, '重新部署会重新下载环境与模型，通常需要 20~60 分钟；已下载的模型、音色与配置会保留。'),
+                h('div', { className: 'fish-install-actions' },
+                  h('button', {
+                    type: 'button',
+                    className: 'fish-btn',
+                    'data-primary': '1',
+                    disabled,
+                    onClick: () => { void runInstall(true) },
+                  }, primaryLabel('确认重新部署')),
+                  h('button', {
+                    type: 'button',
+                    className: 'fish-btn',
+                    disabled,
+                    onClick: () => setConfirming(''),
+                  }, '取消')))
+            : h('div', { className: 'fish-install-actions' },
+                h('button', {
+                  type: 'button',
+                  style: S.link,
+                  disabled,
+                  onClick: () => setConfirming('redeploy'),
+                }, '重新部署')),
+          h('div', { style: S.hint }, installTotalCopy))
+      } else if (view.kind === 'adopted') {
+        statusBlock = h('div', null,
+          h('div', null, '使用已有服务。'),
+          h('div', { style: S.hint }, (view.baseUrl || '本机服务') + (view.version ? ' · v' + view.version : '')),
+          confirming === 'redeploy'
+            ? h('div', null,
+                h('div', { style: { ...S.hint, marginTop: 4 } }, '重新部署会另装一份服务并改用新装的服务；当前的本地服务不会被删除。'),
+                h('div', { className: 'fish-install-actions' },
+                  h('button', {
+                    type: 'button',
+                    className: 'fish-btn',
+                    'data-primary': '1',
+                    disabled,
+                    onClick: () => { void runInstall(true) },
+                  }, primaryLabel('确认重新部署')),
+                  h('button', {
+                    type: 'button',
+                    className: 'fish-btn',
+                    disabled,
+                    onClick: () => setConfirming(''),
+                  }, '取消')))
+            : h('div', { className: 'fish-install-actions' },
+                h('button', {
+                  type: 'button',
+                  style: S.link,
+                  disabled,
+                  onClick: () => setConfirming('redeploy'),
+                }, '重新部署')))
+      } else {
+        statusBlock = h('div', null,
+          h('div', { style: S.dim }, '本机没有检测到本地 AI 服务。'),
+          h('div', { className: 'fish-install-actions' },
+            h('button', {
+              type: 'button',
+              className: 'fish-btn',
+              'data-primary': '1',
+              disabled,
+              onClick: () => { void runInstall(true) },
+            }, primaryLabel('一键部署')),
+            h('button', {
+              type: 'button',
+              className: 'fish-btn',
+              disabled,
+              onClick: () => { void adoptService() },
+            }, busy === 'adopt' ? '正在查找…' : '接管已有服务')),
+          h('div', { style: S.hint }, '「接管已有服务」用于本机已经装好 LocalAIService 的情况：只读取服务信息，不改动文件。'),
+          h('div', { style: S.hint }, installTotalCopy))
+      }
+
+      const stepsBlock = steps.length
+        ? h('div', { className: 'fish-install-steps' }, steps.map((step) => {
+            const state = String((step && step.status) || 'pending')
+            const stepPercent = Math.max(0, Math.min(100, Math.trunc(Number(step && step.percent) || 0)))
+            const message = String((step && step.message) || '')
+            return h('div', {
+              key: String((step && step.id) || (step && step.title) || ''),
+              className: 'fish-install-step',
+              'data-status': state,
+            },
+              installStepIcon(step),
+              h('span', { className: 'fish-install-step-title' }, String((step && step.title) || (step && step.id) || '')),
+              state === 'running' && stepPercent > 0
+                ? h('span', { className: 'fish-install-step-msg' }, stepPercent + '%')
+                : null,
+              message ? h('span', { className: 'fish-install-step-msg' }, message) : null)
+          }))
+        : null
+
+      const logBlock = (tail.length || logsOpen || view.kind === 'failed')
+        ? h('div', null,
+            h('div', { className: 'fish-install-line', style: { marginTop: 8 } },
+              h('span', { style: S.dim }, '安装日志'),
+              h('span', { style: { flex: 1 } }),
+              h('button', {
+                type: 'button',
+                className: 'fish-btn',
+                disabled,
+                onClick: () => { void toggleLogs() },
+              }, busy === 'logs' ? '正在读取…' : (logsOpen ? '收起日志' : '查看完整日志'))),
+            h('pre', { style: S.logs }, logsOpen && Array.isArray(logs)
+              ? (logs.length ? logs.join('\n') : '（没有日志）')
+              : (tail.length ? tail.join('\n') : '（暂无日志）')))
+        : null
+
+      const customToggle = (loading && !status) || view.kind === 'running'
+        ? null
+        : h('div', { style: { marginTop: 8 } },
+            h('button', {
+              type: 'button',
+              style: S.link,
+              'aria-expanded': customOpen ? 'true' : 'false',
+              onClick: () => setCustomOpen((value) => !value),
+            }, customOpen ? '收起自定义' : '自定义'))
+
+      const customPanel = customOpen && view.kind !== 'running'
+        ? h('div', { style: { marginTop: 8 } },
+            h('div', { style: S.row },
+              h('div', { style: S.lab }, '安装目录'),
+              h('div', { style: S.ctl },
+                input(dir, setDir, defaultDir),
+                h('div', { style: S.hint }, '必须是空目录：安装器不会覆盖已有文件；已有安装记录时要先清理该目录。'))),
+            h('div', { style: S.row },
+              h('div', { style: S.lab }, '只装轻量功能'),
+              h('div', { style: S.ctl },
+                h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5 } },
+                  check(skipEngine, setSkipEngine), '跳过显卡依赖'),
+                h('div', { style: S.hint }, '勾选后只装翻译、下载与媒体工具；语音合成、语音识别、视觉与人声分离不可用。'))),
+            h('div', { style: S.row },
+              h('div', { style: S.lab }, '下载模型'),
+              h('div', { style: S.ctl },
+                h('div', { className: 'fish-install-models' }, catalog.map((item) => h('label', {
+                  key: String(item.capability),
+                  className: 'fish-install-model',
+                },
+                  check(picked.includes(String(item.capability)), (on) => toggleModel(String(item.capability), on)),
+                  String(item.title || item.capability) + ' ' + Math.round(Number(item.sizeMb) || 0) + ' MB'))),
+                h('div', { style: S.hint }, '不勾选也装得上：服务能启动，对应能力等模型下载后才可用。'))),
+            h('div', { className: 'fish-install-actions' },
+              h('button', {
+                type: 'button',
+                className: 'fish-btn',
+                'data-primary': '1',
+                disabled,
+                onClick: () => { void runInstall(true) },
+              }, primaryLabel('开始安装'))),
+            h('div', { style: S.hint }, installTotalCopy))
+        : null
+
+      return h('div', { style: S.card },
+        h('div', { style: S.h2 }, '服务端'),
+        loading && !status ? h('div', { style: S.dim }, '正在读取安装状态…') : statusBlock,
+        say ? h('div', {
+          style: { ...(say.kind === 'err' ? S.danger : say.kind === 'ok' ? S.ok : S.hint), marginTop: 6 },
+        }, say.text) : null,
+        warningLine ? h('div', { style: { ...S.hint, marginTop: 4 } }, warningLine) : null,
+        blockerLines.length
+          ? h('div', null,
+              h('div', { style: { ...S.danger, marginTop: 6 } }, '环境检查没有通过：'),
+              h('ul', { style: { margin: '4px 0 0', paddingLeft: 18 } },
+                blockerLines.map((text, index) => h('li', { key: index, style: { fontSize: 12 } }, text))),
+              h('div', { className: 'fish-install-actions' },
+                h('button', {
+                  type: 'button',
+                  className: 'fish-btn',
+                  disabled,
+                  onClick: () => { void runInstall(false) },
+                }, busy === 'install' ? '正在检查…' : '重试预检')))
+          : null,
+        stepsBlock,
+        logBlock,
+        customToggle,
+        customPanel)
+    }
+
     function Section() {
       const [state, setState] = React.useState(null)
       const [dirty, setDirty] = React.useState(false)
@@ -2903,6 +3498,8 @@ select.fish-select option:checked {
 
       return h('div', { className: 'fish-service-settings', style: S.wrap },
         actionBar,
+        // 一键部署放在内容最顶部；下面的连接/能力/缓存等块的顺序保持不变。
+        h(installChunk, { onStateRefresh: pull }),
         statusChunk,
         uiChunk,
         capabilityChunk,
@@ -4661,6 +5258,16 @@ select.fish-select option:checked {
       speechPanel,
       autoReadSwitch,
       metricsCapsule,
+      installChunk,
+      installView,
+      installPreflightBody,
+      installStartBody,
+      installModelSelection,
+      installErrorText,
+      installBlockerLines,
+      installWarningLine,
+      installTotalCopy,
+      installPollMs,
       visionPresets,
       visionPresetOption,
       normalizeVisionPreset,
