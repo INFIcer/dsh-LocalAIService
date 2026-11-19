@@ -4,7 +4,14 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { registerRoutes } from '../lib/routes.js'
+import {
+  isServiceDir,
+  registerRoutes,
+  resolveServiceDir,
+  serviceLaunchSpec,
+  serviceStartBusy,
+  serviceStartGuardMs,
+} from '../lib/routes.js'
 import { CacheStore } from '../lib/cache.js'
 import { makeError } from '../lib/errors.js'
 import { prepareSpeech } from '../lib/speech.js'
@@ -35,7 +42,22 @@ function snapshot(overrides = {}) {
   }
 }
 
-function setupEnv({ apiOverrides = {}, initialSnapshot = snapshot(), refreshImpl = null, configPatch = {}, cacheStub = null, spawn = null, platform = 'win32' } = {}) {
+function setupEnv({
+  apiOverrides = {},
+  initialSnapshot = snapshot(),
+  refreshImpl = null,
+  configPatch = {},
+  cacheStub = null,
+  spawn = null,
+  platform = 'win32',
+  // 启动服务：默认替身，避免测试真的访问网络或扫盘；并发窗口用很短的超时。
+  fetchImpl = async () => null,
+  serviceEnv = {},
+  serviceHomeDir = '',
+  serviceDriveRoots = [],
+  servicePollMs = 5,
+  serviceReadyTimeoutMs = 1000,
+} = {}) {
   const config = {
     baseUrl: 'http://127.0.0.1:7880',
     ttsVoice: 'dafeiyu',
@@ -126,6 +148,12 @@ function setupEnv({ apiOverrides = {}, initialSnapshot = snapshot(), refreshImpl
       return { unref: () => {} }
     }),
     platform,
+    fetchImpl,
+    serviceEnv,
+    serviceHomeDir,
+    serviceDriveRoots,
+    servicePollMs,
+    serviceReadyTimeoutMs,
   })
 
   const call = async (path, { method = 'GET', body, headers = {}, search = '' } = {}) => {
@@ -142,7 +170,7 @@ function setupEnv({ apiOverrides = {}, initialSnapshot = snapshot(), refreshImpl
   return { routes, api, config, configStore, capabilities, calls, dispose, call }
 }
 
-test('注册 32 条约定路由；全部 kind=exact', () => {
+test('注册 33 条约定路由；全部 kind=exact', () => {
   const env = setupEnv()
   assert.deepEqual([...env.routes.keys()].sort(), [
     '/dsh-fish-service/audio',
@@ -165,6 +193,7 @@ test('注册 32 条约定路由；全部 kind=exact', () => {
     '/dsh-fish-service/read/plan',
     '/dsh-fish-service/read/segment',
     '/dsh-fish-service/save',
+    '/dsh-fish-service/service/start',
     '/dsh-fish-service/state',
     '/dsh-fish-service/test',
     '/dsh-fish-service/transcribe-upload',
@@ -1760,4 +1789,286 @@ test('POST /transcribe-upload：录音数据过小 / 太短 时给可操作提�
   } finally {
     temp.cleanup()
   }
+})
+
+// ---------------- 启动本地 AI 服务 ----------------
+
+/** 造一个「像服务根目录」的临时目录；默认带启动脚本和 pyproject.toml。 */
+function makeServiceDir(root, { tray = false, script = true, marker = 'pyproject' } = {}) {
+  mkdirSync(root, { recursive: true })
+  if (script) writeFileSync(join(root, 'start_ai_service.ps1'), '')
+  if (tray) writeFileSync(join(root, 'start_ai_service_tray.vbs'), '')
+  if (marker === 'pyproject') writeFileSync(join(root, 'pyproject.toml'), '')
+  if (marker === 'engine') mkdirSync(join(root, 'engine'), { recursive: true })
+  return root
+}
+
+function offlineSnapshot() {
+  return snapshot({
+    ok: false,
+    reachable: false,
+    compatible: false,
+    latencyMs: 0,
+    serviceVersion: '',
+    apiVersion: '',
+    vram: null,
+    capabilities: {},
+    lastError: { code: 'service_down', hint: '本地 AI 服务没在运行。' },
+  })
+}
+
+test('启动目录解析：配置 / 默认目录 / 盘符候选按顺序命中，只认脚本+代码标记', () => {
+  const temp = makeTempDir()
+  try {
+    const env = { LOCALAPPDATA: join(temp.dir, 'appdata'), USERPROFILE: temp.dir }
+    const configured = makeServiceDir(join(temp.dir, 'configured'))
+    const fallbackDir = process.platform === 'win32'
+      ? join(env.LOCALAPPDATA, 'localai-service')
+      : join(temp.dir, 'localai-service')
+    makeServiceDir(fallbackDir)
+    const driveRoot = join(temp.dir, 'drive-z')
+    const manual = makeServiceDir(join(driveRoot, 'LocalAIService'))
+
+    // 配置目录优先
+    assert.equal(
+      resolveServiceDir({ config: { installDir: configured }, env, homeDir: temp.dir, driveRoots: [driveRoot] }),
+      configured,
+    )
+    // 配置目录不存在时落到默认安装目录（%LOCALAPPDATA%\localai-service）
+    assert.equal(
+      resolveServiceDir({
+        config: { installDir: join(temp.dir, 'missing') },
+        env,
+        homeDir: temp.dir,
+        driveRoots: [driveRoot],
+      }),
+      fallbackDir,
+    )
+    // 配置与默认目录都没有时，按注入的盘根试三个固定名字（不递归扫盘）
+    const bareEnv = {}
+    const driveOnly = resolveServiceDir({
+      config: {},
+      env: bareEnv,
+      homeDir: join(temp.dir, 'empty-home'),
+      driveRoots: [join(temp.dir, 'drive-y'), driveRoot],
+    })
+    assert.equal(driveOnly, manual)
+
+    // 同名空目录、只有脚本没有代码标记，都不算服务目录
+    const emptyDir = join(temp.dir, 'drive-y', 'LocalAIService')
+    mkdirSync(emptyDir, { recursive: true })
+    assert.equal(isServiceDir(emptyDir), false)
+    writeFileSync(join(emptyDir, 'start_ai_service.ps1'), '')
+    assert.equal(isServiceDir(emptyDir), false)
+    // engine 目录也算代码标记
+    writeFileSync(join(emptyDir, 'start_ai_service_tray.vbs'), '')
+    mkdirSync(join(emptyDir, 'engine'), { recursive: true })
+    assert.equal(isServiceDir(emptyDir), true)
+  } finally {
+    temp.cleanup()
+  }
+})
+
+test('启动方式：有托盘入口用 wscript，没有则回退 powershell', () => {
+  const temp = makeTempDir()
+  try {
+    const trayDir = makeServiceDir(join(temp.dir, 'with-tray'), { tray: true })
+    assert.deepEqual(serviceLaunchSpec(trayDir), {
+      command: 'wscript.exe',
+      args: ['//nologo', join(trayDir, 'start_ai_service_tray.vbs')],
+      cwd: trayDir,
+      mode: 'tray',
+    })
+    const scriptDir = makeServiceDir(join(temp.dir, 'script-only'))
+    assert.deepEqual(serviceLaunchSpec(scriptDir), {
+      command: 'powershell.exe',
+      args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(scriptDir, 'start_ai_service.ps1')],
+      cwd: scriptDir,
+      mode: 'script',
+    })
+  } finally {
+    temp.cleanup()
+  }
+})
+
+test('启动防重入：轮询中与 5 秒内都算正在启动', () => {
+  assert.equal(serviceStartBusy(null), false)
+  assert.equal(serviceStartBusy({ at: 0, pending: false }), false)
+  assert.equal(serviceStartBusy({ at: 0, pending: true }, 1), true)
+  assert.equal(serviceStartBusy({ at: 1000, pending: false }, 1000 + serviceStartGuardMs - 1), true)
+  assert.equal(serviceStartBusy({ at: 1000, pending: false }, 1000 + serviceStartGuardMs), false)
+})
+
+test('POST /service/start：服务在线直接说已在运行，不起进程', async () => {
+  const env = setupEnv({
+    fetchImpl: async () => { throw new Error('在线分支不应该访问网络') },
+  })
+  const { res, json } = await env.call('/dsh-fish-service/service/start', { method: 'POST', body: {} })
+  assert.equal(res.statusCode, 200)
+  assert.deepEqual(json, {
+    ok: true,
+    started: false,
+    alreadyRunning: true,
+    hint: '服务已经在运行了。',
+  })
+  assert.equal(env.calls.spawn.length, 0)
+})
+
+test('POST /service/start：有托盘入口就用 wscript 拉起，就绪后写回安装目录', async () => {
+  const temp = makeTempDir()
+  try {
+    const dir = makeServiceDir(join(temp.dir, 'LocalAIService'), { tray: true })
+    const probes = []
+    const env = setupEnv({
+      initialSnapshot: offlineSnapshot(),
+      configPatch: { installDir: dir },
+      serviceHomeDir: temp.dir,
+      fetchImpl: async (url) => {
+        probes.push(String(url))
+        return { ok: true, status: 200, json: async () => ({ status: 200 }) }
+      },
+    })
+    const { res, json } = await env.call('/dsh-fish-service/service/start', {
+      method: 'POST',
+      // 请求体里放路径/命令也没用：启动目录与命令只从配置和固定候选里取。
+      body: { command: 'calc.exe', args: ['/x'], installDir: 'C:\\Windows' },
+    })
+    assert.equal(res.statusCode, 200)
+    assert.equal(json.ok, true)
+    assert.equal(json.started, true)
+    assert.equal(json.dir, dir)
+    assert.equal(json.mode, 'tray')
+    assert.equal(typeof json.waitedMs, 'number')
+    assert.equal(env.calls.spawn.length, 1)
+    assert.equal(env.calls.spawn[0].command, 'wscript.exe')
+    assert.deepEqual(env.calls.spawn[0].param, ['//nologo', join(dir, 'start_ai_service_tray.vbs')])
+    assert.equal(env.calls.spawn[0].option.cwd, dir)
+    assert.equal(env.calls.spawn[0].option.detached, true)
+    assert.equal(env.calls.spawn[0].option.stdio, 'ignore')
+    assert.equal(env.calls.spawn[0].option.windowsHide, true)
+    assert.equal(probes.length, 1)
+    assert.match(probes[0], /\/health$/)
+    assert.deepEqual(env.calls.save.at(-1), { installDir: dir })
+  } finally {
+    temp.cleanup()
+  }
+})
+
+test('POST /service/start：一分钟内没就绪返回 timeout', async () => {
+  const temp = makeTempDir()
+  try {
+    const dir = makeServiceDir(join(temp.dir, 'svc'))
+    let probes = 0
+    const env = setupEnv({
+      initialSnapshot: offlineSnapshot(),
+      configPatch: { installDir: dir },
+      serviceHomeDir: temp.dir,
+      serviceReadyTimeoutMs: 30,
+      servicePollMs: 5,
+      fetchImpl: async () => {
+        probes += 1
+        return { ok: false, status: 503 }
+      },
+    })
+    const { res, json } = await env.call('/dsh-fish-service/service/start', { method: 'POST' })
+    assert.equal(res.statusCode, 200)
+    assert.equal(json.ok, false)
+    assert.equal(json.code, 'timeout')
+    assert.equal(json.hint, '启动指令已经发出，但服务一分钟内没有响应。稍等几秒再看，或到设置页读取日志。')
+    assert.ok(probes >= 1)
+    assert.equal(env.calls.spawn.length, 1)
+  } finally {
+    temp.cleanup()
+  }
+})
+
+test('POST /service/start：5 秒内重复请求只起一个进程，脚本模式回退 powershell', async () => {
+  const temp = makeTempDir()
+  try {
+    const dir = makeServiceDir(join(temp.dir, 'svc'))
+    const env = setupEnv({
+      initialSnapshot: offlineSnapshot(),
+      configPatch: { installDir: dir },
+      serviceHomeDir: temp.dir,
+      serviceReadyTimeoutMs: 20,
+      servicePollMs: 5,
+      fetchImpl: async () => ({ ok: false, status: 503 }),
+    })
+    const first = await env.call('/dsh-fish-service/service/start', { method: 'POST' })
+    assert.equal(first.json.code, 'timeout')
+    const second = await env.call('/dsh-fish-service/service/start', { method: 'POST' })
+    assert.equal(second.res.statusCode, 200)
+    assert.equal(second.json.ok, true)
+    assert.equal(second.json.started, false)
+    assert.equal(second.json.starting, true)
+    assert.equal(second.json.hint, '正在启动，稍等一下。')
+    assert.equal(env.calls.spawn.length, 1)
+    assert.equal(env.calls.spawn[0].command, 'powershell.exe')
+    assert.deepEqual(
+      env.calls.spawn[0].param,
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(dir, 'start_ai_service.ps1')],
+    )
+  } finally {
+    temp.cleanup()
+  }
+})
+
+test('POST /service/start：spawn 出错给 500 与可操作提示', async () => {
+  const temp = makeTempDir()
+  try {
+    const dir = makeServiceDir(join(temp.dir, 'svc'))
+    const env = setupEnv({
+      initialSnapshot: offlineSnapshot(),
+      configPatch: { installDir: dir },
+      serviceHomeDir: temp.dir,
+      spawn: () => { throw new Error('Access denied') },
+    })
+    const { res, json } = await env.call('/dsh-fish-service/service/start', { method: 'POST' })
+    assert.equal(res.statusCode, 500)
+    assert.equal(json.ok, false)
+    assert.equal(json.code, 'upstream_error')
+    assert.equal(json.hint, '没能创建启动进程，请检查系统权限。')
+    assert.equal(env.calls.spawn.length, 0)
+  } finally {
+    temp.cleanup()
+  }
+})
+
+test('POST /service/start：找不到服务程序给安装目录提示，不起进程', async () => {
+  const temp = makeTempDir()
+  try {
+    const env = setupEnv({
+      initialSnapshot: offlineSnapshot(),
+      serviceHomeDir: temp.dir,
+      fetchImpl: async () => null,
+    })
+    const { res, json } = await env.call('/dsh-fish-service/service/start', { method: 'POST' })
+    assert.equal(res.statusCode, 200)
+    assert.equal(json.ok, false)
+    assert.equal(json.code, 'not_found')
+    assert.equal(json.hint, '没找到服务程序。请到设置页「一键部署」里选一下安装目录，或手动启动一次。')
+    assert.equal(env.calls.spawn.length, 0)
+  } finally {
+    temp.cleanup()
+  }
+})
+
+test('POST /service/start：非 Windows 明确说不支持；方法/来源也校验', async () => {
+  const darwin = setupEnv({ platform: 'darwin', initialSnapshot: offlineSnapshot() })
+  const unsupported = await darwin.call('/dsh-fish-service/service/start', { method: 'POST' })
+  assert.equal(unsupported.res.statusCode, 200)
+  assert.equal(unsupported.json.ok, false)
+  assert.equal(unsupported.json.code, 'not_supported')
+  assert.equal(unsupported.json.hint, '暂不支持自动启动服务。')
+  assert.equal(darwin.calls.spawn.length, 0)
+
+  const env = setupEnv({ initialSnapshot: offlineSnapshot() })
+  const errMethod = await env.call('/dsh-fish-service/service/start')
+  assert.equal(errMethod.res.statusCode, 405)
+  const crossSite = await env.call('/dsh-fish-service/service/start', {
+    method: 'POST',
+    headers: { origin: 'http://evil.example', host: '127.0.0.1:14792' },
+  })
+  assert.equal(crossSite.res.statusCode, 403)
+  assert.equal(env.calls.spawn.length, 0)
 })

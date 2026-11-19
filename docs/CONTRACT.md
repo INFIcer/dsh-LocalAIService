@@ -1,7 +1,7 @@
 # 接口契约（CONTRACT）
 
-> 版本：`v0.7`（2026-11-16）：新增 `fish.service.vram.unload()` 与宿主路由 `POST /vram-unload`（只卸空闲模型，跳过正在跑的）；客户端状态胶囊与设置页加「释放显存」按钮。向后兼容。
-> 前版：`v0.6`（`GET /metrics` + 状态胶囊）、`v0.5`（识图提示词分四档）、`v0.4`（`visionPrefs` / `localDescribe` / `/describe-upload`）、`v0.3`（`visionDescribe` / `fish_describe_image` / 音色目录）、`v0.1`（P0 冻结稿）
+> 版本：`v0.8`（2026-11-19）：新增宿主路由 `POST /service/start`（服务未启动时从输入框状态胶囊与设置页启动服务；托盘入口优先）；客户端胶囊旁与设置页加「启动服务」按钮。向后兼容。
+> 前版：`v0.7`（`fish.service.vram.unload()` 与 `POST /vram-unload`、「释放显存」按钮）、`v0.6`（`GET /metrics` + 状态胶囊）、`v0.5`（识图提示词分四档）、`v0.4`（`visionPrefs` / `localDescribe` / `/describe-upload`）、`v0.3`（`visionDescribe` / `fish_describe_image` / 音色目录）、`v0.1`（P0 冻结稿）
 > 适用：`dsh-LocalAIService` / `localai-service 2.5.x`
 > 原则：**先改本文，再改代码**。P1 只实现本文已写明的字段；新增字段必须向后兼容。
 
@@ -923,6 +923,7 @@ vram.unload(opts?: {
 | POST | `/vram-unload` | — | `{ok, released, skipped, freeMb, totalMb}`；固定调 `vram.unload({all:true, skipBusy:true})`，只卸空闲模型、忙的进 `skipped`；`bad_request` → 400，其它错误 500（v0.7） |
 | POST | `/open-folder` | `{path}` | `{ok, path}`；在文件管理器里打开目录，只接受 `cacheDir` 或**服务当前音色目录**本身/子目录（realpath 校验，非 Windows 返回「暂不支持」） |
 | POST | `/open-webui` | — | `{ok:true}`；先探测服务可达，只拼 `/ui`，Windows 用 `cmd start` 打开；非 Windows 200 + `not_supported` |
+| POST | `/service/start` | — | 启动本地 AI 服务：先探测，在线返回 `{ok:true,started:false,alreadyRunning:true}`；否则按「配置 `installDir` → 默认安装目录 → 存在的盘符下的 `LocalAIService`/`localai-service`/`local-ai-service`」找同时有启动脚本与 `pyproject.toml`/`engine` 的目录，有 `start_ai_service_tray.vbs` 优先用 `wscript.exe //nologo <vbs>`，否则 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File <ps1>`；5 秒防重入；等 `/health` 最长 60 秒。成功 `{ok:true,started:true,dir,mode:"tray"\|"script",waitedMs}` 并把 `dir` 写回配置 `installDir`；找不到 `{ok:false,code:"not_found"}`、超时 `{ok:false,code:"timeout"}`、非 Windows `{ok:false,code:"not_supported"}` 都是 200；spawn 失败 500 + `upstream_error`。不接收请求参数（路径与命令只从配置和固定候选取） |
 | GET | `/audio?path=` | — | `audio/*`；只允许 `cacheDir` 内的 `.wav/.webm/.ogg/.opus/.mp3/.m4a`，≤128MB（P2） |
 | POST | `/transcribe-upload` | multipart `file` + `durationMs?` + `language?` | `{ok, text, ms, elapsedMs?, language?}`；≥1500 字节、≥300ms、≤5 分钟；临时文件请求结束删除（识别异常短文本时会短时保留排查） |
 | POST | `/voice-upload` | multipart `file` + `durationMs?` | `{ok, path, bytes, mime}`（P2，存 `cacheDir/voice`） |
@@ -934,8 +935,9 @@ vram.unload(opts?: {
 `scope` 缺省时按 `tool` 处理，传 `preset` 或 `mode=ocr` 时仍可走工具档位；非法 `preset` 回配置默认档。
 消息发出后的旧「图片下方按钮」与草稿附件栏入口均已移除。
 
-安装器、模型下载/激活、服务启停、管理界面嵌入等安装/模型管理类 HTTP 路由**不在本插件内**（P1/P3 未实现）；
+安装器、模型下载/激活、管理界面嵌入等安装/模型管理类 HTTP 路由**不在本插件内**（P1/P3 未实现）；
 本插件只在 `/state`、`/health` 里暴露安装/服务状态相关字段，安装动作由安装器（`install` 相关工具）承担。
+服务启动是例外：`POST /service/start` 只负责「把用户已经装好的服务拉起来」（托盘入口优先），不做安装、不改服务端文件。
 
 安全：
 

@@ -50,6 +50,16 @@ window.__ModuleLoader__.load({
         hint: String(error?.message || error),
       }))
 
+    /**
+     * 启动服务：网络层失败（请求根本发不出去）返回 null，由调用方给固定提示；
+     * 宿主返回的业务失败仍带中文 hint，原样展示。
+     */
+    const requestServiceStart = () => fetch(B + '/service/start', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    }).then((r) => r.json()).catch(() => null)
+
     /** multipart 上传；不要手动设 content-type，浏览器自己带 boundary。 */
     const postForm = (path, form) => fetch(B + path, { method: 'POST', body: form })
       .then((r) => r.json().catch(() => null))
@@ -613,6 +623,15 @@ select.fish-select option:checked {
 .fish-metrics-pill[data-level="danger"] { color: #e0524a; }
 .fish-metrics[data-offline="1"] .fish-metrics-pill { opacity: .62; }
 .fish-metrics[data-offline="1"] .fish-metrics-dot { background: var(--dsw-alias-label-secondary, #8a8a8a); }
+/* 离线时胶囊右侧的「启动服务」：与胶囊同高、主色描边，不抢状态文字的注意力 */
+.fish-metrics-start {
+  display: inline-flex; align-items: center; height: 22px; margin-left: 4px; padding: 0 8px;
+  border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.14)); border-radius: 999px;
+  background: transparent; color: var(--dsw-alias-state-business-primary, #2f6fed);
+  font: inherit; font-size: 12px; line-height: 1; cursor: pointer; white-space: nowrap;
+}
+.fish-metrics-start:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.12)); }
+.fish-metrics-start[disabled] { opacity: .55; cursor: default; }
 .fish-metrics-pop {
   position: absolute; left: 0; bottom: calc(100% + 8px); z-index: 75;
   box-sizing: border-box; width: 288px; max-width: min(88vw, 320px); max-height: 60vh; overflow: auto;
@@ -3196,6 +3215,18 @@ select.fish-select option:checked {
         else setSay(`打开管理界面失败：${(r && r.hint) || '请稍后重试。'}`)
       }
 
+      // 启动服务：只在服务未启动时出现；具体怎么起（托盘入口 / 启动脚本）由宿主决定。
+      const startService = async () => {
+        setBusy(true); setAction('启动')
+        const result = await requestServiceStart()
+        setBusy(false); setAction('')
+        if (!result) { setSay('启动请求没发出去，请稍后再试。'); return }
+        if (result.started === true) { await pull(); setSay('服务已启动。'); return }
+        if (result.alreadyRunning === true) { await pull(); setSay('服务已经在运行了。'); return }
+        if (result.starting === true) { setSay('正在启动，稍等一下。'); return }
+        setSay(result.hint || '启动请求没发出去，请稍后再试。')
+      }
+
       // 释放显存：只卸空闲模型，正在跑的任务由服务端跳过。
       const releaseVram = async () => {
         setBusy(true)
@@ -3469,6 +3500,8 @@ select.fish-select option:checked {
         h('div', { style: { ...S.dim, marginTop: 2 } },
           '朗读、语音输入与各项能力都在本机完成，不联网，也不产生额外费用。'),
         h('div', { style: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: 4 } },
+          online ? null : h('button', { type: 'button', style: S.btn, onClick: startService, disabled: busy },
+            busy && action === '启动' ? '正在启动…' : '启动服务'),
           h('button', { type: 'button', style: S.btn, onClick: releaseVram, disabled: busy }, '释放显存'),
           h('span', { style: S.dim }, '卸载当前没有任务在用的模型；正在跑的任务会跳过。')),
         (health.lastError && health.lastError.hint)
@@ -3598,6 +3631,8 @@ select.fish-select option:checked {
       const [expand, setExpand] = React.useState(false)
       const [prompt, setPrompt] = React.useState('')
       const [busy, setBusy] = React.useState(false)
+      // 单独记「正在启动」：刷新/释放显存也置 busy，不能都显示成正在启动。
+      const [starting, setStarting] = React.useState(false)
       const root = React.useRef(null)
 
       const pull = React.useCallback(async () => {
@@ -3672,6 +3707,38 @@ select.fish-select option:checked {
         await pull()
       }
 
+      // 启动服务：托盘优先，等宿主返回结果再提示；成功后下一次轮询自然变成在线。
+      const startService = async (event) => {
+        event?.stopPropagation?.()
+        // 提示区在浮层里；点胶囊旁的按钮时一起展开，用户才看得到进度与结果。
+        setExpand(true)
+        setBusy(true)
+        setStarting(true)
+        setPrompt('')
+        const result = await requestServiceStart()
+        setBusy(false)
+        setStarting(false)
+        if (!result) {
+          setPrompt('启动请求没发出去，请稍后再试。')
+          return
+        }
+        if (result.started === true) {
+          setPrompt('服务已启动。')
+          await pull()
+          return
+        }
+        if (result.alreadyRunning === true) {
+          setPrompt('服务已经在运行了。')
+          await pull()
+          return
+        }
+        if (result.starting === true) {
+          setPrompt('正在启动，稍等一下。')
+          return
+        }
+        setPrompt(result.hint || '启动请求没发出去，请稍后再试。')
+      }
+
       const offline = metricsOffline(state)
       const online = Boolean(state.load && !offline && state.data && state.data.ok === true)
       const data = (online && state.data) || {}
@@ -3719,6 +3786,12 @@ select.fish-select option:checked {
                 detail('运行时长', formatDuration(data.service?.uptimeSeconds))),
         prompt ? h('div', { className: 'fish-metrics-hint' }, prompt) : null,
         h('div', { className: 'fish-metrics-actions' },
+          offline ? h('button', {
+            type: 'button',
+            className: 'fish-btn',
+            disabled: busy,
+            onClick: startService,
+          }, starting ? '正在启动…' : '启动服务') : null,
           offline ? null : h('button', {
             type: 'button',
             className: 'fish-btn',
@@ -3749,6 +3822,13 @@ select.fish-select option:checked {
         },
           h('span', { className: 'fish-metrics-dot', 'aria-hidden': true }),
           h('span', { className: 'fish-metrics-text' }, capsuleText)),
+        offline ? h('button', {
+          type: 'button',
+          className: 'fish-metrics-start',
+          disabled: busy,
+          onClick: startService,
+          title: '启动本地 AI 服务',
+        }, starting ? '正在启动…' : '启动服务') : null,
         expand ? overlay : null)
     }
 

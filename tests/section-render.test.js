@@ -67,6 +67,8 @@ function fakeReact() {
   const sideEffect = new Map()
   const stack = []
   let dirty = false
+  // 非空时把渲染出的宿主节点按出现顺序记下来（找按钮/断言结构用）。
+  let collector = null
 
   function fetchFrame(fn) {
     let remember = cell.get(fn)
@@ -155,6 +157,7 @@ function fakeReact() {
       return
     }
     const { type, props } = node
+    if (collector) collector.push(node)
     if (typeof type === 'function') {
       expand(renderComponent(type, props), text)
       return
@@ -169,6 +172,21 @@ function fakeReact() {
     return text.join(' ')
   }
 
+  /** 与 submit 一样渲染，但同时返回节点列表（需要按类型找按钮时用）。 */
+  function submitTree(root) {
+    dirty = false
+    const text = []
+    const nodes = []
+    const previous = collector
+    collector = nodes
+    try {
+      expand(root, text)
+    } finally {
+      collector = previous
+    }
+    return { text: text.join(' '), nodes }
+  }
+
   function runSideEffect() {
     for (const table of sideEffect.values()) {
       for (const cb of table.values()) {
@@ -179,13 +197,15 @@ function fakeReact() {
     sideEffect.clear()
   }
 
-  return { React, submit, runSideEffect, dirty: () => dirty }
+  return { React, submit, submitTree, runSideEffect, dirty: () => dirty }
 }
 
-function load(status = realStatus) {
+function load({ status = realStatus, metrics = null, startAnswer = null } = {}) {
   const sourceCode = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
   let factory = null
   const fake = fakeReact()
+  // 记下所有请求：断言「点了启动按钮确实 POST 到 /service/start」。
+  const calls = []
   const sandbox = {
     window: { __ModuleLoader__: { load: (define) => { factory = define.factory } } },
     document: undefined,
@@ -196,21 +216,27 @@ function load(status = realStatus) {
     setInterval: () => 0,
     clearInterval: () => {},
     URL,
-    fetch: async (address) => ({
-      ok: true,
-      json: async () => {
-        if (String(address).includes('/state')) return status
-        if (String(address).includes('/cache/stats')) return { ok: true, files: 0, bytes: 0 }
-        if (String(address).includes('/logs')) return { ok: true, lines: [] }
-        return { ok: true }
-      },
-    }),
+    fetch: async (address, init = {}) => {
+      const path = String(address)
+      calls.push({ path, method: String(init.method || 'GET').toUpperCase(), body: init.body })
+      return {
+        ok: true,
+        json: async () => {
+          if (path.includes('/state')) return status
+          if (path.includes('/metrics')) return metrics || { ok: true }
+          if (path.includes('/service/start')) return startAnswer || { ok: true }
+          if (path.includes('/cache/stats')) return { ok: true, files: 0, bytes: 0 }
+          if (path.includes('/logs')) return { ok: true, lines: [] }
+          return { ok: true }
+        },
+      }
+    },
   }
   vm.createContext(sandbox)
   vm.runInContext(sourceCode, sandbox)
   assert.equal(typeof factory, 'function')
   const exported = factory(() => fake.React)
-  return { exported, fake }
+  return { exported, fake, calls }
 }
 
 test('设置页 Section 用真实 /state 能渲染出内容', async () => {
@@ -235,7 +261,7 @@ test('设置页 Section 用真实 /state 能渲染出内容', async () => {
 })
 
 test('设置页 Section 在服务离线（state ok:false 或 null）时不崩', async () => {
-  const { exported, fake } = load({ ok: false })
+  const { exported, fake } = load({ status: { ok: false } })
   for (let round = 0; round < 6; round += 1) {
     await new Promise((r) => setTimeout(r, 0))
     fake.runSideEffect()
@@ -244,3 +270,123 @@ test('设置页 Section 在服务离线（state ok:false 或 null）时不崩', 
   const text = fake.submit(fake.React.createElement(exported.__testing.Section, {}))
   assert.match(text, /本地 AI/)
 })
+
+// ---------------- 服务未启动时的「启动服务」入口 ----------------
+
+const offlineStatus = {
+  ...realStatus,
+  health: { ...realStatus.health, ok: false, reachable: false, compatible: false, vram: null },
+  capabilities: {},
+  voices: [],
+}
+
+const metricsOffline = { ok: false, code: 'service_down', hint: '本地 AI 未启动' }
+
+const metricsOnline = {
+  ok: true,
+  gpu: { name: 'RTX 4060', usedMb: 1024, totalMb: 8192, freeMb: 7168, percent: 13 },
+  modelsLoaded: [],
+  queue: { queued: 0, running: 0 },
+  scheduler: { currentKind: '', loadedModel: '' },
+  service: { version: '2.5.0', uptimeSeconds: 10 },
+  vision: { loaded: false, ready: false },
+}
+
+const delay = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+function textOf(node) {
+  if (node == null || node === false) return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(textOf).join(' ')
+  return textOf(node.props?.children)
+}
+
+function findButton(nodes, label) {
+  return nodes.find((node) => node.type === 'button' && textOf(node).includes(label))
+}
+
+/** 胶囊读 prefs 里的界面开关；这里直接给一份「性能监控开着」的最小状态。 */
+function mountCapsule(loaded) {
+  const { exported, fake } = loaded
+  exported.__testing.prefs.set({
+    load: true,
+    online: false,
+    config: { uiMetrics: true },
+    health: null,
+    voice: [],
+    plugin: {},
+  })
+  return fake.React.createElement(exported.__testing.metricsCapsule, {})
+}
+
+async function renderCapsule(loaded, element, rounds = 8) {
+  let text = ''
+  for (let round = 0; round < rounds; round += 1) {
+    await delay()
+    loaded.fake.runSideEffect()
+    text = loaded.fake.submit(element)
+  }
+  return text
+}
+
+test('「启动服务」按钮：设置页与胶囊都只在服务未在线时渲染', async () => {
+  const section = (loaded) => loaded.fake.React.createElement(loaded.exported.__testing.Section, {})
+  const settleSection = async (loaded) => {
+    let text = loaded.fake.submit(section(loaded))
+    for (let round = 0; round < 8 && !text.includes('释放显存'); round += 1) {
+      await delay()
+      loaded.fake.runSideEffect()
+      text = loaded.fake.submit(section(loaded))
+    }
+    return text
+  }
+
+  const offline = load({ status: offlineStatus })
+  const offlineSection = await settleSection(offline)
+  assert.match(offlineSection, /释放显存/)
+  assert.match(offlineSection, /启动服务/)
+
+  const online = load({ status: realStatus })
+  const onlineSection = await settleSection(online)
+  assert.match(onlineSection, /释放显存/)
+  assert.doesNotMatch(onlineSection, /启动服务/)
+
+  const capsuleOffline = load({ status: offlineStatus, metrics: metricsOffline })
+  const offlineText = await renderCapsule(capsuleOffline, mountCapsule(capsuleOffline))
+  assert.match(offlineText, /本地 AI 未启动/)
+  assert.match(offlineText, /启动服务/)
+
+  const capsuleOnline = load({ status: realStatus, metrics: metricsOnline })
+  const onlineText = await renderCapsule(capsuleOnline, mountCapsule(capsuleOnline))
+  assert.match(onlineText, /显存 13%/)
+  assert.doesNotMatch(onlineText, /启动服务/)
+})
+
+test('胶囊「启动服务」：点击后 POST /service/start 并提示已启动', async () => {
+  const loaded = load({
+    status: offlineStatus,
+    metrics: metricsOffline,
+    startAnswer: { ok: true, started: true, dir: 'E:\\LocalAIService', mode: 'tray', waitedMs: 1200 },
+  })
+  const element = mountCapsule(loaded)
+  await renderCapsule(loaded, element)
+
+  const { nodes } = loaded.fake.submitTree(element)
+  const button = findButton(nodes, '启动服务')
+  assert.ok(button, '服务离线时胶囊旁应该有启动按钮')
+  button.props.onClick({ stopPropagation() {} })
+
+  let text = ''
+  for (let round = 0; round < 8; round += 1) {
+    await delay()
+    loaded.fake.runSideEffect()
+    text = loaded.fake.submit(element)
+  }
+  assert.match(text, /服务已启动。/)
+
+  const startCall = loaded.calls.find((call) => call.path.endsWith('/service/start'))
+  assert.ok(startCall, '应该请求 /service/start')
+  assert.equal(startCall.method, 'POST')
+  assert.equal(startCall.body, '{}')
+})
+
